@@ -24,10 +24,17 @@ You do **not** need to run any flatten / sync script. CI does that upstream. You
 **Local copy** (when the skill is installed via `git clone`):
 
 ```
-<skill-root>/versions/
-├── INDEX.md
-├── openclaw-docs.latest.md
-└── openclaw-docs.<version>.md
+<skill-root>/
+├── versions/
+│   ├── INDEX.md
+│   ├── openclaw-docs.latest.md           ← flattened docs, always newest
+│   ├── openclaw-docs.latest.toc.jsonl    ← TOC: section path + H2/H3 + line range + keywords
+│   ├── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
+│   ├── openclaw-docs.<version>.md
+│   ├── openclaw-docs.<version>.toc.jsonl
+│   └── openclaw-docs.<version>.sections.jsonl
+└── scripts/
+    └── lookup.py                         ← deterministic retrieval CLI
 ```
 
 `<skill-root>` depends on the host:
@@ -54,29 +61,37 @@ Prefer the local copy when present — `Grep` is much faster than `WebFetch` on 
    - User-stated: take their word, but confirm against `INDEX.md`
 2. **Match that version** to a file: `openclaw-docs.<version>.md`. If it's not in `INDEX.md`, the snapshot doesn't exist — note that to the user, fall back to `openclaw-docs.latest.md`, and warn that behavior may differ.
 3. **No specific version known** → use `openclaw-docs.latest.md`.
-4. **Always preface OpenClaw answers** with `According to docs for OpenClaw <version>:` so the user knows which snapshot grounds the answer.
+4. **Always preface OpenClaw answers** with `According to docs for OpenClaw <version>:` and **cite the section path** (e.g. `…see `gateway/configuration-reference.md`.`) so the user knows which snapshot and which file grounded the answer.
 
 ## How to read the docs efficiently
 
 Files are 5+ MB. **Do not full-`Read` them.** Use `Grep` (or the tool equivalent in your platform). Sections are delimited by `# Section: <relative-path>` headers (1:1 with the upstream `docs/**/*.md` tree); within each section, the original H2/H3 headings are preserved.
 
+### Lookup priority
+
+In order of preference:
+
+1. **`scripts/lookup.py`** — deterministic CLI that wraps the indexes. Same retrieval behavior across every host that can run Python 3.
+2. **Native `Grep` + `Read`** on the flattened doc — fall back here when the lookup script isn't available (uploaded-knowledge-file surfaces, no shell access).
+3. **`WebFetch` on the raw / jsDelivr URL** — last resort when there's no local clone.
+
 ### Lookup strategy — match the query type
 
-The docs file already contains all the navigation structure you need. Pick the strategy by query type:
+**Specific query** (config key, CLI flag, function name, environment variable, package, file path, error string):
 
-**Specific query** (config key, CLI flag, function name, exact error string, version):
-
-- Grep the keyword directly. Examples: `gateway.mode`, `--bind loopback`, `createPluginEntry`, `OPENCLAW_LIVE_TEST`.
+- Use **fixed-string matching** (not regex). OpenClaw identifiers contain regex metacharacters (`.`, `-`, `/`, `@`) that break naïve regex search.
+- With the script: `python3 scripts/lookup.py --query gateway.mode --version latest`
+- With native Grep: pass the fixed-string flag (`grep -F`, `rg -F`, or your tool's equivalent) and grep the keyword directly. Examples: `gateway.mode`, `--bind loopback`, `createPluginEntry`, `OPENCLAW_LIVE_TEST`, `@openclaw/plugin-sdk`.
 - Read a small offset around the top hit.
 
 **Broad / ambiguous query** ("how do plugins work?", "Telegram setup", "gateway configuration"):
 
-1. **First, grep the heading skeleton** to see the navigable structure: `grep -E "^(# Section:|## )" openclaw-docs.latest.md` → returns ~6K lines of section paths + H2 headings, the doc's effective table of contents.
-2. Pick the 1–3 most relevant section paths from the skeleton.
-3. Grep narrower keywords *within* those sections (or `Read` an offset around the matching `# Section:` line).
-4. Don't dump the whole skeleton into the response — use it as a routing aid only.
+1. **Route via the TOC.** With the script: `python3 scripts/lookup.py --toc "telegram setup" --version latest` returns ranked candidate sections with their H2/H3 outline. Without the script, grep the heading skeleton: `grep -E "^(# Section:|#{2,3} )" openclaw-docs.latest.md` (returns ~6K lines: sections + H2 + H3 — the doc's effective table of contents). For very broad queries, pre-filter the skeleton to keep context small: `grep -E "^(# Section:|#{2,3} )" openclaw-docs.latest.md | grep -Ei "plugin|sdk|entry" -C 4`.
+2. Pick the 1–3 most relevant section paths.
+3. **Extract.** With the script: `python3 scripts/lookup.py --section plugins/manifest.md` (optionally `--heading "Lifecycle"` to narrow to one H2/H3 block). Without the script: `Read` a targeted offset around the matching `# Section:` line, or grep narrower keywords within that section's line range.
+4. Don't dump the whole skeleton into the response — it's a routing aid, not content.
 
-**Fallback** when no local clone is available and the full file is too large to fetch over `WebFetch`: fetch `INDEX.md` first to confirm the version, then use a `Range:` header on the raw URL for the relevant byte slice.
+**Fallback** when no local clone is available and the full file is too large to fetch over `WebFetch`: fetch `INDEX.md` first to confirm the version, then either fetch the small `.toc.jsonl` index for that version, or use a `Range:` header on the raw URL with byte offsets from `.sections.jsonl` for a precise byte slice.
 
 ## Refresh & freshness
 

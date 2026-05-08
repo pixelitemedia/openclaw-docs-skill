@@ -10,16 +10,42 @@ OpenClaw uses CalVer (`YYYY.M.D`) and ships frequently, so pinning to the exact 
 
 ```
 .
-├── SKILL.md                          ← Anthropic Claude Skill manifest
-├── flatten_docs.py                   ← refresh script
-├── .github/workflows/refresh.yml     ← daily auto-refresh
+├── SKILL.md                              ← skill manifest (Claude Code, Codex, etc.)
+├── agents/openai.yaml                    ← OpenAI Codex UI metadata
+├── flatten_docs.py                       ← CI refresh + index generator
+├── scripts/
+│   └── lookup.py                         ← deterministic retrieval CLI
+├── .github/workflows/refresh.yml         ← daily auto-refresh
 └── versions/
-    ├── INDEX.md                      ← list of stored versions, newest first
-    ├── openclaw-docs.latest.md       ← always a copy of the newest version file
-    └── openclaw-docs.<version>.md    ← one file per snapshotted release
+    ├── INDEX.md                          ← list of stored versions, newest first
+    ├── openclaw-docs.latest.md           ← flattened docs (newest)
+    ├── openclaw-docs.latest.toc.jsonl    ← TOC: section + H2/H3 + line range + keywords
+    ├── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
+    └── openclaw-docs.<version>.{md,toc.jsonl,sections.jsonl}   ← one triplet per snapshotted release
 ```
 
-`openclaw-docs.latest.md` is a real file (not a symlink) so it can be fetched as raw bytes from `raw.githubusercontent.com` and uploaded into hosted chat products / fed into APIs / read by Windows checkouts.
+Each version has three artifacts. The `.md` is the flattened doc; the two `.jsonl` indexes power deterministic retrieval (TOC for routing broad queries, sections for fast extraction or HTTP `Range` requests). `openclaw-docs.latest.*` are real copies of the newest triplet (not symlinks) so they can be fetched as raw bytes from `raw.githubusercontent.com` or jsDelivr and consumed by Windows checkouts, hosted chat products, and APIs alike.
+
+## Querying — `scripts/lookup.py`
+
+Deterministic retrieval over the indexes. Returns compact Markdown that an agent can paste into context.
+
+```bash
+# Exact-term search (fixed-string by default; OpenClaw identifiers have regex metachars)
+python3 scripts/lookup.py --query "gateway.mode"
+python3 scripts/lookup.py --query "OPENCLAW_LIVE_TEST" --context-lines 8
+python3 scripts/lookup.py --query "createPluginEntry" --version 2026.5.6
+
+# Broad TOC routing — returns ranked candidate sections
+python3 scripts/lookup.py --toc "plugin sdk lifecycle"
+python3 scripts/lookup.py --toc "telegram setup"
+
+# Section extraction (full section, or trimmed by heading)
+python3 scripts/lookup.py --section plugins/manifest.md
+python3 scripts/lookup.py --section gateway/configuration-reference.md --heading "Hooks"
+```
+
+`--version latest` is the default; pass `--version 2026.5.6` to pin. All output is Markdown with a `According to docs for OpenClaw <version>: <section path>` header.
 
 ## Raw URLs (for any consumer)
 
