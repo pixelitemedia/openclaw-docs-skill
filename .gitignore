@@ -14,3 +14,7 @@ versions/openclaw-docs.*.sections.jsonl
 
 # Local refresh log written by the launchd auto-pull job
 .refresh.log
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -13,13 +13,15 @@ You do **not** need to run any flatten / sync script. CI does that upstream. You
 
 ## Where the docs live
 
-**Public raw URLs** (no auth needed):
+**Public URLs** (no auth needed):
 
 | File | URL |
 |---|---|
 | Latest version | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md> |
-| Pinned version | `https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.<version>.md` |
+| Pinned version (release asset) | `https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.md` |
 | Index of stored versions | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
+
+Only the `latest.*` triplet lives in `main`. Pinned versions are GitHub Release assets — `https://.../main/versions/openclaw-docs.<version>.md` returns 404. `scripts/lookup.py` handles both surfaces transparently.
 
 **Local copy** (when the skill is installed via `git clone`):
 

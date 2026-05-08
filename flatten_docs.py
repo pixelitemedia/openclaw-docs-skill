@@ -224,32 +224,89 @@ def list_version_docs(versions_dir: Path) -> list:
     )
 
 
+RELEASES_MANIFEST = "releases.json"
+
+
+def _version_sort_key(ver: str) -> tuple:
+    parts = ver.split(".")
+    return tuple(int(x) if x.isdigit() else x for x in parts)
+
+
 def write_index(versions_dir: Path, ranked: list, repo_slug: str = "pixelitemedia/openclaw-docs-skill"):
     """Write versions/INDEX.md.
 
-    Only the latest triplet lives in `main`; historical snapshots live as
-    GitHub Release assets. We list whatever's in the directory (mostly the
-    latest, plus any in-flight versions waiting to be migrated to releases)
-    and point at the Releases page for full history."""
+    Sources of version listings:
+      - `latest`: the in-tree triplet (always present)
+      - historical: read from `versions/releases.json`, a manifest CI maintains
+        after each release publish. CI is the only writer; this function reads it.
+    """
+    manifest_path = versions_dir / RELEASES_MANIFEST
+    historical = []
+    if manifest_path.exists():
+        try:
+            historical = json.loads(manifest_path.read_text())
+        except Exception as e:
+            print(f"Warning: couldn't parse {manifest_path}: {e}", file=sys.stderr)
+
+    historical_sorted = sorted(historical, key=lambda r: _version_sort_key(r["version"]), reverse=True)
+
     idx = versions_dir / "INDEX.md"
     with open(idx, "w") as f:
         f.write("# OpenClaw Docs — Versions\n\n")
-        f.write(f"Each snapshotted OpenClaw version is published as a [GitHub Release](https://github.com/{repo_slug}/releases) "
-                f"with three asset files attached:\n\n")
+        f.write(
+            f"This skill mirrors [openclaw/openclaw](https://github.com/openclaw/openclaw) "
+            f"docs in two places:\n\n"
+            f"1. **Latest** lives in `main` — see `openclaw-docs.latest.{{md,toc.jsonl,sections.jsonl}}` "
+            f"in this directory. Updated daily by CI.\n"
+            f"2. **Pinned historical versions** live as [GitHub Release](https://github.com/{repo_slug}/releases) assets.\n\n"
+        )
+        f.write("Each version triplet is three files:\n\n")
         f.write("- `openclaw-docs.<version>.md` — flattened docs\n")
         f.write("- `openclaw-docs.<version>.toc.jsonl` — TOC (section path + H2/H3 + keywords + line range)\n")
         f.write("- `openclaw-docs.<version>.sections.jsonl` — line + byte ranges per section\n\n")
-        f.write("Direct download URL pattern:\n\n")
+        f.write("Pinned download URL pattern:\n\n")
         f.write(f"```\nhttps://github.com/{repo_slug}/releases/download/v<version>/openclaw-docs.<version>.<suffix>\n```\n\n")
-        f.write("The `openclaw-docs.latest.*` triplet in this `versions/` directory is always a copy "
-                "of the newest release's assets, kept in `main` for fast `git pull` access. "
-                "`scripts/lookup.py` auto-fetches non-latest versions from Releases on demand.\n\n")
-        f.write("## In-tree (newest first)\n\n")
-        for p in ranked:
-            stem = p.name[len(VERSION_PREFIX):-len(SUFFIX_DOC)]
-            size_kb = p.stat().st_size // 1024
-            tag = f"v{stem}"
-            f.write(f"- **{stem}** — `{p.name}` ({size_kb} KB) · [release {tag}](https://github.com/{repo_slug}/releases/tag/{tag})\n")
+        f.write("Note: `https://.../main/versions/openclaw-docs.<version>.md` returns 404 — only `latest.*` lives in `main`.\n\n")
+
+        # In-tree latest snapshot
+        f.write("## Latest (in-tree)\n\n")
+        latest_md = versions_dir / LATEST_NAME
+        if latest_md.exists():
+            # Recover the concrete version from the toc.jsonl (row 0)
+            latest_toc = versions_dir / f"openclaw-docs.latest{SUFFIX_TOC}"
+            concrete_ver = "?"
+            if latest_toc.exists():
+                first = latest_toc.read_text().split("\n", 1)[0]
+                if first.strip():
+                    try:
+                        concrete_ver = json.loads(first).get("version", "?")
+                    except Exception:
+                        pass
+            size_kb = latest_md.stat().st_size // 1024
+            tag = f"v{concrete_ver}" if concrete_ver != "?" else None
+            release_link = f" · [release {tag}](https://github.com/{repo_slug}/releases/tag/{tag})" if tag else ""
+            f.write(f"- **{concrete_ver}** — `openclaw-docs.latest.md` ({size_kb} KB){release_link}\n\n")
+        else:
+            f.write("_(no latest.md present)_\n\n")
+
+        # Historical, from manifest
+        f.write("## Archived (release assets)\n\n")
+        if not historical_sorted:
+            f.write(f"_See [Releases](https://github.com/{repo_slug}/releases) for the full archive._\n")
+        else:
+            f.write("| Version | Release | Markdown | TOC | Sections |\n")
+            f.write("|---|---|---|---|---|\n")
+            for r in historical_sorted:
+                ver = r["version"]
+                tag = r.get("tag", f"v{ver}")
+                base_url = f"https://github.com/{repo_slug}/releases/download/{tag}"
+                f.write(
+                    f"| {ver} "
+                    f"| [{tag}](https://github.com/{repo_slug}/releases/tag/{tag}) "
+                    f"| [.md]({base_url}/openclaw-docs.{ver}.md) "
+                    f"| [.toc.jsonl]({base_url}/openclaw-docs.{ver}.toc.jsonl) "
+                    f"| [.sections.jsonl]({base_url}/openclaw-docs.{ver}.sections.jsonl) |\n"
+                )
 
 
 def update_latest(versions_dir: Path, ranked_docs: list):

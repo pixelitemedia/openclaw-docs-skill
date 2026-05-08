@@ -35,12 +35,47 @@ out=$(python3 scripts/lookup.py --section gateway/configuration-reference.md --m
 echo "$out" | head -n1 | grep -Eq "$EXPECT_HEADER" || fail "--section header missing concrete version"
 pass "--section emits concrete-version citation header"
 
-# ---------- 2. Heading extraction includes child H3s for an H2 match ----------
+# ---------- 2a. H2 heading extraction includes child H3s ----------
 
 out=$(python3 scripts/lookup.py --section gateway/configuration-reference.md --heading "Hooks")
 echo "$out" | grep -q "^## Hooks"             || fail "expected '## Hooks' in --heading output"
 echo "$out" | grep -q "^### Gmail integration" || fail "H3 child of '## Hooks' was truncated"
 pass "--section --heading 'Hooks' (H2) includes child H3 'Gmail integration'"
+
+# ---------- 2b. H3 heading extraction stops before the next sibling H3 ----------
+
+# Pick a section with at least two sibling H3s under the same H2 and verify
+# extracting the first H3 does NOT include the second.
+python3 - <<'PY' || exit 1
+import re, subprocess, sys, json, pathlib
+
+# Find a section with >= 2 sibling H3s under one H2 from the latest TOC index.
+toc_path = pathlib.Path("versions/openclaw-docs.latest.toc.jsonl")
+target_path, h3a, h3b = None, None, None
+for line in toc_path.read_text().splitlines():
+    row = json.loads(line)
+    if len(row.get("h3", [])) >= 2:
+        target_path = row["path"]
+        h3a, h3b = row["h3"][0], row["h3"][1]
+        break
+
+if not target_path:
+    print("SKIP: no section with >= 2 sibling H3s found", file=sys.stderr)
+    sys.exit(0)
+
+out = subprocess.run(
+    ["python3", "scripts/lookup.py", "--section", target_path, "--heading", h3a],
+    capture_output=True, text=True, check=True,
+).stdout
+
+if f"### {h3a}" not in out:
+    print(f"FAIL: expected '### {h3a}' in output for {target_path}", file=sys.stderr)
+    sys.exit(1)
+if f"### {h3b}" in out:
+    print(f"FAIL: H3 extraction of '{h3a}' leaked into sibling '### {h3b}'", file=sys.stderr)
+    sys.exit(1)
+print(f"PASS: --section --heading '{h3a}' (H3) stops before sibling H3 '{h3b}'")
+PY
 
 # ---------- 3. Index integrity: byte offsets resolve to # Section: lines ----------
 
@@ -49,29 +84,30 @@ import json, pathlib, sys
 
 base = pathlib.Path("versions")
 checked = 0
-for sec_file in base.glob("openclaw-docs.*.sections.jsonl"):
-    if "latest" in sec_file.name:
-        continue  # latest.* is a copy of a versioned file, validated via that
-    version = sec_file.name.removeprefix("openclaw-docs.").removesuffix(".sections.jsonl")
-    doc = base / f"openclaw-docs.{version}.md"
+# Validate every doc/index pair found in versions/. Post-migration this is
+# typically just openclaw-docs.latest.{md,sections.jsonl}, but the loop
+# transparently handles any in-flight pinned versions too.
+for sec_file in sorted(base.glob("openclaw-docs.*.sections.jsonl")):
+    stem = sec_file.name.removesuffix(".sections.jsonl")
+    doc = base / f"{stem}.md"
     if not doc.exists():
-        # Released-only version (typical post-migration). Skip the byte check —
-        # we'd need to fetch the release asset, which the smoke test doesn't do.
-        continue
+        continue  # Pinned version not in tree (released-only); can't byte-check without fetching.
     data = doc.read_bytes()
     rows = sec_file.read_text().splitlines()
+    if not rows:
+        continue
     # Sample first, middle, last rows
     samples = {0, len(rows) // 2, len(rows) - 1}
     for i in sorted(samples):
         row = json.loads(rows[i])
         chunk = data[row["start_byte"] : row["end_byte"]].decode("utf-8")
         if not chunk.lstrip().startswith(f"# Section: {row['path']}"):
-            print(f"FAIL: {version} row {i}: byte slice doesn't start with `# Section: {row['path']}`", file=sys.stderr)
+            print(f"FAIL: {stem} row {i}: byte slice doesn't start with `# Section: {row['path']}`", file=sys.stderr)
             sys.exit(1)
         checked += 1
 
 if checked == 0:
-    print("SKIP: no in-tree version docs to byte-check (post-migration; releases are the source of truth)")
-else:
-    print(f"PASS: {checked} byte-offset sample(s) resolve to expected `# Section:` headers")
+    print("FAIL: no doc/index pairs found in versions/ — at minimum latest.* should be present", file=sys.stderr)
+    sys.exit(1)
+print(f"PASS: {checked} byte-offset sample(s) resolve to expected `# Section:` headers")
 PY

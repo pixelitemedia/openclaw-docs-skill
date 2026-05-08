@@ -65,21 +65,29 @@ python3 scripts/lookup.py --section gateway/configuration-reference.md --heading
 
 Adjacent `--query` hits in the same section are merged into one excerpt to save context budget.
 
-## Raw URLs (for any consumer)
+## URLs (for any consumer)
 
-For interactive / one-off use, GitHub raw URLs are fine:
+**Latest** — committed to `main`, fetch from raw GitHub or jsDelivr:
 
-- Latest: <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md>
-- Pinned: `https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.<version>.md`
-- Index of all stored versions: <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md>
+| Asset | URL |
+|---|---|
+| Latest doc | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md> |
+| Latest TOC | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.toc.jsonl> |
+| Latest sections | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.sections.jsonl> |
+| Index | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
+| jsDelivr (CDN'd, better at scale) | <https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/openclaw-docs.latest.md> |
 
-For automated / repeated fetches, prefer **jsDelivr** — same files, properly CDN'd, no per-IP rate limits:
+**Pinned versions** — published as GitHub Release assets, **not** in `main`:
 
-- Latest: <https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/openclaw-docs.latest.md>
-- Pinned: `https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/openclaw-docs.<version>.md`
-- Index: <https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/INDEX.md>
+```
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.md
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.toc.jsonl
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.sections.jsonl
+```
 
-jsDelivr caches up to 12 hours and serves from a global CDN — better at scale, free for both you and consumers.
+> ⚠️ Pinned URLs of the form `…/main/versions/openclaw-docs.<version>.md` (raw GitHub or jsDelivr `@main`) **return 404** — only `latest.*` lives in `main`. Always use the release-asset URLs above for pinned access.
+
+`scripts/lookup.py` resolves both surfaces transparently: `--version latest` reads the in-tree files, any other `--version` fetches from the matching release.
 
 ---
 

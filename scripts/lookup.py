@@ -60,7 +60,10 @@ def _cache_dir() -> Path:
     """Per-version cache for fetched release assets.
 
     Defaults to ``$XDG_CACHE_HOME/openclaw-docs/`` (or ``~/.cache/openclaw-docs/``).
-    Releases are immutable so this cache never expires."""
+
+    Note: release-asset URLs are stable, but CI uploads with --clobber, so a
+    given tag's bytes can be replaced if the flatten script improves. Use
+    `--refresh` (or `OPENCLAW_DOCS_REFRESH=1`) to invalidate and re-fetch."""
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     return Path(base) / "openclaw-docs"
 
@@ -86,22 +89,26 @@ def _fetch_release_asset(version: str, suffix: str, dest: Path) -> None:
         sys.exit(f"Failed to fetch {url}: {e}")
 
 
-def _resolve_version_files(versions_dir: Path, version: str) -> Path:
+def _resolve_version_files(versions_dir: Path, version: str, refresh: bool = False) -> Path:
     """Return the directory containing the {md, toc.jsonl, sections.jsonl} triplet
     for this version. Looks in `versions_dir` first; if any are missing and the
     version is not "latest", fetches from the matching GitHub Release into the
-    user's cache directory and returns that. Releases are immutable so the cached
-    copy is reused on subsequent calls."""
+    user's cache directory and returns that.
+
+    Set `refresh=True` (or set `OPENCLAW_DOCS_REFRESH=1` in the environment) to
+    invalidate the cache and force a re-fetch — useful when CI has re-published
+    a release with `--clobber`."""
     needed = [SUFFIX_DOC, SUFFIX_TOC, SUFFIX_SEC]
     if all((versions_dir / f"{VERSION_PREFIX}{version}{s}").exists() for s in needed):
         return versions_dir
     if version == "latest":
-        # latest.* files are always supposed to be in versions/. If they aren't,
-        # something is wrong with the install — don't try to fetch a tag.
         sys.exit(f"latest.* files missing in {versions_dir}; run flatten_docs.py or git pull.")
     cache = _cache_dir() / version
+    refresh = refresh or os.environ.get("OPENCLAW_DOCS_REFRESH") == "1"
     for s in needed:
         target = cache / f"{VERSION_PREFIX}{version}{s}"
+        if refresh and target.exists():
+            target.unlink()
         if not target.exists():
             print(f"Fetching {target.name} from release v{version}...", file=sys.stderr)
             _fetch_release_asset(version, s, target)
@@ -142,20 +149,20 @@ def _load_jsonl(path: Path) -> list:
     return rows
 
 
-def load_toc(versions_dir: Path, version: str) -> list[TocRow]:
-    src = _resolve_version_files(versions_dir, version)
+def load_toc(versions_dir: Path, version: str, refresh: bool = False) -> list[TocRow]:
+    src = _resolve_version_files(versions_dir, version, refresh=refresh)
     p = src / f"{VERSION_PREFIX}{version}{SUFFIX_TOC}"
     return [TocRow(**r) for r in _load_jsonl(p)]
 
 
-def load_sections(versions_dir: Path, version: str) -> list[SecRow]:
-    src = _resolve_version_files(versions_dir, version)
+def load_sections(versions_dir: Path, version: str, refresh: bool = False) -> list[SecRow]:
+    src = _resolve_version_files(versions_dir, version, refresh=refresh)
     p = src / f"{VERSION_PREFIX}{version}{SUFFIX_SEC}"
     return [SecRow(**r) for r in _load_jsonl(p)]
 
 
-def doc_path(versions_dir: Path, version: str) -> Path:
-    src = _resolve_version_files(versions_dir, version)
+def doc_path(versions_dir: Path, version: str, refresh: bool = False) -> Path:
+    src = _resolve_version_files(versions_dir, version, refresh=refresh)
     p = src / f"{VERSION_PREFIX}{version}{SUFFIX_DOC}"
     if not p.exists():
         sys.exit(f"Doc file missing: {p}")
@@ -191,8 +198,8 @@ def cmd_query(args, versions_dir: Path):
 
     Adjacent hits in the same section are grouped into one merged excerpt so
     exact identifier lookups don't burn output budget on duplicate context."""
-    docp = doc_path(versions_dir, args.version)
-    sections = load_sections(versions_dir, args.version)
+    docp = doc_path(versions_dir, args.version, refresh=args.refresh)
+    sections = load_sections(versions_dir, args.version, refresh=args.refresh)
     concrete = _concrete_version(sections)
     text = docp.read_text(encoding="utf-8").split("\n")
 
@@ -275,7 +282,7 @@ _TOC_STOPWORDS = frozenset({
 
 def cmd_toc(args, versions_dir: Path):
     """Broad TOC routing. Searches path + h2 + h3 + keywords for the query."""
-    rows = load_toc(versions_dir, args.version)
+    rows = load_toc(versions_dir, args.version, refresh=args.refresh)
     concrete = _concrete_version(rows)
     needle = args.toc.lower()
     raw_terms = [t for t in re.split(r"\s+", needle) if t]
@@ -318,8 +325,8 @@ def cmd_section(args, versions_dir: Path):
     Uses byte-offset slicing (start_byte / end_byte from the section index)
     instead of reading the whole flattened doc and slicing by line — saves
     ~6 MB of read I/O per call."""
-    docp = doc_path(versions_dir, args.version)
-    sections = load_sections(versions_dir, args.version)
+    docp = doc_path(versions_dir, args.version, refresh=args.refresh)
+    sections = load_sections(versions_dir, args.version, refresh=args.refresh)
     concrete = _concrete_version(sections)
     target = next((s for s in sections if s.path == args.section), None)
     if target is None:
@@ -406,6 +413,7 @@ def main():
     ap.add_argument("--context-lines", type=int, default=3, help="Lines of context around each --query hit")
     ap.add_argument("--max-hits", type=int, default=10, help="Cap hits returned by --query / --toc")
     ap.add_argument("--max-chars", type=int, default=30000, help="Truncate --section output to this many chars")
+    ap.add_argument("--refresh", action="store_true", help="Invalidate the local cache and re-fetch release assets (for non-latest versions)")
     args = ap.parse_args()
 
     versions_dir = args.versions_dir or _default_versions_dir()
