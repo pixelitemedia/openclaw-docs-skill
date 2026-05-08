@@ -103,7 +103,13 @@ In order of preference:
 ## Refresh & freshness
 
 - CI re-flattens daily at 06:00 UTC against `openclaw/openclaw` `main`.
-- Local clones go stale until `git pull`. If `openclaw-docs.latest.md`'s version (the first `# Section:` block reveals it, or check `INDEX.md`) is clearly older than what the user is running, `git pull` the skill repo (or `WebFetch` the raw URL).
+- Local installs go stale between runs of `scripts/update.py` (or `git pull`). If `openclaw-docs.latest.md`'s version (check `INDEX.md` or row 0 of `latest.toc.jsonl`) is clearly older than what the user is running, refresh by running:
+
+  ```bash
+  python3 scripts/update.py
+  ```
+
+  Auto-detects git-clone vs ZIP install and uses the right refresh path (`git pull` or raw-GitHub fetch).
 - If even the public `latest.md` is older than the running instance, that means CI hasn't run since the upstream release — recommend running the workflow manually or wait for the next daily tick.
 
 ## Interaction with other skills

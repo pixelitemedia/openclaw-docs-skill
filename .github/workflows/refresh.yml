@@ -103,6 +103,39 @@ jobs:
           # Re-run the index/latest-update path without re-flattening.
           python3 scripts/_render_index.py
 
+      - name: Build + upload skill ZIP to the current release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Package a self-contained ZIP that's installable in any harness
+          # accepting Skill ZIP uploads (Claude Skills, Manus, Codex, etc.).
+          # Excludes CI-only files (flatten_docs.py, _sync_releases_manifest.py,
+          # _render_index.py) since consumers don't run them.
+          VERSION=$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('upstream/package.json').read_text())['version'])")
+          TAG="v${VERSION}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "No release $TAG yet; skipping ZIP attach (it'll be re-built next run)."
+            exit 0
+          fi
+          ZIP=/tmp/openclaw-docs-skill.zip
+          rm -f "$ZIP"
+          zip -r "$ZIP" \
+            SKILL.md \
+            README.md \
+            agents \
+            scripts/lookup.py \
+            scripts/update.py \
+            scripts/smoke_test.sh \
+            versions/openclaw-docs.latest.md \
+            versions/openclaw-docs.latest.toc.jsonl \
+            versions/openclaw-docs.latest.sections.jsonl \
+            versions/INDEX.md \
+            versions/releases.json
+          echo "ZIP size: $(du -h "$ZIP" | cut -f1)"
+          gh release upload "$TAG" "$ZIP" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Attached openclaw-docs-skill.zip to release $TAG."
+
       - name: Commit refreshed latest.* + INDEX.md
         run: |
           git config user.name  "openclaw-docs-bot"

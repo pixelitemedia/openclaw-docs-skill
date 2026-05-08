@@ -65,6 +65,31 @@ python3 scripts/lookup.py --section gateway/configuration-reference.md --heading
 
 Adjacent `--query` hits in the same section are merged into one excerpt to save context budget.
 
+## Quick install (any harness that accepts skill ZIPs)
+
+The simplest path. Download:
+
+```
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/latest/download/openclaw-docs-skill.zip
+```
+
+Upload to your harness as a skill — works in:
+
+- **Claude Skills** (claude.ai → Settings → Skills → Add)
+- **Manus** (Skills → Upload ZIP, or paste the GitHub URL)
+- **OpenAI Codex** (extract into `~/.codex/skills/openclaw-docs/` or `~/.agents/skills/openclaw-docs/`)
+- **Anthropic Claude Code** (extract into `~/.claude/skills/openclaw-docs/`)
+
+The ZIP is self-contained: SKILL.md, agents/openai.yaml, lookup script, latest docs + indexes, version manifest. ~6 MB. No further setup.
+
+To refresh the docs in an installed skill, run:
+
+```bash
+python3 scripts/update.py
+```
+
+`update.py` auto-detects whether the skill was installed via `git clone` or ZIP extraction and uses the right refresh path (`git pull` or raw-GitHub fetch). Run it whenever you want fresh docs — the script is idempotent.
+
 ## URLs (for any consumer)
 
 **Latest** — committed to `main`, fetch from raw GitHub or jsDelivr:
