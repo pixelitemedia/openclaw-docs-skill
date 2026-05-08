@@ -37,6 +37,10 @@ jobs:
         run: |
           python3 flatten_docs.py --repo upstream --skill-dir . --no-pull
 
+      - name: Smoke-test lookup CLI + index integrity
+        run: |
+          bash scripts/smoke_test.sh
+
       - name: Publish per-version files as GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}

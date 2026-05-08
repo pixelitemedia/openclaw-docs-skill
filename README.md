@@ -57,7 +57,13 @@ python3 scripts/lookup.py --section plugins/manifest.md
 python3 scripts/lookup.py --section gateway/configuration-reference.md --heading "Hooks"
 ```
 
-`--version latest` is the default; pass `--version 2026.5.6` to pin. All output is Markdown with a `According to docs for OpenClaw <version>: <section path>` header.
+`--version latest` is the default; pass `--version 2026.5.6` to pin. **Output always cites the concrete version** — even when called with `--version latest`, the script resolves through the indexes and emits a header like:
+
+```markdown
+# According to docs for OpenClaw 2026.5.6 — `gateway/configuration-reference.md`
+```
+
+Adjacent `--query` hits in the same section are merged into one excerpt to save context budget.
 
 ## Raw URLs (for any consumer)
 

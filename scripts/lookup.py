@@ -170,10 +170,30 @@ def find_section_for_line(sections: list[SecRow], line_no: int) -> Optional[SecR
     return None
 
 
+def _concrete_version(rows) -> str:
+    """Resolve `latest` to the concrete version recorded in the indexes.
+
+    Citations should always pin to a durable version string, never to the
+    moving `latest` alias. The TOC + section indexes both carry `version`
+    on every row; pull it from row 0."""
+    if not rows:
+        return "?"
+    return rows[0].version if hasattr(rows[0], "version") else rows[0]["version"]
+
+
+def _citation_header(version: str, suffix: str) -> str:
+    """Standard preface used across all three commands."""
+    return f"# According to docs for OpenClaw {version} — {suffix}"
+
+
 def cmd_query(args, versions_dir: Path):
-    """Exact-term search: return top matches with section path + line + context."""
+    """Exact-term search: return top matches with section path + line + context.
+
+    Adjacent hits in the same section are grouped into one merged excerpt so
+    exact identifier lookups don't burn output budget on duplicate context."""
     docp = doc_path(versions_dir, args.version)
     sections = load_sections(versions_dir, args.version)
+    concrete = _concrete_version(sections)
     text = docp.read_text(encoding="utf-8").split("\n")
 
     if args.regex:
@@ -190,45 +210,78 @@ def cmd_query(args, versions_dir: Path):
         else:
             match = lambda line: needle in line
 
-    hits = []
+    raw_hits = []
     for i, line in enumerate(text, start=1):
         if match(line):
-            hits.append((i, line))
-            if len(hits) >= args.max_hits:
+            raw_hits.append(i)
+            if len(raw_hits) >= args.max_hits:
                 break
 
-    if not hits:
-        print(f"No matches for `{args.query}` in OpenClaw {args.version}.")
+    if not raw_hits:
+        print(f"No matches for `{args.query}` in OpenClaw {concrete}.")
         return
 
-    print(f"# OpenClaw {args.version} — `{args.query}`\n")
-    print(f"_{len(hits)} match(es)_\n")
-
-    ctx = args.context_lines
-    for line_no, line in hits:
+    # Group hits by their containing section so we emit one merged excerpt
+    # per section instead of repeating overlapping context windows.
+    by_section: dict = {}
+    for line_no in raw_hits:
         sec = find_section_for_line(sections, line_no)
         sec_path = sec.path if sec else "?"
-        print(f"## `{sec_path}` (line {line_no})\n")
-        lo = max(1, line_no - ctx)
-        hi = min(len(text), line_no + ctx)
-        print("```")
-        for j in range(lo, hi + 1):
-            marker = "→ " if j == line_no else "  "
-            print(f"{marker}{j:>6}: {text[j - 1]}")
+        by_section.setdefault(sec_path, []).append(line_no)
+
+    print(_citation_header(concrete, f"`{args.query}`") + "\n")
+    print(f"_{len(raw_hits)} match(es) across {len(by_section)} section(s)_\n")
+
+    ctx = args.context_lines
+    for sec_path, hit_lines in by_section.items():
+        # Compute the merged context window: union of [hit-ctx, hit+ctx] across
+        # this section's hits, collapsing adjacent/overlapping windows.
+        windows = sorted([(max(1, h - ctx), min(len(text), h + ctx)) for h in hit_lines])
+        merged: list = []
+        for lo, hi in windows:
+            if merged and lo <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+        hit_set = set(hit_lines)
+        first_hit = hit_lines[0]
+        suffix = "" if len(hit_lines) == 1 else f" (+ {len(hit_lines) - 1} adjacent)"
+        print(f"## `{sec_path}` (line {first_hit}{suffix})\n")
+        for k, (lo, hi) in enumerate(merged):
+            if k > 0:
+                print("```\n")
+            print("```")
+            for j in range(lo, hi + 1):
+                marker = "→ " if j in hit_set else "  "
+                print(f"{marker}{j:>6}: {text[j - 1]}")
         print("```\n")
+
+
+# Stop-words filtered out of broad --toc queries so phrasings like
+# "how do I set up Telegram" route on "set telegram" (the meaningful part).
+_TOC_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were",
+    "do", "does", "did", "have", "has", "had",
+    "i", "you", "we", "they", "it",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from",
+    "and", "or", "but", "not",
+    "how", "what", "when", "where", "why", "which",
+    "can", "could", "should", "would",
+    "this", "that", "these", "those",
+    "up", "out",
+    "openclaw", "doc", "docs",
+})
 
 
 def cmd_toc(args, versions_dir: Path):
     """Broad TOC routing. Searches path + h2 + h3 + keywords for the query."""
     rows = load_toc(versions_dir, args.version)
+    concrete = _concrete_version(rows)
     needle = args.toc.lower()
-    terms = [t for t in re.split(r"\s+", needle) if t]
+    raw_terms = [t for t in re.split(r"\s+", needle) if t]
+    terms = [t for t in raw_terms if t not in _TOC_STOPWORDS] or raw_terms
 
     def score(r: TocRow) -> int:
-        haystack = " ".join(
-            [r.path, *r.h2, *r.h3, *r.keywords]
-        ).lower()
-        # +3 path/heading hits, +1 keyword hits
         s = 0
         for term in terms:
             if term in r.path.lower():
@@ -244,11 +297,11 @@ def cmd_toc(args, versions_dir: Path):
     top = [r for s, r in scored if s > 0][: args.max_hits]
 
     if not top:
-        print(f"No TOC matches for `{args.toc}` in OpenClaw {args.version}.")
+        print(f"No TOC matches for `{args.toc}` in OpenClaw {concrete}.")
         return
 
-    print(f"# OpenClaw {args.version} — TOC matches for `{args.toc}`\n")
-    print(f"_Top {len(top)} candidate sections, ranked_\n")
+    print(_citation_header(concrete, f"TOC matches for `{args.toc}`") + "\n")
+    print(f"_Top {len(top)} candidate section(s), ranked_\n")
     for r in top:
         print(f"## `{r.path}` (lines {r.start_line}–{r.end_line})")
         if r.h2:
@@ -256,13 +309,18 @@ def cmd_toc(args, versions_dir: Path):
         if r.h3:
             print(f"- **H3:** {', '.join(r.h3[:8])}")
         print()
-    print(f"_Use `--section <path>` to extract one._\n")
+    print("_Use `--section <path>` to extract one._\n")
 
 
 def cmd_section(args, versions_dir: Path):
-    """Extract a section by path; optionally narrow to one heading."""
+    """Extract a section by path; optionally narrow to one heading.
+
+    Uses byte-offset slicing (start_byte / end_byte from the section index)
+    instead of reading the whole flattened doc and slicing by line — saves
+    ~6 MB of read I/O per call."""
     docp = doc_path(versions_dir, args.version)
     sections = load_sections(versions_dir, args.version)
+    concrete = _concrete_version(sections)
     target = next((s for s in sections if s.path == args.section), None)
     if target is None:
         # Fuzzy: prefix or basename match
@@ -272,7 +330,7 @@ def cmd_section(args, versions_dir: Path):
             if args.section in s.path or s.path.endswith("/" + args.section)
         ]
         if not candidates:
-            sys.exit(f"No section matches `{args.section}` in OpenClaw {args.version}.")
+            sys.exit(f"No section matches `{args.section}` in OpenClaw {concrete}.")
         if len(candidates) > 1:
             print("# Multiple matches — be more specific:\n", file=sys.stderr)
             for c in candidates[:10]:
@@ -280,13 +338,17 @@ def cmd_section(args, versions_dir: Path):
             sys.exit(1)
         target = candidates[0]
 
-    text = docp.read_text(encoding="utf-8").split("\n")
-    lines = text[target.start_line - 1 : target.end_line]
+    # Byte-offset slice — open in binary, seek, read just this section's bytes.
+    with open(docp, "rb") as f:
+        f.seek(target.start_byte)
+        section_bytes = f.read(target.end_byte - target.start_byte)
+    section_text = section_bytes.decode("utf-8")
+    lines = section_text.split("\n")
 
     if args.heading:
-        # Trim to the H2/H3 block matching the heading text. Crucially: when the
-        # matched heading is an H2, extraction continues through child H3s until
-        # the next H2 (i.e. end at next heading with level <= matched_level).
+        # Trim to the H2/H3 block matching the heading text. When the matched
+        # heading is H2, extraction continues through child H3s until the next
+        # H2 (end at next heading with level <= matched_level).
         h_re = re.compile(r"^(#{2,3})\s+(.+)$")
         start = None
         matched_level = None  # 2 or 3
@@ -297,13 +359,12 @@ def cmd_section(args, versions_dir: Path):
             if not m:
                 continue
             level = len(m.group(1))
-            text = m.group(2)
+            heading_text = m.group(2)
             if start is None:
-                if needle_lc in text.lower():
+                if needle_lc in heading_text.lower():
                     start = i
                     matched_level = level
                 continue
-            # Already started; end when we hit a heading at <= the matched level.
             if level <= matched_level:
                 end = i
                 break
@@ -314,16 +375,15 @@ def cmd_section(args, versions_dir: Path):
 
     body = "\n".join(lines)
     if len(body) > args.max_chars:
-        truncated = body[: args.max_chars]
         body = (
-            truncated
+            body[: args.max_chars]
             + f"\n\n... _truncated at {args.max_chars} chars; full section is {target.char_count} chars_"
         )
 
     citation = f"`{target.path}`"
     if args.heading:
         citation += f" → `{args.heading}`"
-    print(f"# OpenClaw {target.version} — {citation}\n")
+    print(_citation_header(target.version, citation) + "\n")
     print(body)
 
 
