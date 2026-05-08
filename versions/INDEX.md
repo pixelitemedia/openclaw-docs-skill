@@ -17,4 +17,3 @@ The `openclaw-docs.latest.*` triplet in this `versions/` directory is always a c
 ## In-tree (newest first)
 
 - **2026.5.6** — `openclaw-docs.2026.5.6.md` (5805 KB) · [release v2026.5.6](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.5.6)
-- **2026.5.3** — `openclaw-docs.2026.5.3.md` (5480 KB) · [release v2026.5.3](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.5.3)
