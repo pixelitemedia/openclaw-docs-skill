@@ -58,13 +58,25 @@ Prefer the local copy when present — `Grep` is much faster than `WebFetch` on 
 
 ## How to read the docs efficiently
 
-Files are 5+ MB. **Do not full-`Read` them.** Use `Grep` (or the tool equivalent in your platform):
+Files are 5+ MB. **Do not full-`Read` them.** Use `Grep` (or the tool equivalent in your platform). Sections are delimited by `# Section: <relative-path>` headers (1:1 with the upstream `docs/**/*.md` tree); within each section, the original H2/H3 headings are preserved.
 
-- Sections are delimited by `# Section: <relative-path>` headers — these map 1:1 to the upstream `docs/**/*.md` tree.
-- Grep for the section path (`Section: gateway/`), the config key (`gateway.mode`), or the symbol (`createPluginEntry`).
-- After locating the section, `Read` a targeted offset around the match.
+### Lookup strategy — match the query type
 
-If you only have `WebFetch` (no local clone) and the file is too large to fetch whole, fetch the raw URL with a `Range:` header for the relevant byte slice, or fetch `INDEX.md` first to check version availability.
+The docs file already contains all the navigation structure you need. Pick the strategy by query type:
+
+**Specific query** (config key, CLI flag, function name, exact error string, version):
+
+- Grep the keyword directly. Examples: `gateway.mode`, `--bind loopback`, `createPluginEntry`, `OPENCLAW_LIVE_TEST`.
+- Read a small offset around the top hit.
+
+**Broad / ambiguous query** ("how do plugins work?", "Telegram setup", "gateway configuration"):
+
+1. **First, grep the heading skeleton** to see the navigable structure: `grep -E "^(# Section:|## )" openclaw-docs.latest.md` → returns ~6K lines of section paths + H2 headings, the doc's effective table of contents.
+2. Pick the 1–3 most relevant section paths from the skeleton.
+3. Grep narrower keywords *within* those sections (or `Read` an offset around the matching `# Section:` line).
+4. Don't dump the whole skeleton into the response — use it as a routing aid only.
+
+**Fallback** when no local clone is available and the full file is too large to fetch over `WebFetch`: fetch `INDEX.md` first to confirm the version, then use a `Range:` header on the raw URL for the relevant byte slice.
 
 ## Refresh & freshness
 
