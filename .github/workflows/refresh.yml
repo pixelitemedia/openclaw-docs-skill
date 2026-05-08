@@ -92,34 +92,16 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --limit 1000 \
             --json tagName,publishedAt \
-            | python3 -c '
-import json, sys, re
-rels = json.load(sys.stdin)
-out = []
-for r in rels:
-    tag = r["tagName"]
-    m = re.match(r"^v(.+)$", tag)
-    if not m:
-        continue
-    out.append({"version": m.group(1), "tag": tag, "published_at": r["publishedAt"]})
-out.sort(key=lambda r: r["version"], reverse=True)
-print(json.dumps(out, indent=2))
-' > versions/releases.json
+            > /tmp/releases-raw.json
+          python3 scripts/_sync_releases_manifest.py \
+            < /tmp/releases-raw.json \
+            > versions/releases.json
 
       - name: Re-render INDEX.md against the fresh manifest
         run: |
           # flatten_docs.py reads versions/releases.json to produce INDEX.md.
-          # Re-run the index/latest-update path without re-flattening (no
-          # upstream pull, no doc regeneration) by calling the helpers directly.
-          python3 -c '
-import sys; sys.path.insert(0, ".")
-from pathlib import Path
-from flatten_docs import list_version_docs, write_index, update_latest
-v = Path("versions")
-ranked = list_version_docs(v)
-write_index(v, ranked)
-update_latest(v, ranked)
-'
+          # Re-run the index/latest-update path without re-flattening.
+          python3 scripts/_render_index.py
 
       - name: Commit refreshed latest.* + INDEX.md
         run: |
