@@ -21,16 +21,24 @@ You do **not** need to run any flatten / sync script. CI does that upstream. You
 | Pinned version | `https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.<version>.md` |
 | Index of stored versions | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
 
-**Local copy** (when this skill is installed via `git clone` into `~/.claude/skills/openclaw-docs/`):
+**Local copy** (when the skill is installed via `git clone`):
 
 ```
-~/.claude/skills/openclaw-docs/versions/
+<skill-root>/versions/
 ├── INDEX.md
 ├── openclaw-docs.latest.md
 └── openclaw-docs.<version>.md
 ```
 
-Prefer the local copy when present — `Grep` is much faster than `WebFetch` on a 5+ MB file. If the local copy is missing or stale, `git -C ~/.claude/skills/openclaw-docs pull` gets the latest snapshots, or fall back to `WebFetch` on the raw URL.
+`<skill-root>` depends on the host:
+
+| Host | Conventional skill root |
+|---|---|
+| Anthropic Claude Code | `~/.claude/skills/openclaw-docs/` |
+| OpenAI Codex | `~/.codex/skills/openclaw-docs/` (or `~/.agents/skills/openclaw-docs/` per the docs default) |
+| ChatGPT / Cursor / others | The uploaded knowledge file or `@`-referenced project file |
+
+Prefer the local copy when present — `Grep` is much faster than `WebFetch` on a 5+ MB file. If the local copy is missing or stale, `git -C <skill-root> pull` gets the latest snapshots, or fall back to `WebFetch` on the raw URL above.
 
 ## When to invoke
 

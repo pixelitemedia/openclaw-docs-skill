@@ -1,0 +1,8 @@
+interface:
+  display_name: "OpenClaw Docs"
+  short_description: "Authoritative OpenClaw reference, daily-refreshed"
+  brand_color: "#3B82F6"
+  default_prompt: "Look up the OpenClaw docs at github.com/pixelitemedia/openclaw-docs-skill (or the local clone if installed), match the running OpenClaw version when known, and preface answers with 'According to docs for OpenClaw <version>:'."
+
+policy:
+  allow_implicit_invocation: true

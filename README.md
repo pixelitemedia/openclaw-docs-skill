@@ -62,6 +62,27 @@ git submodule add https://github.com/pixelitemedia/openclaw-docs-skill.git \
 
 Claude Code auto-discovers `SKILL.md` and the skill triggers when OpenClaw questions come up.
 
+### OpenAI — Codex (CLI)
+
+Codex uses the same `SKILL.md` format as Claude Code, so the same repo works as-is. Codex additionally reads `agents/openai.yaml` (included in this repo) for its UI affordances (display name, brand color, default prompt).
+
+Clone into Codex's user-global skills directory:
+
+```bash
+git clone https://github.com/pixelitemedia/openclaw-docs-skill.git \
+  ~/.codex/skills/openclaw-docs
+```
+
+(The Codex docs also list `~/.agents/skills/` as a discovery path. `~/.codex/skills/` is `$CODEX_HOME/skills` which most installs use; pick whichever your install prefers.)
+
+For project-scoped use, Codex looks at `.agents/skills/` walking up from the cwd:
+
+```bash
+cd <your-project>
+git submodule add https://github.com/pixelitemedia/openclaw-docs-skill.git \
+  .agents/skills/openclaw-docs
+```
+
 ### Anthropic — Claude.ai (web / desktop / mobile)
 
 Claude.ai cannot read your filesystem, so feed the docs in via Projects or Skills:
