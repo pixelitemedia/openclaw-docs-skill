@@ -32,6 +32,8 @@ import json
 import os
 import re
 import sys
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -41,11 +43,69 @@ SUFFIX_DOC = ".md"
 SUFFIX_TOC = ".toc.jsonl"
 SUFFIX_SEC = ".sections.jsonl"
 
+# Public release base. Override with OPENCLAW_DOCS_RELEASE_BASE for forks.
+RELEASE_BASE = os.environ.get(
+    "OPENCLAW_DOCS_RELEASE_BASE",
+    "https://github.com/pixelitemedia/openclaw-docs-skill/releases/download",
+)
+
 
 def _default_versions_dir() -> Path:
     """Resolve the versions/ directory next to this script's parent (skill root)."""
     here = Path(__file__).resolve()
     return here.parent.parent / "versions"
+
+
+def _cache_dir() -> Path:
+    """Per-version cache for fetched release assets.
+
+    Defaults to ``$XDG_CACHE_HOME/openclaw-docs/`` (or ``~/.cache/openclaw-docs/``).
+    Releases are immutable so this cache never expires."""
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return Path(base) / "openclaw-docs"
+
+
+def _fetch_release_asset(version: str, suffix: str, dest: Path) -> None:
+    """Download a single release asset to `dest` (atomically). Raises on failure."""
+    url = f"{RELEASE_BASE}/v{version}/{VERSION_PREFIX}{version}{suffix}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r, open(tmp, "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+        tmp.replace(dest)
+    except urllib.error.HTTPError as e:
+        tmp.unlink(missing_ok=True)
+        sys.exit(f"Failed to fetch {url}: HTTP {e.code}")
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        sys.exit(f"Failed to fetch {url}: {e}")
+
+
+def _resolve_version_files(versions_dir: Path, version: str) -> Path:
+    """Return the directory containing the {md, toc.jsonl, sections.jsonl} triplet
+    for this version. Looks in `versions_dir` first; if any are missing and the
+    version is not "latest", fetches from the matching GitHub Release into the
+    user's cache directory and returns that. Releases are immutable so the cached
+    copy is reused on subsequent calls."""
+    needed = [SUFFIX_DOC, SUFFIX_TOC, SUFFIX_SEC]
+    if all((versions_dir / f"{VERSION_PREFIX}{version}{s}").exists() for s in needed):
+        return versions_dir
+    if version == "latest":
+        # latest.* files are always supposed to be in versions/. If they aren't,
+        # something is wrong with the install — don't try to fetch a tag.
+        sys.exit(f"latest.* files missing in {versions_dir}; run flatten_docs.py or git pull.")
+    cache = _cache_dir() / version
+    for s in needed:
+        target = cache / f"{VERSION_PREFIX}{version}{s}"
+        if not target.exists():
+            print(f"Fetching {target.name} from release v{version}...", file=sys.stderr)
+            _fetch_release_asset(version, s, target)
+    return cache
 
 
 @dataclass
@@ -83,17 +143,20 @@ def _load_jsonl(path: Path) -> list:
 
 
 def load_toc(versions_dir: Path, version: str) -> list[TocRow]:
-    p = versions_dir / f"{VERSION_PREFIX}{version}{SUFFIX_TOC}"
+    src = _resolve_version_files(versions_dir, version)
+    p = src / f"{VERSION_PREFIX}{version}{SUFFIX_TOC}"
     return [TocRow(**r) for r in _load_jsonl(p)]
 
 
 def load_sections(versions_dir: Path, version: str) -> list[SecRow]:
-    p = versions_dir / f"{VERSION_PREFIX}{version}{SUFFIX_SEC}"
+    src = _resolve_version_files(versions_dir, version)
+    p = src / f"{VERSION_PREFIX}{version}{SUFFIX_SEC}"
     return [SecRow(**r) for r in _load_jsonl(p)]
 
 
 def doc_path(versions_dir: Path, version: str) -> Path:
-    p = versions_dir / f"{VERSION_PREFIX}{version}{SUFFIX_DOC}"
+    src = _resolve_version_files(versions_dir, version)
+    p = src / f"{VERSION_PREFIX}{version}{SUFFIX_DOC}"
     if not p.exists():
         sys.exit(f"Doc file missing: {p}")
     return p
@@ -221,19 +284,27 @@ def cmd_section(args, versions_dir: Path):
     lines = text[target.start_line - 1 : target.end_line]
 
     if args.heading:
-        # Trim to the H2/H3 block matching the heading text.
-        h_re = re.compile(r"^#{2,3}\s+(.+)$")
+        # Trim to the H2/H3 block matching the heading text. Crucially: when the
+        # matched heading is an H2, extraction continues through child H3s until
+        # the next H2 (i.e. end at next heading with level <= matched_level).
+        h_re = re.compile(r"^(#{2,3})\s+(.+)$")
         start = None
+        matched_level = None  # 2 or 3
         end = None
         needle_lc = args.heading.lower()
         for i, line in enumerate(lines):
             m = h_re.match(line)
             if not m:
                 continue
-            if start is None and needle_lc in m.group(1).lower():
-                start = i
+            level = len(m.group(1))
+            text = m.group(2)
+            if start is None:
+                if needle_lc in text.lower():
+                    start = i
+                    matched_level = level
                 continue
-            if start is not None and end is None:
+            # Already started; end when we hit a heading at <= the matched level.
+            if level <= matched_level:
                 end = i
                 break
         if start is None:

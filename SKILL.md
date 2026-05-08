@@ -26,16 +26,21 @@ You do **not** need to run any flatten / sync script. CI does that upstream. You
 ```
 <skill-root>/
 ├── versions/
-│   ├── INDEX.md
-│   ├── openclaw-docs.latest.md           ← flattened docs, always newest
+│   ├── INDEX.md                          ← list of available versions + Release URLs
+│   ├── openclaw-docs.latest.md           ← flattened docs, newest version
 │   ├── openclaw-docs.latest.toc.jsonl    ← TOC: section path + H2/H3 + line range + keywords
-│   ├── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
-│   ├── openclaw-docs.<version>.md
-│   ├── openclaw-docs.<version>.toc.jsonl
-│   └── openclaw-docs.<version>.sections.jsonl
+│   └── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
 └── scripts/
     └── lookup.py                         ← deterministic retrieval CLI
 ```
+
+Only the `latest.*` triplet is committed to `main`. **Historical version snapshots live as GitHub Release assets**, not in the working tree, so cloning the skill stays cheap forever:
+
+```
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.<suffix>
+```
+
+`scripts/lookup.py` auto-fetches non-latest versions from the matching release and caches them under `~/.cache/openclaw-docs/<version>/`. No manual download required.
 
 `<skill-root>` depends on the host:
 

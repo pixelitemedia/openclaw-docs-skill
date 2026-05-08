@@ -15,16 +15,28 @@ OpenClaw uses CalVer (`YYYY.M.D`) and ships frequently, so pinning to the exact 
 ├── flatten_docs.py                       ← CI refresh + index generator
 ├── scripts/
 │   └── lookup.py                         ← deterministic retrieval CLI
-├── .github/workflows/refresh.yml         ← daily auto-refresh
+├── .github/workflows/refresh.yml         ← daily auto-refresh + release publish
 └── versions/
-    ├── INDEX.md                          ← list of stored versions, newest first
+    ├── INDEX.md                          ← list of stored versions + Release URL pattern
     ├── openclaw-docs.latest.md           ← flattened docs (newest)
     ├── openclaw-docs.latest.toc.jsonl    ← TOC: section + H2/H3 + line range + keywords
-    ├── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
-    └── openclaw-docs.<version>.{md,toc.jsonl,sections.jsonl}   ← one triplet per snapshotted release
+    └── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
 ```
 
-Each version has three artifacts. The `.md` is the flattened doc; the two `.jsonl` indexes power deterministic retrieval (TOC for routing broad queries, sections for fast extraction or HTTP `Range` requests). `openclaw-docs.latest.*` are real copies of the newest triplet (not symlinks) so they can be fetched as raw bytes from `raw.githubusercontent.com` or jsDelivr and consumed by Windows checkouts, hosted chat products, and APIs alike.
+Only the `latest.*` triplet lives in `main`. **Historical version snapshots are published as [GitHub Release](https://github.com/pixelitemedia/openclaw-docs-skill/releases) assets** — keeps the skill repo small forever (~6 MB) regardless of how many versions accumulate.
+
+Each version triplet:
+- `.md` — flattened doc (~5–6 MB)
+- `.toc.jsonl` — TOC: routing index for broad queries (~300 KB)
+- `.sections.jsonl` — line + byte ranges per section, for fast extraction or HTTP `Range` requests (~100 KB)
+
+Stable URL pattern for any version (e.g. for Custom GPTs, vector pipelines, manual download):
+
+```
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.<suffix>
+```
+
+`scripts/lookup.py` fetches and caches non-latest versions automatically.
 
 ## Querying — `scripts/lookup.py`
 

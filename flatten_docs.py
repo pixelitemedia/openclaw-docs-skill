@@ -224,20 +224,32 @@ def list_version_docs(versions_dir: Path) -> list:
     )
 
 
-def write_index(versions_dir: Path, ranked: list):
+def write_index(versions_dir: Path, ranked: list, repo_slug: str = "pixelitemedia/openclaw-docs-skill"):
+    """Write versions/INDEX.md.
+
+    Only the latest triplet lives in `main`; historical snapshots live as
+    GitHub Release assets. We list whatever's in the directory (mostly the
+    latest, plus any in-flight versions waiting to be migrated to releases)
+    and point at the Releases page for full history."""
     idx = versions_dir / "INDEX.md"
     with open(idx, "w") as f:
-        f.write("# OpenClaw Docs — Stored Versions\n\n")
-        f.write("Each version has three artifacts:\n\n")
+        f.write("# OpenClaw Docs — Versions\n\n")
+        f.write(f"Each snapshotted OpenClaw version is published as a [GitHub Release](https://github.com/{repo_slug}/releases) "
+                f"with three asset files attached:\n\n")
         f.write("- `openclaw-docs.<version>.md` — flattened docs\n")
-        f.write("- `openclaw-docs.<version>.toc.jsonl` — TOC (sections + H2/H3 + keywords + line ranges)\n")
-        f.write("- `openclaw-docs.<version>.sections.jsonl` — section offsets (line + byte ranges)\n\n")
-        f.write("`openclaw-docs.latest.*` are real copies of the highest-version files.\n\n")
-        f.write("## Versions (newest first)\n\n")
+        f.write("- `openclaw-docs.<version>.toc.jsonl` — TOC (section path + H2/H3 + keywords + line range)\n")
+        f.write("- `openclaw-docs.<version>.sections.jsonl` — line + byte ranges per section\n\n")
+        f.write("Direct download URL pattern:\n\n")
+        f.write(f"```\nhttps://github.com/{repo_slug}/releases/download/v<version>/openclaw-docs.<version>.<suffix>\n```\n\n")
+        f.write("The `openclaw-docs.latest.*` triplet in this `versions/` directory is always a copy "
+                "of the newest release's assets, kept in `main` for fast `git pull` access. "
+                "`scripts/lookup.py` auto-fetches non-latest versions from Releases on demand.\n\n")
+        f.write("## In-tree (newest first)\n\n")
         for p in ranked:
             stem = p.name[len(VERSION_PREFIX):-len(SUFFIX_DOC)]
             size_kb = p.stat().st_size // 1024
-            f.write(f"- **{stem}** — `{p.name}` ({size_kb} KB)\n")
+            tag = f"v{stem}"
+            f.write(f"- **{stem}** — `{p.name}` ({size_kb} KB) · [release {tag}](https://github.com/{repo_slug}/releases/tag/{tag})\n")
 
 
 def update_latest(versions_dir: Path, ranked_docs: list):
@@ -289,20 +301,10 @@ def main():
     # Build indexes for the version we just produced
     _emit_indexes_for(doc_file, version, versions_dir)
 
-    # Backfill indexes for any other version docs that don't have them yet
-    # (e.g. committed before the index feature existed). One-time cost that
-    # keeps INDEX.md and latest.* aliases consistent on every run.
-    for p in list_version_docs(versions_dir):
-        stem = p.name[: -len(SUFFIX_DOC)]
-        toc_p = versions_dir / f"{stem}{SUFFIX_TOC}"
-        sec_p = versions_dir / f"{stem}{SUFFIX_SEC}"
-        if toc_p.exists() and sec_p.exists():
-            continue
-        ver = stem[len(VERSION_PREFIX):]
-        print(f"Backfilling indexes for {ver}...")
-        _emit_indexes_for(p, ver, versions_dir)
-
-    # Re-rank versions on disk and refresh INDEX.md + latest.* aliases
+    # Refresh INDEX.md + latest.* aliases. `ranked` is whatever version triplets
+    # currently sit on disk — usually just the one we wrote (CI publishes it as
+    # a release and removes from the working tree before commit), or a couple of
+    # in-flight versions waiting to be migrated.
     ranked = list_version_docs(versions_dir)
     write_index(versions_dir, ranked)
     update_latest(versions_dir, ranked)

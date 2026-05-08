@@ -1,0 +1,16 @@
+# Per-version doc + indexes are published as GitHub Release assets, not committed.
+# Only the latest.* triplet stays in main.
+versions/openclaw-docs.*.md
+!versions/openclaw-docs.latest.md
+
+versions/openclaw-docs.*.toc.jsonl
+!versions/openclaw-docs.latest.toc.jsonl
+
+versions/openclaw-docs.*.sections.jsonl
+!versions/openclaw-docs.latest.sections.jsonl
+
+# Local lookup.py cache for fetched non-latest releases
+.cache/
+
+# Local refresh log written by the launchd auto-pull job
+.refresh.log
