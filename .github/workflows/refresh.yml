@@ -1,0 +1,50 @@
+name: Refresh OpenClaw docs
+
+on:
+  schedule:
+    - cron: "0 6 * * *"          # daily at 06:00 UTC
+  workflow_dispatch: {}            # manual trigger from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - flatten_docs.py
+      - .github/workflows/refresh.yml
+
+permissions:
+  contents: write                  # needed to commit refreshed docs
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this skill repo
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream openclaw/openclaw
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          path: upstream
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Flatten docs
+        run: |
+          python3 flatten_docs.py --repo upstream --skill-dir . --no-pull
+
+      - name: Commit refreshed docs (if any)
+        run: |
+          git config user.name  "openclaw-docs-bot"
+          git config user.email "openclaw-docs-bot@users.noreply.github.com"
+          git add versions/
+          if git diff --cached --quiet; then
+            echo "No doc changes."
+          else
+            VERSION=$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('upstream/package.json').read_text())['version'])")
+            git commit -m "Refresh OpenClaw docs to v${VERSION}"
+            git push
+          fi
