@@ -23,9 +23,19 @@ OpenClaw uses CalVer (`YYYY.M.D`) and ships frequently, so pinning to the exact 
 
 ## Raw URLs (for any consumer)
 
+For interactive / one-off use, GitHub raw URLs are fine:
+
 - Latest: <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md>
 - Pinned: `https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.<version>.md`
 - Index of all stored versions: <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md>
+
+For automated / repeated fetches, prefer **jsDelivr** — same files, properly CDN'd, no per-IP rate limits:
+
+- Latest: <https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/openclaw-docs.latest.md>
+- Pinned: `https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/openclaw-docs.<version>.md`
+- Index: <https://cdn.jsdelivr.net/gh/pixelitemedia/openclaw-docs-skill@main/versions/INDEX.md>
+
+jsDelivr caches up to 12 hours and serves from a global CDN — better at scale, free for both you and consumers.
 
 ---
 
