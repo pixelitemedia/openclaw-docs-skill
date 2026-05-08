@@ -13,24 +13,24 @@ Keep a local, versioned copy of the official OpenClaw documentation that Claude 
 
 ```
 ~/.claude/skills/openclaw-docs/
-├── SKILL.md               ← this file
-├── flatten_docs.py        ← sync + flatten script
+├── SKILL.md                          ← this file
+├── flatten_docs.py                   ← sync + flatten script
 └── versions/
-    ├── INDEX.md           ← list of all stored versions
-    ├── latest.md          ← symlink to newest flattened doc
-    ├── openclaw_docs_2026.4.14.md
-    ├── openclaw_docs_2026.3.28.md
+    ├── INDEX.md                      ← list of all stored versions
+    ├── openclaw-docs.latest.md       ← real copy of the newest flattened doc
+    ├── openclaw-docs.2026.5.6.md
+    ├── openclaw-docs.2026.5.3.md
     └── ...
 ```
 
-The upstream clone lives at `~/OpenClaw/docs/openclaw` (git remote: `https://github.com/openclaw/openclaw`). The skill pulls from there — it does NOT re-clone.
+The upstream clone (when present locally) lives at `~/OpenClaw/docs/openclaw` (git remote: `https://github.com/openclaw/openclaw`). The skill pulls from there — it does NOT re-clone. In CI the workflow checks out `openclaw/openclaw` into a temp directory instead.
 
 ## When to invoke
 
-**Refresh the docs** (run the script) when:
+**Refresh the docs** (run the script, or `git pull` the skill repo) when:
 - The user explicitly asks to update / pull / refresh OpenClaw docs.
 - The user mentions an OpenClaw version you don't have a file for in `versions/`.
-- More than ~a week has passed since `latest.md` was updated and the user is asking a current-behavior question.
+- More than ~a week has passed since `openclaw-docs.latest.md` was updated and the user is asking a current-behavior question.
 
 **Read the docs** (grep / read the relevant version file) when:
 - The user asks any factual question about OpenClaw: CLI flags, config keys, plugin SDK, gateway protocol, channels, providers, doctor, onboarding, release flow, etc.
@@ -39,13 +39,13 @@ The upstream clone lives at `~/OpenClaw/docs/openclaw` (git remote: `https://git
 ## Version selection rule
 
 1. **If a specific OpenClaw instance is in context** — e.g., an SSH session to a host running OpenClaw, or the user names a version — determine its version:
-   - Remote: `ssh <host> 'openclaw --version'` or `openclaw version`
+   - Remote: `ssh <host> 'openclaw --version'`
    - Local repo: read `package.json` version
-2. **Match that version** to a file in `versions/`. If the exact version isn't stored, run `flatten_docs.py` to fetch it (it will checkout/pull current `main` and produce a file tagged with whatever version is in `package.json`).
-3. **If no specific version is known**, use `versions/latest.md`.
+2. **Match that version** to a file in `versions/openclaw-docs.<version>.md`. If the exact version isn't stored, run `flatten_docs.py` to fetch it (it will pull `main` and produce a file tagged with whatever version is in `package.json`).
+3. **If no specific version is known**, use `versions/openclaw-docs.latest.md`.
 4. **Always preface OpenClaw answers** with: `According to docs for OpenClaw <version>:` so the user knows which snapshot you used.
 
-If the stored `latest.md` version is clearly older than what the user is running, refresh first.
+If the stored latest version is clearly older than what the user is running, refresh first.
 
 ## Running the sync script
 
@@ -61,8 +61,8 @@ Options:
 The script:
 1. `git fetch --all --tags` + `git pull --ff-only` the repo.
 2. Reads `version` from `package.json`.
-3. Walks `docs/**/*.md` (excluding `.generated`, `images`, `assets`, `zh-CN`, `ja-JP`, `.i18n`), concatenates into `versions/openclaw_docs_<version>.md`.
-4. Rewrites `versions/INDEX.md` and repoints `versions/latest.md`.
+3. Walks `docs/**/*.md` (excluding `.generated`, `images`, `assets`, `zh-CN`, `ja-JP`, `.i18n`), concatenates into `versions/openclaw-docs.<version>.md`.
+4. Rewrites `versions/INDEX.md` (sorted by version, newest first) and overwrites `versions/openclaw-docs.latest.md` with a copy of the highest-version file.
 
 To pin to a specific version, check out that git tag in the repo first, then run with `--no-pull`:
 
@@ -78,7 +78,7 @@ git checkout main   # restore
 Flattened files are large (multi-MB). Don't `Read` the whole file unless asked — **use `Grep`** to find the section, then `Read` a targeted offset. Each file has `# Section: <rel-path>` headers that make navigation easy:
 
 ```
-Grep for "Section: channels/" in versions/latest.md  → locate channel docs
+Grep for "Section: channels/" in versions/openclaw-docs.latest.md  → locate channel docs
 Grep for "gateway.mode" to find config key usage
 ```
 
@@ -90,5 +90,5 @@ Grep for "gateway.mode" to find config key usage
 ## Prohibitions
 
 - Do not answer OpenClaw factual questions from model memory when a docs file exists — grep the file.
-- Do not fabricate version numbers. If you don't know the running version, say so and use `latest.md` with the preface.
+- Do not fabricate version numbers. If you don't know the running version, say so and use `openclaw-docs.latest.md` with the preface.
 - Do not edit files inside `~/OpenClaw/docs/openclaw/` — that's the upstream clone. Edits belong elsewhere.
