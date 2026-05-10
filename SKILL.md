@@ -1,15 +1,60 @@
 ---
 name: openclaw-docs
-description: Authoritative reference for OpenClaw — points to the public, daily-refreshed flattened docs at github.com/pixelitemedia/openclaw-docs-skill. Trigger when the user asks anything about OpenClaw features, config, CLI, gateway, plugin SDK, channels, providers, or is debugging a running OpenClaw instance. Use to ground answers in current docs instead of model memory.
+description: Authoritative reference for OpenClaw — the daily-refreshed flattened docs at github.com/pixelitemedia/openclaw-docs-skill. Trigger when the user asks anything about OpenClaw features, config fields, CLI flags, gateway behavior, plugin SDK, channels, providers, secrets, doctor, or onboarding. **You MUST verify every config-field, flag, and API-shape claim against the docs before stating it. Do not answer OpenClaw questions from training-data memory — model memory of OpenClaw is unreliable and frequently invents fields that do not exist (e.g. `env` on exec providers, when only `passEnv` is real).**
 ---
 
 # OpenClaw Docs
 
-## What this skill is
+## ⚠️ Primary directive
 
-A pointer. The actual OpenClaw documentation is mirrored, flattened, and version-snapshotted by GitHub Actions in <https://github.com/pixelitemedia/openclaw-docs-skill>. This skill teaches you (the assistant) where to find it, which version to pick, and how to cite it.
+**Model memory of OpenClaw is unreliable.** OpenClaw releases roughly daily (CalVer `YYYY.M.D`); training data is months-to-years old; many "obvious" config patterns common in adjacent systems (Docker Compose, systemd, Kubernetes) **do not exist in OpenClaw**. This skill exists because answering from memory has produced wrong configs that fail validation in real deployments.
 
-You do **not** need to run any flatten / sync script. CI does that upstream. Your job is consumption.
+**Before stating any of the following, verify it appears verbatim in the docs:**
+
+- Any config-field name (e.g. `secrets.providers.<name>.env` — does this exist?)
+- Any CLI flag (e.g. `--bind loopback` — is this the real flag name?)
+- Any environment variable (e.g. `OPENCLAW_LIVE_TEST` — is this the real var?)
+- Any API or function name (e.g. `createPluginEntry` — does this exist?)
+- Any protocol shape (request/response JSON, file format)
+- Any "X supports Y" claim about behavior
+
+If the term doesn't appear in the docs, **the term does not exist**. Recommend an alternative that does.
+
+## Mandatory verification protocol
+
+For every OpenClaw question, follow this protocol — **do not skip steps just because you think you know the answer**:
+
+1. **Identify the version** in scope (see "Version selection" below).
+2. **Run a verification query** for each technical term you're about to use:
+   - Preferred: `python3 <skill-root>/scripts/lookup.py --query "<term>" --version <ver>`
+   - Fallback (no shell): `Grep` for the term in `<skill-root>/versions/openclaw-docs.<ver>.md`
+   - Last resort (no local copy): `WebFetch` the raw doc URL or call the `--toc` index via the lookup script
+3. **If the term has zero matches**, do not use it in your answer. Either:
+   - Find the real term that does the job (re-query with broader terms), or
+   - Tell the user the feature/field doesn't appear to exist in this version.
+4. **Cite the docs**: every answer must begin with the citation header that `lookup.py` produces, of the exact form:
+
+   ```
+   # According to docs for OpenClaw <CONCRETE-VERSION> — <section-path>
+   ```
+
+   Where `<CONCRETE-VERSION>` is the resolved version (e.g. `2026.5.6`), **never** the literal string `latest`. If you write `According to docs for OpenClaw latest:` you have not actually consulted the docs and the answer is unsafe.
+
+5. **Quote where helpful**: when claims are non-obvious or contested, include a short verbatim quote from the relevant section in your answer so the user can audit the grounding.
+
+## Known hallucination traps
+
+Common false fields/patterns models invent for OpenClaw. Do not use these unless `lookup.py --query` confirms they exist:
+
+| Hallucinated | Real equivalent |
+|---|---|
+| `env: { K: V }` on a provider | `passEnv: ["K"]` (allowlists from parent process env; OpenClaw does **not** support literal env-value maps on providers) |
+| `secret:` field | `SecretRef` object: `{ source, provider, id }` |
+| `auth:` section at provider top level | Provider-specific; consult the provider's docs section |
+| `--config` for everything | OpenClaw uses `~/.openclaw/openclaw.json` plus per-command flags; check the actual flag |
+| Free-form regex search defaults | Identifier search must be **fixed-string** — `.`, `-`, `/`, `@` are regex metacharacters in OpenClaw names |
+
+When in doubt, grep first. **A wrong config is worse than "I don't know" — wrong configs fail at validation or produce silent misbehavior; "I don't know, here's how to find out" lets the user verify before deploying.**
 
 ## Where the docs live
 
@@ -17,108 +62,79 @@ You do **not** need to run any flatten / sync script. CI does that upstream. You
 
 | File | URL |
 |---|---|
-| Latest version | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md> |
-| Pinned version (release asset) | `https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.md` |
-| Index of stored versions | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
+| Latest | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md> |
+| Pinned (release asset) | `https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.md` |
+| Index | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
 
-Only the `latest.*` triplet lives in `main`. Pinned versions are GitHub Release assets — `https://.../main/versions/openclaw-docs.<version>.md` returns 404. `scripts/lookup.py` handles both surfaces transparently.
+Only `latest.*` lives in `main`. Pinned versions are **GitHub Release assets** — `https://.../main/versions/openclaw-docs.<version>.md` returns 404. `scripts/lookup.py` resolves both surfaces transparently.
 
-**Local copy** (when the skill is installed via `git clone`):
+**Local install layout** (after `git clone` or ZIP extraction):
 
 ```
 <skill-root>/
-├── versions/
-│   ├── INDEX.md                          ← list of available versions + Release URLs
-│   ├── openclaw-docs.latest.md           ← flattened docs, newest version
-│   ├── openclaw-docs.latest.toc.jsonl    ← TOC: section path + H2/H3 + line range + keywords
-│   └── openclaw-docs.latest.sections.jsonl  ← line + byte ranges per section
-└── scripts/
-    └── lookup.py                         ← deterministic retrieval CLI
+├── SKILL.md
+├── scripts/
+│   ├── lookup.py    ← deterministic retrieval CLI (preferred)
+│   └── update.py    ← in-place refresh (auto-detects git/ZIP)
+└── versions/
+    ├── INDEX.md
+    ├── openclaw-docs.latest.md
+    ├── openclaw-docs.latest.toc.jsonl
+    └── openclaw-docs.latest.sections.jsonl
 ```
 
-Only the `latest.*` triplet is committed to `main`. **Historical version snapshots live as GitHub Release assets**, not in the working tree, so cloning the skill stays cheap forever:
+Conventional skill roots:
 
-```
-https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.<suffix>
-```
-
-`scripts/lookup.py` auto-fetches non-latest versions from the matching release and caches them under `~/.cache/openclaw-docs/<version>/`. No manual download required.
-
-`<skill-root>` depends on the host:
-
-| Host | Conventional skill root |
+| Host | Path |
 |---|---|
 | Anthropic Claude Code | `~/.claude/skills/openclaw-docs/` |
-| OpenAI Codex | `~/.codex/skills/openclaw-docs/` (or `~/.agents/skills/openclaw-docs/` per the docs default) |
-| ChatGPT / Cursor / others | The uploaded knowledge file or `@`-referenced project file |
+| OpenAI Codex | `~/.codex/skills/openclaw-docs/` (or `~/.agents/skills/openclaw-docs/`) |
+| Claude.ai / Manus / ChatGPT (uploaded) | The harness's managed skills directory |
 
-Prefer the local copy when present — `Grep` is much faster than `WebFetch` on a 5+ MB file. If the local copy is missing or stale, `git -C <skill-root> pull` gets the latest snapshots, or fall back to `WebFetch` on the raw URL above.
+## Version selection
 
-## When to invoke
-
-- The user asks any factual question about OpenClaw: CLI flags, config keys, plugin SDK, gateway protocol, channels (Telegram/Discord/Slack/Signal/iMessage/Web), providers, doctor, onboarding, release flow, etc.
-- You're about to assert how OpenClaw behaves — check the docs first instead of answering from memory.
-- The user is debugging a specific OpenClaw instance (SSH'd host, local checkout, named version) — load the matching version's docs.
-
-## Version-selection rule
-
-1. **If a specific OpenClaw instance is in scope**, identify its version:
+1. **If a specific instance is in scope**, identify its version:
    - Remote: `ssh <host> 'openclaw --version'`
-   - Local repo: read `version` field from `package.json`
-   - User-stated: take their word, but confirm against `INDEX.md`
-2. **Match that version** to a file: `openclaw-docs.<version>.md`. If it's not in `INDEX.md`, the snapshot doesn't exist — note that to the user, fall back to `openclaw-docs.latest.md`, and warn that behavior may differ.
-3. **No specific version known** → use `openclaw-docs.latest.md`.
-4. **Always preface OpenClaw answers** with `According to docs for OpenClaw <version>:` and **cite the section path** (e.g. `…see `gateway/configuration-reference.md`.`) so the user knows which snapshot and which file grounded the answer.
+   - Local repo: read `version` from `package.json`
+   - User-stated: take it but confirm against `versions/INDEX.md` or `versions/releases.json`
+2. **Match** to `openclaw-docs.<version>.md`. If absent, fall back to `latest.md` and **warn** the user that behavior may differ.
+3. **No version known** → use `latest.md`.
+4. The citation header must always show the **concrete** version (`2026.5.6`), not `latest`. `lookup.py` does this automatically.
 
-## How to read the docs efficiently
+## Lookup mechanics
 
-Files are 5+ MB. **Do not full-`Read` them.** Use `Grep` (or the tool equivalent in your platform). Sections are delimited by `# Section: <relative-path>` headers (1:1 with the upstream `docs/**/*.md` tree); within each section, the original H2/H3 headings are preserved.
+Files are 5+ MB. **Never full-`Read` them.** Sections are delimited by `# Section: <relative-path>` headers; within each section, original H2/H3 headings are preserved.
 
-### Lookup priority
+**Specific query** (field name, flag, identifier, error string):
 
-In order of preference:
-
-1. **`scripts/lookup.py`** — deterministic CLI that wraps the indexes. Same retrieval behavior across every host that can run Python 3.
-2. **Native `Grep` + `Read`** on the flattened doc — fall back here when the lookup script isn't available (uploaded-knowledge-file surfaces, no shell access).
-3. **`WebFetch` on the raw / jsDelivr URL** — last resort when there's no local clone.
-
-### Lookup strategy — match the query type
-
-**Specific query** (config key, CLI flag, function name, environment variable, package, file path, error string):
-
-- Use **fixed-string matching** (not regex). OpenClaw identifiers contain regex metacharacters (`.`, `-`, `/`, `@`) that break naïve regex search.
-- With the script: `python3 scripts/lookup.py --query gateway.mode --version latest`
-- With native Grep: pass the fixed-string flag (`grep -F`, `rg -F`, or your tool's equivalent) and grep the keyword directly. Examples: `gateway.mode`, `--bind loopback`, `createPluginEntry`, `OPENCLAW_LIVE_TEST`, `@openclaw/plugin-sdk`.
+- `python3 scripts/lookup.py --query "<exact-term>" --version <ver>`
+- Or: `grep -F "<exact-term>" versions/openclaw-docs.<ver>.md` (fixed-string mode is mandatory; OpenClaw identifiers contain regex metacharacters)
 - Read a small offset around the top hit.
 
-**Broad / ambiguous query** ("how do plugins work?", "Telegram setup", "gateway configuration"):
+**Broad query** ("how does X work?", "Telegram setup"):
 
-1. **Route via the TOC.** With the script: `python3 scripts/lookup.py --toc "telegram setup" --version latest` returns ranked candidate sections with their H2/H3 outline. Without the script, grep the heading skeleton: `grep -E "^(# Section:|#{2,3} )" openclaw-docs.latest.md` (returns ~6K lines: sections + H2 + H3 — the doc's effective table of contents). For very broad queries, pre-filter the skeleton to keep context small: `grep -E "^(# Section:|#{2,3} )" openclaw-docs.latest.md | grep -Ei "plugin|sdk|entry" -C 4`.
-2. Pick the 1–3 most relevant section paths.
-3. **Extract.** With the script: `python3 scripts/lookup.py --section plugins/manifest.md` (optionally `--heading "Lifecycle"` to narrow to one H2/H3 block). Without the script: `Read` a targeted offset around the matching `# Section:` line, or grep narrower keywords within that section's line range.
-4. Don't dump the whole skeleton into the response — it's a routing aid, not content.
+1. Route via the TOC: `python3 scripts/lookup.py --toc "<query>" --version <ver>` returns ranked candidate sections with H2/H3 outline.
+2. Or grep the heading skeleton: `grep -E "^(# Section:|#{2,3} )" versions/openclaw-docs.<ver>.md` and pre-filter with another grep for query keywords.
+3. Pick 1–3 most relevant sections, then extract: `python3 scripts/lookup.py --section <path> [--heading "<sub>"]`.
 
-**Fallback** when no local clone is available and the full file is too large to fetch over `WebFetch`: fetch `INDEX.md` first to confirm the version, then either fetch the small `.toc.jsonl` index for that version, or use a `Range:` header on the raw URL with byte offsets from `.sections.jsonl` for a precise byte slice.
+**No local copy** → `WebFetch` raw URL, or `Range:`-fetch byte slices from `.sections.jsonl` offsets.
 
-## Refresh & freshness
+## Refresh
 
-- CI re-flattens daily at 06:00 UTC against `openclaw/openclaw` `main`.
-- Local installs go stale between runs of `scripts/update.py` (or `git pull`). If `openclaw-docs.latest.md`'s version (check `INDEX.md` or row 0 of `latest.toc.jsonl`) is clearly older than what the user is running, refresh by running:
-
-  ```bash
-  python3 scripts/update.py
-  ```
-
-  Auto-detects git-clone vs ZIP install and uses the right refresh path (`git pull` or raw-GitHub fetch).
-- If even the public `latest.md` is older than the running instance, that means CI hasn't run since the upstream release — recommend running the workflow manually or wait for the next daily tick.
+- CI re-flattens daily at 06:00 UTC.
+- To refresh an installed skill: `python3 scripts/update.py` (auto-detects git vs ZIP install).
+- Or re-download the ZIP from `https://github.com/pixelitemedia/openclaw-docs-skill/releases/latest/download/openclaw-docs-skill.zip`.
 
 ## Interaction with other skills
 
-- **SSH / remote management** (`openclaw-remote`, `remote-relay`): when SSH'd into a box running OpenClaw, capture `openclaw --version` first, then load the matching docs file before answering questions about that host's behavior.
-- **Scheduled tasks**: this skill replaces the older `openclaw-project-docs` scheduled task. The CI workflow at `.github/workflows/refresh.yml` is the canonical refresh path.
+- **SSH skills** (`openclaw-remote`, `remote-relay`): capture `openclaw --version` from the SSH'd host first, then load the matching docs file before answering host-specific questions.
 
-## Prohibitions
+## Prohibitions (hard rules)
 
-- Do not answer OpenClaw factual questions from model memory when a docs file is available — grep the file.
-- Do not fabricate a version number. If you don't know the running version, say so and use `openclaw-docs.latest.md` with the preface rule.
-- Do not hand-edit files in `versions/` — they're produced by CI. Edits will be overwritten on the next refresh.
+1. **Never** state a config field, flag, or API name without verifying it appears in the docs via `lookup.py --query` or `grep -F`.
+2. **Never** write `According to docs for OpenClaw latest:` — always resolve to the concrete version. If your output contains `latest`, you skipped step 4 of the verification protocol.
+3. **Never** invent JSON schema fields or env-var names by analogy to similar systems. OpenClaw's API surface is specific.
+4. **Never** hand-edit files in `versions/` — produced by CI; edits get overwritten.
+5. **Never** answer from training-data memory of OpenClaw when this skill is available. The whole point of the skill is that memory is wrong.
+
+If the harness sandbox can't run `lookup.py` and can't grep the docs file, say so explicitly: "I cannot verify against the docs in this environment. Here is what model memory suggests, but you must confirm against `<doc-url>` before relying on it." That's better than confidently asserting an unverified field name.
