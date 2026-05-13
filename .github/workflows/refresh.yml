@@ -41,6 +41,23 @@ jobs:
         run: |
           bash scripts/smoke_test.sh
 
+      - name: Embed + ingest new docs into Supabase
+        # Idempotent: skips silently if the version is already in docs_chunks.
+        # Skipped entirely (with a notice) if the required secrets aren't
+        # configured — lets the rest of CI run for forks that don't have
+        # Supabase wired.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          SUPABASE_QUERY_KEY: ${{ secrets.SUPABASE_QUERY_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ] || [ -z "$SUPABASE_URL" ] || [ -z "$INGEST_TOKEN" ]; then
+            echo "::notice::Skipping Supabase ingest — OPENROUTER_API_KEY / SUPABASE_URL / INGEST_TOKEN not configured."
+            exit 0
+          fi
+          python3 scripts/ci_ingest.py
+
       - name: Publish per-version files as GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}

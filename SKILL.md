@@ -20,13 +20,47 @@ description: Authoritative reference for OpenClaw — the daily-refreshed flatte
 
 If the term doesn't appear in the docs, **the term does not exist**. Recommend an alternative that does.
 
+## Verification surfaces (pick the highest one your environment supports)
+
+There's a hosted MCP server, a local CLI, and a fallback grep path. They all hit the same source-of-truth flattened docs; pick by capability:
+
+### ★ Highest — MCP server (preferred when MCP tools are available)
+
+```
+https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp
+```
+
+Public, no-auth, JSON-RPC 2.0. Adds four tools to any MCP-capable client:
+
+- **`openclaw_field_check`** — *call before stating any config field name.* Returns `{ exists: bool, matches: [...], real_alternatives: [...] }`. The structural guard against hallucinating fields that aren't in the schema.
+- **`openclaw_search`** — hybrid 3072-dim vector + trigram search. Use for open-ended questions ("how do I set up Telegram?").
+- **`openclaw_section`** — extract a section by path; optionally narrow to one heading.
+- **`openclaw_versions`** — list indexed versions.
+
+Tool definitions include trigger guidance ("call this BEFORE asserting that a field exists in OpenClaw config") so a well-configured client will route appropriately. See README.md for install snippets.
+
+### ★ Local CLI — `scripts/lookup.py` (when the skill is installed locally)
+
+```bash
+python3 scripts/lookup.py --query "passEnv" --version latest
+python3 scripts/lookup.py --toc "telegram setup" --version latest
+python3 scripts/lookup.py --section gateway/secrets.md --heading "Provider config"
+```
+
+Same retrieval logic, runs against the local `versions/` files (auto-fetches from GitHub Release for non-latest).
+
+### Fallback — `Grep` over the flattened doc
+
+For environments without shell/MCP: `Grep` for the term in `<skill-root>/versions/openclaw-docs.<ver>.md`. Use fixed-string mode for identifiers.
+
 ## Mandatory verification protocol
 
 For every OpenClaw question, follow this protocol — **do not skip steps just because you think you know the answer**:
 
 1. **Identify the version** in scope (see "Version selection" below).
 2. **Run a verification query** for each technical term you're about to use:
-   - Preferred: `python3 <skill-root>/scripts/lookup.py --query "<term>" --version <ver>`
+   - **★ Preferred**: call the MCP tool `openclaw_field_check` (for fields) or `openclaw_search` (for open-ended). If the MCP server isn't connected, use one of the next two:
+   - `python3 <skill-root>/scripts/lookup.py --query "<term>" --version <ver>`
    - Fallback (no shell): `Grep` for the term in `<skill-root>/versions/openclaw-docs.<ver>.md`
    - Last resort (no local copy): `WebFetch` the raw doc URL or call the `--toc` index via the lookup script
 3. **If the term has zero matches**, do not use it in your answer. Either:

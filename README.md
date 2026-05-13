@@ -1,10 +1,63 @@
 # OpenClaw Docs Skill
 
-A platform-agnostic, versioned snapshot of the official [OpenClaw](https://github.com/openclaw/openclaw) documentation, designed to be loaded into any AI coding assistant or LLM context.
+A platform-agnostic, versioned, semantically-indexed mirror of the official [OpenClaw](https://github.com/openclaw/openclaw) docs, designed to be loaded into any AI coding assistant or LLM context.
 
-A GitHub Actions workflow runs daily — it clones upstream, flattens `docs/**/*.md` into a single file, version-prefixes it (`openclaw-docs.<version>.md`), and refreshes `openclaw-docs.latest.md`. Consumers don't need to run anything; they just point at the raw URLs or `git pull` this repo.
+Two consumption surfaces:
 
-OpenClaw uses CalVer (`YYYY.M.D`) and ships frequently, so pinning to the exact running version avoids stale answers.
+1. **★ Hosted MCP server** (best path for AI tools that support MCP — Claude, Cursor, Cline, Continue, ChatGPT Apps): vector + trigram search, structural field-check, section extraction, version listing. No install — paste one URL.
+2. **Local skill ZIP / git clone**: flattened markdown + JSONL indexes + `scripts/lookup.py` CLI. For Claude Code, Codex CLI, and any LLM context that loads markdown files.
+
+OpenClaw uses CalVer (`YYYY.M.D`) and ships frequently. A GitHub Actions workflow runs daily, re-flattens the docs, publishes a versioned GitHub Release, embeds 6,500+ chunks into Supabase (pgvector + pg_trgm), and refreshes `openclaw-docs.latest.*` in `main`. Pin to a specific version for reproducibility, or use `latest` for the moving alias.
+
+## ★ MCP server — one URL, four tools
+
+```
+https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp
+```
+
+Public, no-auth, JSON-RPC 2.0. Drop it into your AI tool's MCP config:
+
+**Claude Code / Claude Desktop** (`~/.claude.json` or via the Customize → MCP panel):
+
+```json
+{
+  "mcpServers": {
+    "openclaw-docs": {
+      "url": "https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp",
+      "type": "http"
+    }
+  }
+}
+```
+
+**Cursor** (`~/.cursor/mcp.json` or per-project `.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "openclaw-docs": {
+      "url": "https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp"
+    }
+  }
+}
+```
+
+**Cline / Continue / Windsurf**: same URL, same JSON pattern in their MCP config.
+
+The server exposes:
+
+| Tool | Use for |
+|---|---|
+| `openclaw_field_check` | Verifying a config field, CLI flag, or identifier exists in the schema. **Call before writing OpenClaw config.** Returns `{ exists, matches, real_alternatives }`. |
+| `openclaw_search` | Open-ended questions ("how do I set up Telegram?"). Hybrid 3072-dim vector + trigram, returns ranked snippets. |
+| `openclaw_section` | Extracting a known section by path, optionally narrowed to one heading. |
+| `openclaw_versions` | Listing indexed versions + resolving `latest`. |
+
+All tools cite their docs version + section path in the response. The `openclaw_field_check` tool is the structural guard that prevents the most common failure mode: hallucinated field names (e.g. `env` on exec providers — the real field is `passEnv`).
+
+## Local install (alternative — no MCP support, or offline)
+
+For environments where MCP isn't available (Claude Code with older CLI, custom agents, regulated environments): clone the skill ZIP and point your AI tool at the local markdown.
 
 ## Files in this repo
 
