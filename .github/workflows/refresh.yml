@@ -112,23 +112,31 @@ jobs:
         run: |
           python3 ci/_render_index.py --skill-dir "$SKILL_DIR"
 
-      - name: Build + upload skill ZIP to the current release
+      - name: Build + upload distribution ZIPs to the current release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Packages a self-contained skill ZIP (no plugin chrome) for harnesses
-          # that consume Anthropic Skill / Codex Skill / Manus uploads but don't
-          # speak the plugin manifest format.
+          # Two ZIPs attached to each version's GitHub Release:
+          #
+          # 1. openclaw-docs-skill.zip — slim skill, SKILL.md at root.
+          #    For Codex (~/.codex/skills/openclaw-docs/), Anthropic Skills
+          #    (claude.ai upload), Manus, ChatGPT Custom GPT (knowledge file).
+          #
+          # 2. openclaw-docs-plugin.zip — full Claude Code plugin layout.
+          #    For users who want a drag-and-drop install instead of git clone;
+          #    extract into ~/.claude/plugins/openclaw-docs/.
           VERSION=$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('upstream/package.json').read_text())['version'])")
           TAG="v${VERSION}"
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "No release $TAG yet; skipping ZIP attach."
             exit 0
           fi
-          ZIP=/tmp/openclaw-docs-skill.zip
-          rm -f "$ZIP"
-          cd "$SKILL_DIR" && zip -r "$ZIP" \
+
+          # Skill ZIP (SKILL.md at root)
+          SKILL_ZIP=/tmp/openclaw-docs-skill.zip
+          rm -f "$SKILL_ZIP"
+          (cd "$SKILL_DIR" && zip -r "$SKILL_ZIP" \
             SKILL.md \
             agents \
             scripts/lookup.py \
@@ -138,10 +146,31 @@ jobs:
             versions/openclaw-docs.latest.toc.jsonl \
             versions/openclaw-docs.latest.sections.jsonl \
             versions/INDEX.md \
-            versions/releases.json
-          echo "ZIP size: $(du -h "$ZIP" | cut -f1)"
-          gh release upload "$TAG" "$ZIP" --repo "$GITHUB_REPOSITORY" --clobber
-          echo "Attached openclaw-docs-skill.zip to release $TAG."
+            versions/releases.json)
+          echo "Skill ZIP size: $(du -h "$SKILL_ZIP" | cut -f1)"
+
+          # Plugin ZIP (Claude Code layout: .claude-plugin/ + .mcp.json at root)
+          PLUGIN_ZIP=/tmp/openclaw-docs-plugin.zip
+          rm -f "$PLUGIN_ZIP"
+          zip -r "$PLUGIN_ZIP" \
+            .claude-plugin \
+            .mcp.json \
+            README.md \
+            "$SKILL_DIR/SKILL.md" \
+            "$SKILL_DIR/agents" \
+            "$SKILL_DIR/scripts/lookup.py" \
+            "$SKILL_DIR/scripts/update.py" \
+            "$SKILL_DIR/scripts/smoke_test.sh" \
+            "$SKILL_DIR/versions/openclaw-docs.latest.md" \
+            "$SKILL_DIR/versions/openclaw-docs.latest.toc.jsonl" \
+            "$SKILL_DIR/versions/openclaw-docs.latest.sections.jsonl" \
+            "$SKILL_DIR/versions/INDEX.md" \
+            "$SKILL_DIR/versions/releases.json"
+          echo "Plugin ZIP size: $(du -h "$PLUGIN_ZIP" | cut -f1)"
+
+          gh release upload "$TAG" "$SKILL_ZIP" "$PLUGIN_ZIP" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Attached openclaw-docs-skill.zip + openclaw-docs-plugin.zip to release $TAG."
 
       - name: Commit refreshed latest.* + INDEX.md
         run: |

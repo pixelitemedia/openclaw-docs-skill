@@ -8,34 +8,96 @@ One plugin install gives Claude Code (or any MCP-capable AI) **everything**:
 - a local **Claude skill** with the flattened docs + retrieval CLI, for offline / no-MCP use
 - a stable **citation contract** — every tool response embeds the concrete OpenClaw version + section path
 
-## Install (Claude Code)
+## Install — pick your harness
+
+Different AI tools have different plugin/skill conventions; one artifact can't natively cover them all. The matrix below tells you which file + which path per harness. **All paths converge on the same docs** — the differences are surface-level.
+
+### Anthropic Claude Code
+
+The full plugin: skill + auto-registered MCP server in one install.
 
 ```bash
-# Add this repo as a plugin marketplace, then install:
+# Recommended — plugin install (sets up MCP server automatically):
 claude /plugin marketplace add pixelitemedia/openclaw-docs-skill
 claude /plugin install openclaw-docs
 
-# — or, manual git clone if your Claude Code build doesn't have plugin commands yet:
+# — or, git clone if your Claude Code build doesn't have plugin commands:
 git clone https://github.com/pixelitemedia/openclaw-docs-skill ~/.claude/plugins/openclaw-docs
+
+# — or, downloadable plugin ZIP (no git required):
+curl -sL https://github.com/pixelitemedia/openclaw-docs-skill/releases/latest/download/openclaw-docs-plugin.zip -o /tmp/p.zip
+unzip /tmp/p.zip -d ~/.claude/plugins/openclaw-docs
 ```
 
-That's it. Claude Code reads `.claude-plugin/plugin.json` (plugin metadata), `.mcp.json` (registers the hosted MCP server automatically), and `skills/openclaw-docs/SKILL.md` (registers the skill). Next time you ask about OpenClaw, the model has all four MCP tools plus the local skill on hand.
-
-To check it landed:
+Verify:
 
 ```bash
-# These commands let you confirm the plugin is registered
-claude /plugin list
-claude /mcp list   # should include openclaw-docs
+claude /plugin list    # should show openclaw-docs
+claude /mcp list       # should include openclaw-docs HTTP server
 ```
 
-## Install (other AI harnesses)
+### OpenAI Codex CLI
 
-| Harness | Path |
-|---|---|
-| **OpenAI Codex** | `git clone … ~/.codex/skills/openclaw-docs` — Codex reads SKILL.md from `skills/openclaw-docs/` directly. Plugin manifest is ignored, but the skill works. |
-| **Anthropic Skills (claude.ai)**, **Manus**, **ChatGPT Custom GPT** | Download the slim skill ZIP from the latest GitHub Release (`openclaw-docs-skill.zip`) — it contains only `SKILL.md`, `agents/`, `scripts/`, `versions/`. Upload via the harness's skill-upload UI. |
-| **Cursor / Cline / Continue / Windsurf** | Drop the MCP URL into your tool's `mcp.json`: `{ "openclaw-docs": { "type": "http", "url": "https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp" } }` |
+Codex reads `~/.codex/skills/<name>/SKILL.md` directly — no plugin manifest. Download the slim skill ZIP and extract:
+
+```bash
+mkdir -p ~/.codex/skills/openclaw-docs
+curl -sL https://github.com/pixelitemedia/openclaw-docs-skill/releases/latest/download/openclaw-docs-skill.zip \
+  | bsdtar -xf- -C ~/.codex/skills/openclaw-docs
+```
+
+The skill ZIP also includes `agents/openai.yaml` for Codex's UI metadata.
+
+### Anthropic Skills (claude.ai web) / Manus
+
+Both accept Skill ZIP uploads via their UI. Download:
+
+```
+https://github.com/pixelitemedia/openclaw-docs-skill/releases/latest/download/openclaw-docs-skill.zip
+```
+
+Then upload via the harness's "Add skill" / "Upload skill" button.
+
+### ChatGPT Custom GPT
+
+ChatGPT doesn't have a skill concept — it uses knowledge files. Two options:
+
+- **Easy:** Upload `openclaw-docs.latest.md` as a knowledge file. Get it from <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/skills/openclaw-docs/versions/openclaw-docs.latest.md>.
+- **Better:** Build a Custom GPT with an Action calling the MCP endpoint at `https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp` (the four tools are exposed via JSON-RPC; map them as Action operations).
+
+### Cursor / Cline / Continue / Windsurf (any MCP-capable tool)
+
+Add to your tool's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "openclaw-docs": {
+      "type": "http",
+      "url": "https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp"
+    }
+  }
+}
+```
+
+No local install needed. The four tools (`openclaw_field_check`, `openclaw_search`, `openclaw_section`, `openclaw_versions`) appear in your tool's MCP tool list.
+
+### Direct API consumers (Claude API, OpenAI API, raw SDKs)
+
+Two options:
+
+- Fetch the latest markdown as a string and inject as context:
+  ```python
+  import httpx
+  docs = httpx.get("https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/skills/openclaw-docs/versions/openclaw-docs.latest.md").text
+  # use in system prompt or RAG
+  ```
+- Call the MCP endpoint's tools directly (JSON-RPC 2.0 over HTTPS):
+  ```bash
+  curl -X POST https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"openclaw_field_check","arguments":{"field_name":"env","context_path":"secrets.providers"}}}'
+  ```
 
 ## The MCP server
 
