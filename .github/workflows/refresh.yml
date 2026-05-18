@@ -7,18 +7,21 @@ on:
   push:
     branches: [main]
     paths:
-      - flatten_docs.py
+      - ci/**
+      - skills/openclaw-docs/scripts/**
       - .github/workflows/refresh.yml
-      - scripts/lookup.py
 
 permissions:
   contents: write                  # needed to commit refreshed docs and create releases
+
+env:
+  SKILL_DIR: skills/openclaw-docs   # where the installed skill lives in this repo
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this skill repo
+      - name: Checkout this repo
         uses: actions/checkout@v4
 
       - name: Checkout upstream openclaw/openclaw
@@ -35,11 +38,11 @@ jobs:
 
       - name: Flatten docs + generate indexes
         run: |
-          python3 flatten_docs.py --repo upstream --skill-dir . --no-pull
+          python3 ci/flatten_docs.py --repo upstream --skill-dir "$SKILL_DIR" --no-pull
 
       - name: Smoke-test lookup CLI + index integrity
         run: |
-          bash scripts/smoke_test.sh
+          cd "$SKILL_DIR" && bash scripts/smoke_test.sh
 
       - name: Embed + ingest new docs into Supabase
         # Idempotent: skips silently if the version is already in docs_chunks.
@@ -56,7 +59,7 @@ jobs:
             echo "::notice::Skipping Supabase ingest — OPENROUTER_API_KEY / SUPABASE_URL / INGEST_TOKEN not configured."
             exit 0
           fi
-          python3 scripts/ci_ingest.py
+          python3 ci/ci_ingest.py --skill-dir "$SKILL_DIR"
 
       - name: Publish per-version files as GitHub Releases
         env:
@@ -66,21 +69,15 @@ jobs:
           # For each version triplet on disk (excluding latest.*), publish to a
           # release tagged v<version> and remove the per-version files from the
           # working tree. Only the latest.* triplet remains committed.
-          #
-          # Asset upload policy: --clobber to allow re-publishing after a flatten
-          # script improvement. Cache invalidation is the consumer's responsibility
-          # (lookup.py supports --refresh; raw release-asset URLs are stable but
-          # not guaranteed byte-identical for an existing tag).
           shopt -s nullglob
-          for md in versions/openclaw-docs.*.md; do
+          for md in "$SKILL_DIR"/versions/openclaw-docs.*.md; do
             base=$(basename "$md" .md)            # openclaw-docs.<version>
             [ "$base" = "openclaw-docs.latest" ] && continue
-            ver="${base#openclaw-docs.}"          # <version>
+            ver="${base#openclaw-docs.}"
             tag="v${ver}"
-            toc="versions/${base}.toc.jsonl"
-            sec="versions/${base}.sections.jsonl"
+            toc="$SKILL_DIR/versions/${base}.toc.jsonl"
+            sec="$SKILL_DIR/versions/${base}.sections.jsonl"
 
-            # Create release if it doesn't exist yet (idempotent).
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "Creating release $tag..."
               gh release create "$tag" \
@@ -97,49 +94,42 @@ jobs:
             rm -f "$md" "$toc" "$sec"
           done
 
-      - name: Sync versions/releases.json from GitHub Releases
+      - name: Sync releases.json from GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Source-of-truth for the version archive is the actual list of
-          # GitHub Releases. Mirror it into versions/releases.json so consumers
-          # (and INDEX.md) have a deterministic local listing without API calls.
           gh release list \
             --repo "$GITHUB_REPOSITORY" \
             --limit 1000 \
             --json tagName,publishedAt \
             > /tmp/releases-raw.json
-          python3 scripts/_sync_releases_manifest.py \
+          python3 ci/_sync_releases_manifest.py \
             < /tmp/releases-raw.json \
-            > versions/releases.json
+            > "$SKILL_DIR/versions/releases.json"
 
       - name: Re-render INDEX.md against the fresh manifest
         run: |
-          # flatten_docs.py reads versions/releases.json to produce INDEX.md.
-          # Re-run the index/latest-update path without re-flattening.
-          python3 scripts/_render_index.py
+          python3 ci/_render_index.py --skill-dir "$SKILL_DIR"
 
       - name: Build + upload skill ZIP to the current release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Package a self-contained ZIP that's installable in any harness
-          # accepting Skill ZIP uploads (Claude Skills, Manus, Codex, etc.).
-          # Excludes CI-only files (flatten_docs.py, _sync_releases_manifest.py,
-          # _render_index.py) since consumers don't run them.
+          # Packages a self-contained skill ZIP (no plugin chrome) for harnesses
+          # that consume Anthropic Skill / Codex Skill / Manus uploads but don't
+          # speak the plugin manifest format.
           VERSION=$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('upstream/package.json').read_text())['version'])")
           TAG="v${VERSION}"
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "No release $TAG yet; skipping ZIP attach (it'll be re-built next run)."
+            echo "No release $TAG yet; skipping ZIP attach."
             exit 0
           fi
           ZIP=/tmp/openclaw-docs-skill.zip
           rm -f "$ZIP"
-          zip -r "$ZIP" \
+          cd "$SKILL_DIR" && zip -r "$ZIP" \
             SKILL.md \
-            README.md \
             agents \
             scripts/lookup.py \
             scripts/update.py \
@@ -157,13 +147,12 @@ jobs:
         run: |
           git config user.name  "openclaw-docs-bot"
           git config user.email "openclaw-docs-bot@users.noreply.github.com"
-          git add versions/INDEX.md \
-                  versions/openclaw-docs.latest.md \
-                  versions/openclaw-docs.latest.toc.jsonl \
-                  versions/openclaw-docs.latest.sections.jsonl
-          # Also stage any deletions of files that were committed before .gitignore
-          # was introduced (one-time migration of pre-existing version triplets).
-          git add -A versions/
+          git add "$SKILL_DIR/versions/INDEX.md" \
+                  "$SKILL_DIR/versions/openclaw-docs.latest.md" \
+                  "$SKILL_DIR/versions/openclaw-docs.latest.toc.jsonl" \
+                  "$SKILL_DIR/versions/openclaw-docs.latest.sections.jsonl" \
+                  "$SKILL_DIR/versions/releases.json"
+          git add -A "$SKILL_DIR/versions/"
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else

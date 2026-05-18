@@ -4,11 +4,13 @@ Flatten OpenClaw docs into a single markdown file, plus generate retrieval
 indexes (TOC + section offsets), stored by version.
 
 Usage:
-    python3 flatten_docs.py [--repo PATH] [--skill-dir PATH]
+    python3 ci/flatten_docs.py [--repo PATH] [--skill-dir PATH]
 
 Defaults:
     --repo       ~/OpenClaw/docs/openclaw
-    --skill-dir  ~/.claude/skills/openclaw-docs
+    --skill-dir  skills/openclaw-docs   (relative to repo root when run from CI;
+                                          override to ~/.claude/plugins/openclaw-docs/skills/openclaw-docs
+                                          when running locally against an installed plugin)
 
 Behavior:
     1. git fetch + pull the repo
@@ -334,7 +336,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=os.path.expanduser("~/OpenClaw/docs/openclaw"))
     ap.add_argument(
-        "--skill-dir", default=os.path.expanduser("~/.claude/skills/openclaw-docs")
+        "--skill-dir",
+        default=os.path.expanduser("~/.claude/plugins/openclaw-docs/skills/openclaw-docs"),
     )
     ap.add_argument(
         "--no-pull", action="store_true", help="Skip git fetch/pull (useful offline)"

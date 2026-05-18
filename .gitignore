@@ -1,13 +1,13 @@
 # Per-version doc + indexes are published as GitHub Release assets, not committed.
 # Only the latest.* triplet stays in main.
-versions/openclaw-docs.*.md
-!versions/openclaw-docs.latest.md
+skills/openclaw-docs/versions/openclaw-docs.*.md
+!skills/openclaw-docs/versions/openclaw-docs.latest.md
 
-versions/openclaw-docs.*.toc.jsonl
-!versions/openclaw-docs.latest.toc.jsonl
+skills/openclaw-docs/versions/openclaw-docs.*.toc.jsonl
+!skills/openclaw-docs/versions/openclaw-docs.latest.toc.jsonl
 
-versions/openclaw-docs.*.sections.jsonl
-!versions/openclaw-docs.latest.sections.jsonl
+skills/openclaw-docs/versions/openclaw-docs.*.sections.jsonl
+!skills/openclaw-docs/versions/openclaw-docs.latest.sections.jsonl
 
 # Local lookup.py cache for fetched non-latest releases
 .cache/
@@ -18,3 +18,6 @@ versions/openclaw-docs.*.sections.jsonl
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Local dev artifacts
+/tmp/

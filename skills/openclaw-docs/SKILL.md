@@ -92,15 +92,21 @@ When in doubt, grep first. **A wrong config is worse than "I don't know" — wro
 
 ## Where the docs live
 
-**Public URLs** (no auth needed):
+**Hosted MCP server** (preferred — registered automatically when this plugin is installed in Claude Code):
+
+```
+https://gzfdvhuglftjnlhlcgjj.supabase.co/functions/v1/mcp
+```
+
+**Public URLs** (no auth needed) — for fallback / non-MCP harnesses:
 
 | File | URL |
 |---|---|
-| Latest | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/openclaw-docs.latest.md> |
+| Latest | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/skills/openclaw-docs/versions/openclaw-docs.latest.md> |
 | Pinned (release asset) | `https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v<version>/openclaw-docs.<version>.md` |
-| Index | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/versions/INDEX.md> |
+| Index | <https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/skills/openclaw-docs/versions/INDEX.md> |
 
-Only `latest.*` lives in `main`. Pinned versions are **GitHub Release assets** — `https://.../main/versions/openclaw-docs.<version>.md` returns 404. `scripts/lookup.py` resolves both surfaces transparently.
+Only `latest.*` lives in `main`. Pinned versions are **GitHub Release assets** — `https://.../main/skills/openclaw-docs/versions/openclaw-docs.<version>.md` returns 404. `scripts/lookup.py` resolves both surfaces transparently.
 
 **Local install layout** (after `git clone` or ZIP extraction):
 
@@ -121,7 +127,7 @@ Conventional skill roots:
 
 | Host | Path |
 |---|---|
-| Anthropic Claude Code | `~/.claude/skills/openclaw-docs/` |
+| Anthropic Claude Code (plugin install) | `~/.claude/plugins/openclaw-docs/skills/openclaw-docs/` |
 | OpenAI Codex | `~/.codex/skills/openclaw-docs/` (or `~/.agents/skills/openclaw-docs/`) |
 | Claude.ai / Manus / ChatGPT (uploaded) | The harness's managed skills directory |
 

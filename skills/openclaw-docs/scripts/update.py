@@ -25,9 +25,10 @@ import urllib.request
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
+# Files live under skills/openclaw-docs/ in the repo since the plugin restructure.
 RAW_BASE = os.environ.get(
     "OPENCLAW_DOCS_RAW_BASE",
-    "https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main",
+    "https://raw.githubusercontent.com/pixelitemedia/openclaw-docs-skill/main/skills/openclaw-docs",
 )
 
 # Runtime files an installed skill needs. CI-only helpers

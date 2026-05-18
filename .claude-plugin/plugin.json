@@ -1,0 +1,16 @@
+{
+  "name": "openclaw-docs",
+  "version": "1.0.0",
+  "description": "Authoritative, daily-refreshed OpenClaw documentation lookup. Bundles a Claude skill (with local lookup CLI + flattened markdown indexes) and a hosted MCP server (vector + trigram search, structural field-check, section extraction, version listing). Use to ground OpenClaw factual claims and prevent hallucinated config fields.",
+  "keywords": ["openclaw", "docs", "mcp", "vector-search", "documentation"],
+  "homepage": "https://github.com/pixelitemedia/openclaw-docs-skill",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pixelitemedia/openclaw-docs-skill"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Pixelite",
+    "url": "https://pixelite.ai"
+  }
+}
