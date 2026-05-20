@@ -2735,7 +2735,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
 - Isolated cron runs that receive the narrow cron self-cleanup grant can still read scheduler status, a self-filtered list of their current job, and that job's run history, so status/heartbeat checks can inspect their own schedule without gaining broader cron mutation access.
 - Isolated cron runs also guard against stale acknowledgement replies. If the first result is just an interim status update (`on it`, `pulling everything together`, and similar hints) and no descendant subagent run is still responsible for the final answer, OpenClaw re-prompts once for the actual result before delivery.
-- Isolated cron runs prefer structured execution-denial metadata from the embedded run, then fall back to known final summary/output markers such as `SYSTEM_RUN_DENIED` and `INVALID_REQUEST`, so a blocked command is not reported as a green run.
+- Isolated cron runs use structured execution-denial metadata from the embedded run, including node-host `UNAVAILABLE` wrappers whose nested error message starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`, so a blocked command is not reported as a green run while ordinary assistant prose is not treated as a denial.
 - Isolated cron runs also treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
 - When an isolated agent-turn job reaches `timeoutSeconds`, cron aborts the underlying agent run and gives it a short cleanup window. If the run does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not left behind a stale processing session.
 - If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget.
@@ -2774,14 +2774,14 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 | Style           | `--session` value   | Runs in                  | Best for                        |
 | --------------- | ------------------- | ------------------------ | ------------------------------- |
-| Main session    | `main`              | Next heartbeat turn      | Reminders, system events        |
+| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events        |
 | Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). Those system events do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
@@ -9445,6 +9445,18 @@ exec ssh -T gateway-host imsg "$@"
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
+<Warning>
+Any `cliPath` wrapper or SSH proxy you put in front of `imsg` MUST behave like a transparent stdio pipe for long-lived JSON-RPC. OpenClaw exchanges small newline-framed JSON-RPC messages over the wrapper's stdin/stdout for the lifetime of the channel:
+
+- Forward each stdin chunk/line **as soon as bytes are available** — don't wait for EOF.
+- Forward each stdout chunk/line promptly in the reverse direction.
+- Preserve newlines.
+- Avoid fixed-size blocking reads (`read(4096)`, `cat | buffer`, default shell `read`) that can starve small frames.
+- Keep stderr separate from the JSON-RPC stdout stream.
+
+A wrapper that buffers stdin until a large block fills will produce symptoms that look like an iMessage outage — `imsg rpc timeout (chats.list)` or repeated channel restarts — even though `imsg rpc` itself is healthy. `ssh -T host imsg "$@"` (above) is safe because it forwards OpenClaw's `cliPath` arguments such as `rpc` and `--db`. Pipelines like `ssh host imsg | grep -v '^DEBUG'` are NOT — line-buffered tools can still hold frames; use `stdbuf -oL -eL` on every stage if you must filter.
+</Warning>
+
   </Tab>
 </Tabs>
 
@@ -14478,10 +14490,13 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- the built-in setup profile allows only the `node` role
-- after approval, the handed-off `node` token stays `scopes: []`
-- the built-in setup-code flow does not hand off an `operator` token
-- operator access requires a separate approved operator pairing or token flow
+- the built-in setup profile allows the fresh QR/setup-code baseline only:
+  `node` plus a bounded `operator` handoff
+- the handed-off `node` token stays `scopes: []`
+- the handed-off `operator` token is limited to `operator.approvals`,
+  `operator.read`, and `operator.write`
+- `operator.admin` and `operator.pairing` are not granted by QR/setup-code
+  bootstrap; they require a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
@@ -23820,7 +23835,9 @@ If an isolated cron run returns only the silent token (`NO_REPLY` or `no_reply`)
 
 ### Structured denials
 
-Isolated cron runs prefer structured execution-denial metadata from the embedded run, then fall back to known denial markers in final output, such as `SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, and approval-binding refusal phrases.
+Isolated cron runs use structured execution-denial metadata from the embedded run as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers when the nested structured error message starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`.
+
+Cron does not classify final-output prose or approval-looking refusal phrases as denials unless the embedded run also provides structured denial metadata, so ordinary assistant text is not treated as a blocked command.
 
 `cron list` and run history surface the denial reason instead of reporting a blocked command as `ok`.
 
@@ -24893,7 +24910,9 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.
 - Set `OPENCLAW_GATEWAY_RESTART_TRACE=1` to log restart-scoped `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
 - Set `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` to write a best-effort JSONL startup diagnostics timeline for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config; the path is still env-provided. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
-- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup against the built CLI entry. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` to benchmark in-process Gateway restart against the built CLI entry on macOS or Linux. The restart benchmark uses SIGUSR1, enables both startup and restart traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Treat `/healthz` as liveness and `/readyz` as usable readiness. Trace lines and benchmark output are for owner attribution; do not treat one trace span or one sample as a complete performance conclusion.
 
 ## Query a running Gateway
 
@@ -25063,6 +25082,7 @@ openclaw gateway status --require-rpc
     - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
     - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
     - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+    - When probing is enabled, JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the follow-up handshake probe cannot provide version metadata.
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
     - `--deep` also reports a recent Gateway supervisor restart handoff when the service process exited cleanly for an external supervisor restart.
@@ -29831,8 +29851,8 @@ openclaw qr --url wss://gateway.example/ws
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code itself now carries an opaque short-lived `bootstrapToken`, not the shared gateway token/password.
-- Built-in setup-code bootstrap is node-only. After approval, the primary node token lands with `scopes: []`.
-- The built-in setup-code flow does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
+- Built-in setup-code bootstrap returns a primary `node` token with `scopes: []` plus a bounded `operator` handoff token for trusted mobile onboarding.
+- The handed-off operator token is limited to `operator.approvals`, `operator.read`, and `operator.write`; `operator.admin`, `operator.pairing`, and `operator.talk.secrets` require a separate approved operator pairing or token flow.
 - Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs. Private LAN addresses and `.local` Bonjour hosts remain supported over `ws://`, but Tailscale/public mobile routes should use Tailscale Serve/Funnel or a `wss://` gateway URL.
 - With `--remote`, OpenClaw requires either `gateway.remote.url` or
   `gateway.tailscale.mode=serve|funnel`.
@@ -35487,15 +35507,15 @@ Treat them differently from normal config:
 
 ## Currently documented flags
 
-| Surface                  | Key                                                       | Use it when                                                                                                    | More                                                                                          |
-| ------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Local model runtime      | `agents.defaults.experimental.localModelLean`             | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                             | [Local Models](/gateway/local-models)                                                         |
-| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory` | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost         | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
-| Structured planning tool | `tools.experimental.planTool`                             | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+| Surface                  | Key                                                                                        | Use it when                                                                                                    | More                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Local model runtime      | `agents.defaults.experimental.localModelLean`, `agents.list[].experimental.localModelLean` | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                             | [Local Models](/gateway/local-models)                                                         |
+| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory`                                  | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost         | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
+| Structured planning tool | `tools.experimental.planTool`                                                              | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -35531,6 +35551,24 @@ Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or 
         localModelLean: true,
       },
     },
+  },
+}
+```
+
+For one agent only:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "local",
+        model: "lmstudio/gemma-4-e4b-it",
+        experimental: {
+          localModelLean: true,
+        },
+      },
+    ],
   },
 }
 ```
@@ -39093,7 +39131,7 @@ OpenClaw resolves that behavior by conversation type:
 OpenClaw also uses silent replies for internal runner failures that happen
 before any assistant reply in non-direct chats, so groups/channels do not see
 gateway error boilerplate. Direct chats show compact failure copy by default;
-raw runner details are shown only when `/verbose` is `on` or `full`.
+raw runner details are shown only when `/verbose full` is enabled.
 
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply`
 can override group/internal policy per surface.
@@ -39819,7 +39857,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Venice                  | `venice`                         | `VENICE_API_KEY`                                             | -                                             |
 | Vercel AI Gateway       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6` |
 | Volcano Engine (Doubao) | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`             |
-| xAI                     | `xai`                            | `XAI_API_KEY`                                                | `xai/grok-4.3`                                |
+| xAI                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                |
 | Xiaomi                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                        |
 
 #### Quirks worth knowing
@@ -39838,7 +39876,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
   <Accordion title="Cerebras">
     Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
@@ -44313,10 +44351,10 @@ Sharp is good. Annoying is not.
 
 <CardGroup cols={2}>
   <Card title="Agent workspace" href="/concepts/agent-workspace" icon="folder-open">
-    Workspace files OpenClaw injects into the system prompt.
+    Workspace files OpenClaw injects into model context.
   </Card>
   <Card title="System prompt" href="/concepts/system-prompt" icon="message-lines">
-    How `SOUL.md` is composed into the per-turn system prompt.
+    How `SOUL.md` is composed into OpenClaw and Codex runtime context.
   </Card>
   <Card title="SOUL.md template" href="/reference/templates/SOUL" icon="file-lines">
     Starter template for a personality file.
@@ -44751,7 +44789,8 @@ PR.
 
 ## Workspace bootstrap injection
 
-Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
+Bootstrap files are resolved from the active workspace, then routed to the
+prompt surface that matches their lifetime:
 
 - `AGENTS.md`
 - `SOUL.md`
@@ -44762,22 +44801,23 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn unless
-a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
-heartbeats are disabled for the default agent or
+On the native Codex harness, OpenClaw avoids repeating stable workspace files
+in every user turn. Codex loads `AGENTS.md` through its own project-doc
+discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
+turns get a collaboration-mode note pointing to the file when it exists and is
+non-empty. `MEMORY.md` and active `BOOTSTRAP.md` content keep the normal
+turn-context role for now.
+
+On non-Codex harnesses, bootstrap files continue to be composed into the
+OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
+normal runs when heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a
-curated long-term summary; detailed daily notes belong in `memory/*.md` where
+files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a curated
+long-term summary; detailed daily notes belong in `memory/*.md` where
 `memory_search` and `memory_get` can retrieve them on demand. Oversized
 `MEMORY.md` files increase prompt usage and can be partially injected because of
 the bootstrap file limits below.
-
-When a session runs on the native Codex harness, Codex loads `AGENTS.md`
-through its own project-doc discovery. OpenClaw still resolves the remaining
-bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
-`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
-`MEMORY.md` keep the same workspace-context role without duplicating
-`AGENTS.md`.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
@@ -47986,7 +48026,7 @@ for provider examples and precedence.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
-- `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
+- `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 
@@ -49762,7 +49802,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
-- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
+- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
@@ -54403,9 +54443,11 @@ channels:
 
 ## HEARTBEAT.md (optional)
 
-If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the agent to read it. Think of it as your "heartbeat checklist": small, stable, and safe to include every 30 minutes.
+If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the agent to read it. Think of it as your "heartbeat checklist": small, stable, and safe to consider every 30 minutes.
 
 On normal runs, `HEARTBEAT.md` is only injected when heartbeat guidance is enabled for the default agent. Disabling the heartbeat cadence with `0m` or setting `includeSystemPromptSection: false` omits it from normal bootstrap context.
+
+On the native Codex harness, `HEARTBEAT.md` content is not injected into the turn. If the file exists and has non-whitespace content, the heartbeat collaboration-mode instructions point Codex at the file and tell it to read before proceeding.
 
 If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
 
@@ -57975,24 +58017,33 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-Built-in QR/setup-code bootstrap is node-only. After the owner approves the
-pending node request, `hello-ok.auth` includes the primary node token:
+Built-in QR/setup-code bootstrap is a fresh mobile handoff path. A successful
+baseline setup-code connect returns a primary node token plus one bounded
+operator token:
 
 ```json
 {
   "auth": {
     "deviceToken": "…",
     "role": "node",
-    "scopes": []
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+      }
+    ]
   }
 }
 ```
 
-The built-in setup-code flow does not include additional `deviceTokens` entries
-or hand off an operator token. Client authors should treat the optional
-`hello-ok.auth.deviceTokens` field as legacy/custom bootstrap extension data:
-persist it only when present on a trusted transport, and do not require it for
-built-in pairing.
+The operator handoff is intentionally bounded so QR onboarding can start the
+mobile operator loop without granting `operator.admin`, `operator.pairing`, or
+`operator.talk.secrets`. Those scopes require a separate approved operator
+pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+when the connect used bootstrap auth on trusted transport such as `wss://` or
+loopback/local pairing.
 
 ### Node example
 
@@ -58519,17 +58570,16 @@ rather than the pre-handshake defaults.
     `AUTH_TOKEN_MISMATCH` retry is gated to **trusted endpoints only** —
     loopback, or `wss://` with a pinned `tlsFingerprint`. Public `wss://`
     without pinning does not qualify.
-- Built-in setup-code bootstrap returns only the primary node
-  `hello-ok.auth.deviceToken`; clients must not expect an additional operator
-  token in `hello-ok.auth.deviceTokens`.
-- While built-in setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+- Built-in setup-code bootstrap returns the primary node
+  `hello-ok.auth.deviceToken` plus a bounded operator token in
+  `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
+  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+- While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
   bootstrap token until the request is approved or the token becomes invalid.
-- If an older or custom trusted bootstrap flow includes optional
-  `hello-ok.auth.deviceTokens` entries, persist them only when the connect used
-  bootstrap auth on a trusted transport such as `wss://` or loopback/local
-  pairing.
+- Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap auth
+  on a trusted transport such as `wss://` or loopback/local pairing.
 - If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.
@@ -76524,6 +76574,13 @@ from that checkout. The `stable` and `beta` channels use package installs. If th
 gateway is already installed, `openclaw update` refreshes the service metadata
 and restarts it unless you pass `--no-restart`.
 
+For package installs with a managed Gateway service, `openclaw update` targets
+the package root used by that service. If the shell `openclaw` command comes
+from a different install, the updater prints both roots and the managed service
+Node path. The package update uses the package manager that owns the service
+root and checks the managed service Node against the target release engine
+before replacing the package.
+
 ## Alternative: re-run the installer
 
 ```bash
@@ -85827,6 +85884,8 @@ available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
 - For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For `image_generate` without a configured timeout, the 120 second
+  image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
 - The 30 second dynamic-tool default.
@@ -85869,17 +85928,17 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.130.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.132.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
-| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id            | Default | Hidden | Input modalities | Reasoning efforts        |
+| ------------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`           | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`      | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex`     | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `codex-auto-review` | No      | Yes    | text, image      | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.
@@ -85932,11 +85991,12 @@ filenames for persona files, because Codex fallbacks only apply when
 `AGENTS.md` is missing.
 
 For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
-files, including `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
-`HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when present, and forwards them
-as OpenClaw turn input reference context. This keeps workspace persona and
-profile context visible to the native Codex turn without promoting it above
-Codex-owned system/developer instructions or duplicating `AGENTS.md`.
+files. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+OpenClaw Codex developer instructions because they define the active agent,
+available workspace guidance, and user profile. `HEARTBEAT.md` content is not
+injected; heartbeat turns get a collaboration-mode pointer to read the file when
+it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
+forwarded as OpenClaw turn input reference context.
 
 ## Environment overrides
 
@@ -86003,11 +86063,11 @@ when it uses Codex-flavored OpenAI auth or transport.
 Native Codex keeps Codex-owned base/model/personality instructions and
 project-doc behavior according to the active Codex thread config. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
-developer instructions are limited to OpenClaw runtime concerns such as
-source-channel delivery, OpenClaw dynamic tools, ACP delegation, and adapter
-context. OpenClaw skill catalogs and non-AGENTS
-workspace bootstrap files are projected as turn input reference context for
-native Codex instead of being promoted into Codex developer instructions.
+developer instructions cover OpenClaw runtime concerns such as source-channel
+delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
+active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
+and active `BOOTSTRAP.md` content are projected as turn input reference context
+for native Codex.
 
 ## Thread bindings and model changes
 
@@ -86033,7 +86093,9 @@ quiet or notify without encoding that control flow in final text.
 Heartbeat-specific initiative guidance is sent as a Codex collaboration-mode
 developer instruction on the heartbeat turn itself. Ordinary chat turns restore
 Codex Default mode instead of carrying heartbeat philosophy in their normal
-runtime prompt.
+runtime prompt. When a non-empty `HEARTBEAT.md` exists, the heartbeat
+collaboration-mode instructions point Codex at the file instead of inlining its
+contents.
 
 ## Hook boundaries
 
@@ -86424,6 +86486,8 @@ Common command routing:
 | Attach the current chat                               | `/codex bind [--cwd <path>]`                                                                          |
 | Resume an existing Codex thread                       | `/codex resume <thread-id>`                                                                           |
 | List or filter Codex threads                          | `/codex threads [filter]`                                                                             |
+| List native Codex plugins                             | `/codex plugins list`                                                                                 |
+| Enable or disable a configured native Codex plugin    | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
@@ -86752,9 +86816,10 @@ Supported `appServer` fields:
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
 OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
-or shortens that specific tool budget. The `image_generate` tool also uses
+or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
-provide its own timeout, and the media-understanding `image` tool uses
+provide its own timeout, or a 120 second image-generation default otherwise.
+The media-understanding `image` tool uses
 `tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
 budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
 where supported and returns a failed dynamic-tool response to Codex so the turn
@@ -87051,8 +87116,35 @@ config looks like this:
 }
 ```
 
-After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
-future Codex harness sessions start with the updated app set.
+After changing `codexPlugins`, new Codex conversations pick up the updated app
+set automatically. Use `/new` or `/reset` to refresh the current conversation.
+A gateway restart is not required for plugin enable or disable changes.
+
+## Manage plugins from chat
+
+Use `/codex plugins` when you want to inspect or change configured native Codex
+plugins from the same chat where you operate the Codex harness:
+
+```text
+/codex plugins
+/codex plugins list
+/codex plugins disable google-calendar
+/codex plugins enable google-calendar
+```
+
+`/codex plugins` is an alias for `/codex plugins list`. The list output shows
+the configured plugin keys, on/off state, Codex plugin name, and marketplace
+from `plugins.entries.codex.config.codexPlugins.plugins`.
+
+`enable` and `disable` write only to OpenClaw config at
+`~/.openclaw/openclaw.json`; they do not edit `~/.codex/config.toml` or install
+new Codex plugins. Only the owner or a gateway client with the
+`operator.admin` scope can change plugin state.
+
+Enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch. If the plugin was written disabled because
+migration returned `auth_required`, reauthorize the app in Codex before enabling
+it in OpenClaw.
 
 ## How native plugin setup works
 
@@ -87080,7 +87172,10 @@ check after migration. Codex harness session setup then computes a restrictive
 thread app config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
-or replaces a stale Codex thread binding. It is not recomputed on every turn.
+or replaces a stale Codex thread binding. It is not recomputed on every turn, so
+`/codex plugins enable` and `/codex plugins disable` affect new Codex
+conversations. Use `/new` or `/reset` when the current conversation should pick
+up the updated app set.
 
 ## V1 support boundary
 
@@ -87198,10 +87293,10 @@ apps until ownership and readiness are known.
 **`app_ownership_ambiguous`:** app inventory only matched by display name, so
 the app is not exposed to the Codex thread.
 
-**Config changed but the agent cannot see the plugin:** use `/new`, `/reset`, or
-restart the gateway. Existing Codex thread bindings keep the app config they
-started with until OpenClaw establishes a new harness session or replaces a
-stale binding.
+**Config changed but the agent cannot see the plugin:** use `/codex plugins
+list` to confirm the configured state, then use `/new` or `/reset`. Existing
+Codex thread bindings keep the app config they started with until OpenClaw
+establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
 `allow_destructive_actions` values. Even when policy is true, unsafe elicitation
@@ -114080,12 +114175,15 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```json5
     {
       agents: {
-        defaults: {
-          experimental: {
-            localModelLean: true,
+        list: [
+          {
+            id: "local",
+            experimental: {
+              localModelLean: true,
+            },
+            model: { primary: "ollama/gemma4" },
           },
-          model: { primary: "ollama/gemma4" },
-        },
+        ],
       },
       models: {
         providers: {
@@ -119142,28 +119240,72 @@ read_when:
 title: "xAI"
 ---
 
-OpenClaw ships a bundled `xai` provider plugin for Grok models.
+OpenClaw ships a bundled `xai` provider plugin for Grok models. For most
+users, the recommended path is Grok OAuth with an eligible SuperGrok or X Premium
+subscription. OpenClaw stays local-first: the Gateway, config, routing, and
+tools run on your machine, while Grok model requests authenticate through xAI
+and are sent to xAI's API.
 
-## Getting started
+OAuth does not require an xAI API key, and it does not require the Grok Build
+app. xAI may still show Grok Build on the consent screen because OpenClaw uses
+xAI's shared OAuth client.
+
+## Choose your setup path
+
+Use the path that matches your OpenClaw install state:
 
 <Steps>
-  <Step title="Choose auth">
-    Use either an API key from the [xAI console](https://console.x.ai/),
-    xAI OAuth browser sign-in with an eligible xAI account, or xAI device-code
-    sign-in for remote/VPS hosts where a localhost browser callback is awkward.
-    OAuth does not require an xAI API key, and OpenClaw does not require the
-    Grok Build app. xAI may still label the consent app as Grok Build because
-    OpenClaw uses xAI's shared OAuth client.
-  </Step>
-  <Step title="Sign in">
-    Set `XAI_API_KEY`, run the API-key wizard, or start the OAuth flow:
+  <Step title="New OpenClaw install">
+    Run onboarding with daemon install when you are setting up a new local
+    Gateway, then choose the xAI/Grok OAuth option in the model/auth step:
 
     ```bash
-    openclaw onboard --auth-choice xai-api-key
-    openclaw onboard --auth-choice xai-oauth
-    openclaw onboard --auth-choice xai-device-code
+    openclaw onboard --install-daemon
+    ```
+
+    On a VPS or over SSH, use device-code during onboarding:
+
+    ```bash
+    openclaw onboard --install-daemon --auth-choice xai-device-code
+    ```
+
+    OAuth does not require an xAI API key. OpenClaw does not require the Grok
+    Build app. xAI may still label the consent app as Grok Build because
+    OpenClaw uses xAI's shared OAuth client.
+
+  </Step>
+  <Step title="Existing OpenClaw install">
+    If OpenClaw is already configured, sign in to xAI only. Do not rerun full
+    onboarding or reinstall the daemon just to connect Grok:
+
+    ```bash
     openclaw models auth login --provider xai --method oauth
+    ```
+
+    Use the device-code flow instead when the Gateway runs over SSH, Docker, or
+    a VPS and a localhost browser callback is awkward:
+
+    ```bash
     openclaw models auth login --provider xai --device-code
+    ```
+
+    To make Grok the default model after signing in, apply it separately:
+
+    ```bash
+    openclaw models set xai/grok-4.3
+    ```
+
+    Rerun full onboarding only if you intentionally want to change Gateway,
+    daemon, channel, workspace, or other setup choices.
+
+  </Step>
+  <Step title="API-key path">
+    API-key setup still works for xAI Console keys and for media surfaces that
+    require key-backed provider config:
+
+    ```bash
+    openclaw models auth login --provider xai --method api-key
+    export XAI_API_KEY=xai-...
     ```
 
   </Step>
@@ -119178,9 +119320,9 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-credential from `openclaw onboard --auth-choice xai-api-key` or
-`openclaw onboard --auth-choice xai-oauth` /
-`openclaw onboard --auth-choice xai-device-code` can also power first-class
+credential from `openclaw models auth login --provider xai --method oauth`,
+`openclaw models auth login --provider xai --device-code`, or
+`openclaw models auth login --provider xai --method api-key` can also power first-class
 `x_search`, remote `code_execution`, and xAI image/video generation.
 Speech and transcription currently require `XAI_API_KEY` or provider config.
 `XAI_API_KEY` or plugin web-search config can power Grok-backed `web_search` too.
@@ -119190,6 +119332,22 @@ Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
 and, by default, `x_search` through an operator xAI Responses proxy.
 `code_execution` tuning lives under `plugins.entries.xai.config.codeExecution`.
 </Note>
+
+## OAuth troubleshooting
+
+- If browser OAuth cannot reach `127.0.0.1:56121`, use
+  `openclaw models auth login --provider xai --device-code`.
+- If sign-in succeeds but Grok is not the default model, run
+  `openclaw models set xai/grok-4.3`.
+- To inspect saved xAI auth profiles, run:
+
+  ```bash
+  openclaw models auth list --provider xai
+  openclaw models status
+  ```
+
+- xAI decides which accounts can receive OAuth API tokens. If an account is not
+  eligible, try the API-key path or check the subscription on xAI's side.
 
 <Tip>
 Use `xai-device-code` when signing in from SSH, Docker, or a VPS. OpenClaw
@@ -119563,11 +119721,12 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Known limits">
     - xAI auth can use an API key, environment variable, plugin config fallback,
-      or xAI OAuth browser sign-in with an eligible xAI account. OAuth uses a
-      local callback on `127.0.0.1:56121`; for remote hosts, forward that port
-      before opening the sign-in URL. xAI decides which accounts can receive
-      OAuth API tokens, and the consent page may show Grok Build even though
-      OpenClaw does not require the Grok Build app.
+      browser OAuth, or device-code OAuth with an eligible xAI account. Browser
+      OAuth uses a local callback on `127.0.0.1:56121`; for remote hosts, use
+      `xai-device-code` unless you want to forward that port before opening the
+      sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
+      the consent page may show Grok Build even though OpenClaw does not require
+      the Grok Build app.
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
@@ -125501,6 +125660,94 @@ Checked-in fixture:
 - Refresh with `pnpm test:startup:bench:update`
 - Compare current results against the fixture with `pnpm test:startup:bench:check`
 
+## Gateway startup bench
+
+Script: [`scripts/bench-gateway-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-startup.ts)
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:startup:gateway -- --runs 5 --warmup 1`
+- `pnpm test:startup:gateway -- --case default --runs 10 --warmup 1`
+- `pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 5 --output .artifacts/gateway-startup.json`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 3 --cpu-prof-dir .artifacts/gateway-startup-cpu`
+
+Case ids:
+
+- `default`: normal Gateway startup.
+- `skipChannels`: Gateway startup with channel startup skipped.
+- `oneInternalHook`: one configured internal hook.
+- `allInternalHooks`: all internal hooks.
+- `fiftyPlugins`: 50 manifest plugins.
+- `fiftyStartupLazyPlugins`: 50 startup-lazy manifest plugins.
+
+Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time,
+Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace
+metrics, event-loop delay, and plugin lookup-table detail metrics. The script
+enables `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
+
+Read `/healthz` as liveness: the HTTP server can answer. Read `/readyz` as
+usable readiness: startup plugin sidecars, channels, and ready-critical
+post-attach work have settled. Gateway startup hooks are dispatched
+asynchronously and are not part of the readiness guarantee. Ready log time is the
+Gateway's internal ready log timestamp; it is useful for process-side
+attribution but is not a substitute for the external `/readyz` probe.
+
+Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only
+after the trace output points at import, compile, or CPU-bound work that cannot
+be explained from phase timings alone. Do not compare source-runner results with
+built `dist/entry.js` results as the same baseline.
+
+## Gateway restart bench
+
+Script: [`scripts/bench-gateway-restart.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-restart.ts)
+
+The restart benchmark is supported on macOS and Linux only. It uses SIGUSR1 for
+in-process restarts and fails immediately on Windows.
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5`
+- `pnpm test:restart:gateway -- --case default --runs 3 --restarts 3 --warmup 1`
+- `pnpm test:restart:gateway -- --case skipChannelsAcpxProbe --case skipChannelsNoAcpxProbe --runs 1 --restarts 5`
+- `node --import tsx scripts/bench-gateway-restart.ts --case fiftyPlugins --runs 1 --restarts 5 --output .artifacts/gateway-restart.json`
+- `node --import tsx scripts/bench-gateway-restart.ts --json`
+
+Case ids:
+
+- `skipChannels`: restart with channels skipped.
+- `skipChannelsAcpxProbe`: restart with channels skipped and ACPX startup probe on.
+- `skipChannelsNoAcpxProbe`: restart with channels skipped and ACPX startup probe off.
+- `default`: normal restart.
+- `fiftyPlugins`: restart with 50 manifest plugins.
+
+Output includes next `/healthz`, next `/readyz`, downtime, restart ready timing,
+CPU, RSS, startup trace metrics for the replacement process, and restart trace
+metrics for signal handling, active-work drain, close phases, next start, ready
+timing, and memory snapshots. The script enables
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` and `OPENCLAW_GATEWAY_RESTART_TRACE=1` in the
+child Gateway environment.
+
+Use this benchmark when a change touches restart signaling, close handlers,
+startup-after-restart, sidecar shutdown, service handoff, or readiness after
+restart. Start with `skipChannels` when isolating Gateway mechanics from channel
+startup. Use `default` or plugin-heavy cases only after the narrow case explains
+the restart path.
+
+Trace metrics are attribution hints, not verdicts. A restart change should be
+judged from multiple samples, the matching owner span, `/healthz` and `/readyz`
+behavior, and the user-visible restart contract.
+
 ## Onboarding E2E (Docker)
 
 Docker is optional; this is only needed for containerized onboarding smoke tests.
@@ -130672,8 +130919,18 @@ What you set:
     Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
+  <Accordion title="xAI (Grok) OAuth">
+    Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
+    recommended xAI path for most users. OpenClaw stores the resulting auth
+    profile for Grok models, `x_search`, and `code_execution`.
+  </Accordion>
+  <Accordion title="xAI (Grok) device code">
+    Remote-friendly browser sign-in with a short code instead of a localhost
+    callback. Use this from SSH, Docker, or VPS hosts.
+  </Accordion>
   <Accordion title="xAI (Grok) API key">
-    Prompts for `XAI_API_KEY` and configures xAI as a model provider.
+    Prompts for `XAI_API_KEY` and configures xAI as a model provider. Use this
+    when you want an xAI Console API key instead of subscription OAuth.
   </Accordion>
   <Accordion title="OpenCode">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.
@@ -134732,12 +134989,29 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 ## Setup
 
 <Steps>
-  <Step title="Provide an xAI API key">
-    Run `openclaw onboard --auth-choice xai-api-key` for `code_execution` and
-    `x_search`, or set `XAI_API_KEY` / configure the key under the xAI plugin
-    when you also want Grok web search to use the same credential:
+  <Step title="Provide xAI credentials">
+    Sign in with Grok OAuth using an eligible SuperGrok or X Premium subscription,
+    use the remote-friendly device-code flow, or store an API key. OAuth works
+    for `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search
+    config can also power Grok `web_search`.
 
     ```bash
+    openclaw models auth login --provider xai --method oauth
+    openclaw models auth login --provider xai --device-code
+    ```
+
+    During a fresh install, the same auth choices are available inside
+    onboarding:
+
+    ```bash
+    openclaw onboard --install-daemon
+    openclaw onboard --install-daemon --auth-choice xai-device-code
+    ```
+
+    Or use an API key:
+
+    ```bash
+    openclaw models auth login --provider xai --method api-key
     export XAI_API_KEY=xai-...
     ```
 
@@ -134762,7 +135036,9 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
   </Step>
 
   <Step title="Enable and tune code_execution">
-    The tool is gated on `plugins.entries.xai.config.codeExecution.enabled`. Default is off.
+    `code_execution` is available when xAI credentials are available. Set
+    `plugins.entries.xai.config.codeExecution.enabled` to `false` to disable it,
+    or use the same block to tune the model and timeout.
 
     ```json5
     {
@@ -134820,7 +135096,7 @@ When the tool runs without auth, it returns a structured `missing_xai_api_key` e
 ```json
 {
   "error": "missing_xai_api_key",
-  "message": "code_execution needs an xAI API key. Run openclaw onboard --auth-choice xai-api-key, set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+  "message": "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
   "docs": "https://docs.openclaw.ai/tools/code-execution"
 }
 ```
@@ -137659,8 +137935,9 @@ from each attempt.
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default. Google, OpenRouter, and xAI hosted image providers use 180 second
     defaults; Azure OpenAI image generation uses 600 seconds. Codex dynamic-tool
-    calls honor the same timeout budget, bounded by OpenClaw's 600000 ms
-    dynamic-tool bridge maximum.
+    calls use a 120 second `image_generate` bridge default and honor the same
+    timeout budget when configured, bounded by OpenClaw's 600000 ms dynamic-tool
+    bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,
@@ -141898,7 +142175,7 @@ Current source-of-truth:
 
 <AccordionGroup>
   <Accordion title="Sessions and runs">
-    - `/new [model]` starts a new session; `/reset` is the reset alias.
+    - `/new [model]` archives the current session and starts a fresh one; `/reset` wipes the current session in place. They are not aliases.
     - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case `/new` resets the main session in place. Typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
@@ -142040,7 +142317,7 @@ User-invocable skills are also exposed as slash commands:
     - `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
     - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
     - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
-    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
+    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose full` is enabled.
     - `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 
   </Accordion>
@@ -142696,7 +142973,7 @@ See [Configuration reference](/gateway/configuration-reference) and
 ### Allowlist
 
 <ParamField path="agents.list[].subagents.allowAgents" type="string[]">
-  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
+  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any configured target). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
 </ParamField>
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
   Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
@@ -143262,7 +143539,7 @@ title: "Thinking levels"
 - Inline directive affects only that message; session/global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
-- Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
+- Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 - `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels such as `🛠️ Exec: checking JS syntax`; use `"raw"` when you also want the raw command/detail appended for debugging. Per-agent `agents.list[].toolProgressDetail` overrides the default.
   - `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`

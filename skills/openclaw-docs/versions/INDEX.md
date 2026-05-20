@@ -21,7 +21,7 @@ Note: `https://.../main/versions/openclaw-docs.<version>.md` returns 404 — onl
 
 ## Latest (in-tree)
 
-- **2026.5.19** — `openclaw-docs.latest.md` (6208 KB) · [release v2026.5.19](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.5.19)
+- **2026.5.19** — `openclaw-docs.latest.md` (6222 KB) · [release v2026.5.19](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.5.19)
 
 ## Archived (release assets)
 
