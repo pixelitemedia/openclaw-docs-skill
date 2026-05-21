@@ -389,7 +389,7 @@ Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs keep exhaustive live/E2E and Docker release-path coverage behind `run_release_soak=true`; `release_profile=full` forces that soak coverage on so broad advisory validation remains broad. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs keep exhaustive live/E2E and Docker release-path coverage behind `run_release_soak=true`; `release_profile=full` forces that soak coverage on so broad advisory validation remains broad. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -438,7 +438,7 @@ The umbrella records the dispatched child run ids, and the final `Verify full va
 
 For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. QA release-check lanes are advisory except the standard runtime tool coverage gate, which blocks when required OpenClaw dynamic tools drift or disappear from the standard tier summary.
 
-`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 
 Duplicate `Full Release Validation` runs for `ref=main` and `rerun_group=all`
 supersede the older umbrella. The parent monitor cancels any child workflow it
@@ -606,7 +606,7 @@ Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUI
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
 - `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-anthropic | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, and `plugins-runtime-install-a` through `plugins-runtime-install-h`. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, and `plugins-runtime-install-a` through `plugins-runtime-install-h`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight, then runs multiple same-session OpenClaw agent turns against OpenAI. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 OpenWebUI is folded into `plugins-runtime-services` when full release-path coverage requests it, and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. Bundled-channel update lanes retry once for transient npm network failures.
 
@@ -7150,9 +7150,11 @@ Notes:
 - `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice front end handles turn timing, interruption, and playback, delegates substantive work to the routed OpenClaw agent through `openclaw_agent_consult`, and treats the result like a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - `voice.agentSession` controls which OpenClaw conversation receives voice turns. Leave it unset for the voice channel's own session, or set `{ mode: "target", target: "channel:<text-channel-id>" }` to make the voice channel act as the microphone/speaker extension of an existing Discord text channel session such as `#maintainers`.
 - `voice.model` overrides the OpenClaw agent brain for Discord voice responses and realtime consults. Leave it unset to inherit the routed agent model. It is separate from `voice.realtime.model`.
+- `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice) for behavior rules and examples.
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.voice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai-codex/gpt-5.5"`.
+- Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. The supported realtime bootstrap files are limited to those profile files; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
 - `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
 - `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
@@ -7177,6 +7179,47 @@ Notes:
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
 - In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like `and`, plus obvious non-actionable closings like “be right back” or “bye”. Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+### Follow users in voice
+
+Use `voice.followUsers` when you want the Discord voice bot to stay with one or more known Discord users instead of joining a fixed channel at startup or waiting for `/vc join`.
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        followUsersEnabled: true,
+        followUsers: ["discord:123456789012345678"],
+        allowedChannels: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Behavior:
+
+- `followUsers` accepts raw Discord user IDs and `discord:<id>` values. OpenClaw normalizes both forms before matching voice-state events.
+- `followUsersEnabled` defaults to `true` when `followUsers` is configured. Set it to `false` to keep the saved list but stop automatic voice following.
+- When a followed user joins an allowed voice channel, OpenClaw joins that channel. When the user moves, OpenClaw moves with them. When the active followed user disconnects, OpenClaw leaves.
+- If multiple followed users are in the same guild and the active followed user leaves, OpenClaw moves to another tracked followed user's channel before leaving the guild. If several followed users move at once, the latest observed voice-state event wins.
+- `allowedChannels` still applies. A followed user in a disallowed channel is ignored, and a follow-owned session moves to another followed user or leaves.
+- OpenClaw reconciles missed voice-state events on startup and at a bounded interval. Reconciliation samples configured guilds and caps REST lookups per run, so very large `followUsers` lists may take more than one interval to converge.
+- If Discord or an admin moves the bot while it is following a user, OpenClaw rebuilds the voice session and preserves follow ownership when the destination is allowed. If the bot is moved outside `allowedChannels`, OpenClaw leaves and rejoins the configured target when one exists.
+- DAVE receive recovery may leave and rejoin the same channel after repeated decrypt failures. Follow-owned sessions keep their follow ownership through that recovery path, so a later followed-user disconnect still leaves the channel.
+
+Choose between the join modes:
+
+- Use `followUsers` for personal or operator setups where the bot should automatically be in voice when you are.
+- Use `autoJoin` for fixed-room bots that should be present even when no tracked user is in voice.
+- Use `/vc join` for one-off joins or rooms where automatic voice presence would be surprising.
 
 Native opus setup for source checkouts:
 
@@ -7212,6 +7255,8 @@ Default agent-proxy voice-channel session example:
       voice: {
         enabled: true,
         model: "openai-codex/gpt-5.5",
+        followUsersEnabled: true,
+        followUsers: ["123456789012345678"],
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -25788,7 +25833,7 @@ Use the setup commands by intent:
 | Pairing and channels | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                                 |
 | Security and plugins | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                     |
 | Legacy aliases       | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                         |
-| Plugins (optional)   | [`path`](/cli/path) · [`voicecall`](/cli/voicecall) (if installed)                                                                                                                                                                        |
+| Plugins (optional)   | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) (if installed)                                                                                                                                              |
 
 ## Global flags
 
@@ -29718,6 +29763,328 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a 
 
 
 
+# Section: cli/policy.md
+
+---
+summary: "CLI reference for `openclaw policy` conformance checks"
+read_when:
+  - You want to check OpenClaw settings against an authored policy.jsonc
+  - You want policy findings in doctor lint
+  - You need a policy attestation hash for audit evidence
+title: "Policy"
+---
+
+# `openclaw policy`
+
+`openclaw policy` is provided by the bundled Policy plugin. Policy is an
+enterprise conformance layer over existing OpenClaw settings. It does not add a
+second configuration system. `policy.jsonc` defines authored requirements,
+OpenClaw observes the active workspace as evidence, and policy health checks
+report drift through `doctor --lint`. The final conformance signal is a clean
+`doctor --lint` run; policy contributes findings to that shared lint surface
+instead of creating a separate health gate.
+
+Policy currently manages configured channels and governed tool declarations.
+For example, IT or a workspace operator can record that Telegram is not an
+approved channel provider, require governed tools to carry risk and sensitivity
+metadata, then use `doctor --lint` as the shared conformance gate.
+
+Use policy when a workspace needs a durable statement such as "these channels
+must not be enabled" or "governed tools must declare approval metadata" and a
+repeatable way to prove that OpenClaw still conforms to that statement. Use
+regular config and workspace docs alone when you only need local behavior and
+do not need policy findings or attestation output.
+
+## Quick start
+
+Enable the bundled Policy plugin before first use:
+
+```bash
+openclaw plugins enable policy
+```
+
+When policy is enabled, doctor can load policy health checks without activating
+arbitrary plugins. The plugin remains enabled if `policy.jsonc` is missing, so
+doctor can report the missing artifact.
+
+Policy is authored, not generated from the user's current settings. A minimal
+policy for channels and tool metadata looks like this:
+
+```jsonc
+{
+  "channels": {
+    "denyRules": [
+      {
+        "id": "no-telegram",
+        "when": { "provider": "telegram" },
+        "reason": "Telegram is not approved for this workspace.",
+      },
+    ],
+  },
+  "tools": {
+    "requireMetadata": ["risk", "sensitivity", "owner"],
+  },
+}
+```
+
+The rules are the authority. A category block is only a namespace; checks run
+when a concrete rule is present. OpenClaw reads current `channels.*` settings
+and `TOOLS.md` declarations as evidence, then reports observed state that does
+not conform.
+
+Run policy-only checks during authoring:
+
+```bash
+openclaw policy check
+openclaw policy check --json
+openclaw policy check --severity-min error
+```
+
+`policy check` runs only the policy check set and emits evidence, findings, and
+attestation hashes. The same findings also appear in `openclaw doctor --lint`
+when the Policy plugin is enabled.
+
+Example clean JSON output includes stable hashes that can be recorded by an
+operator or supervisor:
+
+```json
+{
+  "ok": true,
+  "attestation": {
+    "policy": {
+      "path": "policy.jsonc",
+      "hash": "sha256:..."
+    },
+    "workspace": {
+      "scope": "policy",
+      "hash": "sha256:..."
+    },
+    "findingsHash": "sha256:...",
+    "attestationHash": "sha256:..."
+  },
+  "checksRun": 5,
+  "checksSkipped": 0,
+  "findings": []
+}
+```
+
+## Configure policy
+
+Policy config lives under `plugins.entries.policy.config`.
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "policy": {
+        "enabled": true,
+        "config": {
+          "enabled": true,
+          "path": "policy.jsonc",
+          "workspaceRepairs": false,
+          "expectedHash": "sha256:...",
+          "expectedAttestationHash": "sha256:...",
+        },
+      },
+    },
+  },
+}
+```
+
+| Setting                   | Purpose                                                         |
+| ------------------------- | --------------------------------------------------------------- |
+| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.         |
+| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings. |
+| `expectedHash`            | Optional hash-lock for the approved policy artifact.            |
+| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.    |
+| `path`                    | Workspace-relative location of the policy artifact.             |
+
+Set `plugins.entries.policy.config.enabled` to `false` to disable policy checks
+for a workspace while leaving the plugin installed.
+
+Tool metadata requirements are authored in `policy.jsonc` with
+`tools.requireMetadata`, for example `["risk", "sensitivity", "owner"]`.
+
+## Accept policy state
+
+Example JSON output:
+
+```json
+{
+  "ok": true,
+  "attestation": {
+    "checkedAt": "2026-05-10T20:00:00.000Z",
+    "policy": {
+      "path": "policy.jsonc",
+      "hash": "sha256:..."
+    },
+    "workspace": {
+      "scope": "policy",
+      "hash": "sha256:..."
+    },
+    "findingsHash": "sha256:...",
+    "attestationHash": "sha256:..."
+  },
+  "evidence": {
+    "channels": [
+      {
+        "id": "telegram",
+        "provider": "telegram",
+        "source": "oc://openclaw.config/channels/telegram",
+        "enabled": false
+      }
+    ],
+    "tools": [
+      {
+        "id": "deploy",
+        "source": "oc://TOOLS.md/tools/deploy",
+        "line": 12,
+        "risk": "critical",
+        "sensitivity": "restricted",
+        "capabilities": ["IRREVERSIBLE_EXTERNAL"]
+      }
+    ]
+  },
+  "checksRun": 6,
+  "checksSkipped": 0,
+  "findings": []
+}
+```
+
+The policy hash identifies the authored rule artifact. The evidence block
+records the observed OpenClaw state used by the policy checks. The
+`workspace.hash` value identifies that evidence payload for the checked scope.
+The findings hash identifies the exact finding set returned by the check.
+`checkedAt` records when the evaluation ran. The attestation hash identifies
+the stable claim: policy hash, evidence hash, findings hash, and whether the
+result was clean. It intentionally does not include `checkedAt`, so the same
+policy state produces the same attestation across repeated checks. Together,
+these form the audit tuple for this policy check.
+
+If a later gateway or supervisor uses policy to block, approve, or annotate a
+runtime action, it should record the attestation hash from the last clean policy
+check. `checkedAt` stays in JSON output for audit logs, but is not part of the
+stable attestation hash.
+
+Use this lifecycle when accepting policy state:
+
+1. Author or review `policy.jsonc`.
+2. Run `openclaw policy check --json`.
+3. If the result is clean, record `attestation.policy.hash` as `expectedHash`.
+4. Record `attestation.attestationHash` as `expectedAttestationHash`.
+5. Re-run `openclaw doctor --lint` in CI or release gates.
+
+If policy rules change intentionally, update both accepted hashes from a clean
+check. If workspace settings change intentionally but policy stays the same,
+only `expectedAttestationHash` usually changes.
+
+`openclaw policy watch` runs the same check repeatedly and reports when the
+current evidence no longer matches `expectedAttestationHash`:
+
+```bash
+openclaw policy watch --json
+```
+
+Use `--once` in CI or scripts that only need one drift evaluation. Without
+`--once`, the command polls every two seconds by default; use `--interval-ms` to
+choose a different interval.
+
+## Findings
+
+Policy currently verifies:
+
+| Check id                                 | Finding                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                    |
+| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or has malformed rules.                     |
+| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                    |
+| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation. |
+| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                     |
+| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.              |
+| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.               |
+| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.        |
+| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.             |
+| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.      |
+
+Policy findings can include both `target` and `requirement`. `target` is the
+observed workspace thing that does not conform. `requirement` is the authored
+policy rule that made it a finding. Both values are addresses today, usually
+`oc://` paths, but the field names describe their policy role rather than the
+address format.
+
+Example JSON finding:
+
+```json
+{
+  "checkId": "policy/channels-denied-provider",
+  "severity": "error",
+  "message": "Channel 'telegram' uses denied provider 'telegram'.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/channels/telegram",
+  "target": "oc://openclaw.config/channels/telegram",
+  "requirement": "oc://policy.jsonc/channels/denyRules/#0",
+  "fixHint": "Telegram is not approved for this workspace."
+}
+```
+
+Example tool finding:
+
+```json
+{
+  "checkId": "policy/tools-missing-risk-level",
+  "severity": "error",
+  "message": "TOOLS.md tool 'deploy' has no explicit risk classification.",
+  "source": "policy",
+  "path": "TOOLS.md",
+  "line": 12,
+  "ocPath": "oc://TOOLS.md/tools/deploy",
+  "target": "oc://TOOLS.md/tools/deploy",
+  "requirement": "oc://policy.jsonc/tools/requireMetadata"
+}
+```
+
+## Repair
+
+`doctor --lint` and `policy check` are read-only.
+
+`doctor --fix` only edits policy-managed workspace settings when
+`workspaceRepairs` is explicitly enabled. Without that opt-in, policy checks
+report what they would repair and leave settings unchanged.
+
+In this version, repair can disable channels that are enabled in OpenClaw config
+but denied by `channels.denyRules`. Enable `workspaceRepairs` only after the
+policy file has been reviewed, because a valid deny rule can turn off a
+configured channel:
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "policy": {
+        "config": {
+          "workspaceRepairs": true,
+        },
+      },
+    },
+  },
+}
+```
+
+## Exit codes
+
+| Command        | `0`                                       | `1`                                              | `2`                          |
+| -------------- | ----------------------------------------- | ------------------------------------------------ | ---------------------------- |
+| `policy check` | No findings at the threshold.             | One or more findings met the threshold.          | Argument or runtime failure. |
+| `policy watch` | No findings and accepted hash is current. | Findings exist or accepted attestation is stale. | Argument or runtime failure. |
+
+## Related
+
+- [Doctor lint mode](/cli/doctor#lint-mode)
+- [Path CLI](/cli/path)
+
+
+
 # Section: cli/proxy.md
 
 ---
@@ -30705,14 +31072,15 @@ openclaw setup --non-interactive --mode remote --remote-url wss://gateway-host:1
 summary: "CLI reference for `openclaw skills` (search/install/update/list/info/check)"
 read_when:
   - You want to see which skills are available and ready to run
-  - You want to search, install, or update skills from ClawHub
+  - You want to search ClawHub or install skills from ClawHub, Git, or local directories
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
 ---
 
 # `openclaw skills`
 
-Inspect local skills and install/update skills from ClawHub.
+Inspect local skills, search ClawHub, install skills from ClawHub/Git/local directories, and update
+ClawHub-tracked installs.
 
 Related:
 
@@ -30727,6 +31095,9 @@ openclaw skills search "calendar"
 openclaw skills search --limit 20 --json
 openclaw skills install <slug>
 openclaw skills install <slug> --version <version>
+openclaw skills install git:owner/repo
+openclaw skills install git:owner/repo@main
+openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install <slug> --force
 openclaw skills install <slug> --agent <id>
 openclaw skills install <slug> --global
@@ -30748,23 +31119,36 @@ openclaw skills check --agent <id>
 openclaw skills check --json
 ```
 
-`search`/`install`/`update` use ClawHub directly. By default, `install` and
-`update` target the active workspace `skills/` directory; with `--global`, they
-target the shared managed skills directory. `list`/`info`/`check` still inspect
-the local skills visible to the current workspace and config. Workspace-backed
-commands resolve the target workspace from `--agent <id>`, then the current
-working directory when it is inside a configured agent workspace, then the
-default agent.
+`search` and `update` use ClawHub directly. `install <slug>` installs a ClawHub
+skill, `install git:owner/repo[@ref]` clones a Git skill, and `install ./path`
+copies a local skill directory. By default, `install` and `update` target the
+active workspace `skills/` directory; with `--global`, they target the shared
+managed skills directory. `list`/`info`/`check` still inspect the local skills
+visible to the current workspace and config. Workspace-backed commands resolve
+the target workspace from `--agent <id>`, then the current working directory
+when it is inside a configured agent workspace, then the default agent.
 
-This CLI `install` command downloads skill folders from ClawHub. Gateway-backed
-skill dependency installs triggered from onboarding or Skills settings use the
-separate `skills.install` request path instead.
+Git and local directory installs expect `SKILL.md` at the source root. The
+install slug comes from `SKILL.md` frontmatter `name` when it is valid, then the
+source directory or repository name; use `--as <slug>` to override it. `--version`
+is ClawHub-only. Skill installs do not support npm package specs or zip/archive
+paths, and `openclaw skills update` updates ClawHub-tracked installs only.
+
+Gateway-backed skill dependency installs triggered from onboarding or Skills
+settings use the separate `skills.install` request path instead.
 
 Notes:
 
 - `search [query...]` accepts an optional query; omit it to browse the default
   ClawHub search feed.
 - `search --limit <n>` caps returned results.
+- `install git:owner/repo[@ref]` installs a Git skill. Branch refs may contain
+  slashes, such as `git:owner/repo@feature/foo`.
+- `install ./path/to/skill` installs a local directory whose root contains
+  `SKILL.md`.
+- `install --as <slug>` overrides the inferred slug for Git and local directory
+  installs.
+- `install --version <version>` applies only to ClawHub skill slugs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
 - `--global` targets the shared managed skills directory and cannot be combined
@@ -30819,6 +31203,7 @@ Notes:
 - When the current session snapshot is sparse, `/status` can backfill token and cache counters from the most recent transcript usage log. Existing nonzero live values still win over transcript fallback values.
 - `/status` includes compact Gateway process uptime and host system uptime.
 - Transcript fallback can also recover the active runtime model label when the live session entry is missing it. If that transcript model differs from the selected model, status resolves the context window against the recovered runtime model instead of the selected one.
+- When a session is pinned to a model that differs from the configured primary, status prints both values, the reason (`session override`), and the clear hint (`/model <configured-default>` or `/reset`). The configured primary applies to new or unpinned sessions; existing pinned sessions keep their session selection until cleared.
 - For prompt-size accounting, transcript fallback prefers the larger prompt-oriented total when session metadata is missing or smaller, so custom-provider sessions do not collapse to `0` token displays.
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
@@ -40324,6 +40709,7 @@ The same `provider/model` can mean different things depending on where it came f
 - Configured defaults (`agents.defaults.model.primary` and agent-specific primaries) are the normal starting point and use `agents.defaults.model.fallbacks`.
 - Auto fallback selections are temporary recovery state. They are stored with `modelOverrideSource: "auto"` so later turns can keep using the fallback chain without probing a known-bad primary every time; OpenClaw periodically probes the original primary again, clears the auto selection when it recovers, and announces fallback/recovery transitions once per state change.
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
+- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, switch the current session with `/model Y` or clear stale session state with `/reset`.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
@@ -47361,7 +47747,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.list[].reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5` for OpenAI API-key or Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
-- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, `chat_template_kwargs`, `extra_body`/`extraBody`).
+- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`).
   - Use `provider/*` entries such as `"openai-codex/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
@@ -47369,6 +47755,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
+- `models.providers.openrouter.params.provider`: OpenRouter-wide default provider-routing policy. OpenClaw forwards this to OpenRouter's request `provider` object; per-model `agents.defaults.models["openrouter/<model>"].params.provider` and agent params override by key. See [OpenRouter provider routing](/providers/openrouter#advanced-configuration).
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
 - `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. For vLLM Qwen thinking controls, set `params.qwenThinkingFormat` to `"chat-template"` or `"top-level"` on that model entry.
 - `compat.thinkingFormat`: OpenAI-compatible thinking payload style. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for Qwen-style top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family backends that support request-level chat-template kwargs, such as vLLM. OpenClaw maps disabled thinking to `false` and enabled thinking to `true`.
@@ -49444,6 +49831,38 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:agents`     | `agents_list`, `update_plan`                                                                                            |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
 | `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
+| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                            |
+
+### MCP and plugin tools inside sandbox tool policy
+
+Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` plugin id. Normal tool profiles can allow them, but `tools.sandbox.tools` is an additional gate for sandboxed sessions. If sandbox mode is `"all"` or `"non-main"`, include one of these entries in the sandbox tool allowlist when MCP/plugin tools should be visible:
+
+- `bundle-mcp` for OpenClaw-managed MCP servers from `mcp.servers`
+- the plugin id for a specific native plugin
+- `group:plugins` for all loaded plugin-owned tools
+- exact MCP server tool names or server globs such as `outlook__send_mail` or `outlook__*` when you only want one server
+
+Server globs use the provider-safe MCP server prefix, not necessarily the raw `mcp.servers` key. Non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed; for example, `mcp.servers["Outlook Graph"]` uses a glob like `outlook-graph__*`.
+
+```json5
+{
+  agents: { defaults: { sandbox: { mode: "all" } } },
+  mcp: {
+    servers: {
+      outlook: { command: "node", args: ["./outlook-mcp.js"] },
+    },
+  },
+  tools: {
+    sandbox: {
+      tools: {
+        alsoAllow: ["web_search", "web_fetch", "memory_search", "memory_get", "bundle-mcp"],
+      },
+    },
+  },
+}
+```
+
+Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape for OpenClaw-managed servers in `mcp.servers`. MCP servers loaded from bundled plugin manifests or Claude `.mcp.json` use the same sandbox gate, but this diagnostic does not enumerate those sources yet; use the same allowlist entries if their tools disappear in sandboxed turns.
 
 ### `tools.allow` / `tools.deny`
 
@@ -59237,6 +59656,11 @@ Available groups:
 - `group:agents`: `agents_list`, `update_plan`
 - `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
+- `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
+
+For sandboxed MCP servers, the sandbox tool policy is a second allow gate. If `mcp.servers` is configured but sandboxed turns only show built-in tools, add `bundle-mcp`, `group:plugins`, or a server-prefixed MCP tool name/glob such as `outlook__send_mail` or `outlook__*` to `tools.sandbox.tools.alsoAllow`, then restart/reload the gateway and recapture the tool list. Server globs use the provider-safe MCP server prefix: non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed.
+
+`openclaw doctor` currently checks this shape for OpenClaw-managed servers in `mcp.servers`. MCP servers loaded from bundled plugin manifests or Claude `.mcp.json` use the same sandbox gate, but this diagnostic does not enumerate those sources yet; use the same allowlist entries if their tools disappear in sandboxed turns.
 
 ## Elevated: exec-only "run on host"
 
@@ -59382,6 +59806,18 @@ If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates
 - **Config requires host paths**: The `openclaw.json` `workspace` configuration MUST contain the **Host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. When OpenClaw asks the Docker daemon to spawn a sandbox, the daemon evaluates paths relative to the Host OS namespace, not the Gateway namespace.
 - **FS bridge parity (identical volume map)**: The OpenClaw Gateway native process also writes heartbeat and bridge files to the `workspace` directory. Because the Gateway evaluates the exact same string (the host path) from within its own containerized environment, the Gateway deployment MUST include an identical volume map linking the host namespace natively (`-v /home/user/.openclaw:/home/user/.openclaw`).
 - **Codex code mode**: When an OpenClaw sandbox is active, OpenClaw constrains Codex app-server turns to Codex `workspace-write` sandboxing even if the Codex plugin default is `danger-full-access`. The Codex turn network flag follows the OpenClaw sandbox egress setting, so Docker `network: "none"` stays offline and `network: "bridge"` or a custom Docker network allows outbound access. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes.
+
+On Ubuntu/AppArmor hosts, Codex `workspace-write` can fail before shell startup
+when the service user is not allowed to create unprivileged user namespaces.
+When Docker sandbox egress is disabled (`network: "none"`, the default),
+Codex also needs an unprivileged network namespace. Common symptoms are
+`bwrap: setting up uid map: Permission denied` and
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run
+`openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer
+an AppArmor profile that grants the required namespaces to the OpenClaw service
+process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide
+fallback with security tradeoffs; use it only when that host posture is
+acceptable.
 
 If you map paths internally without absolute host parity, OpenClaw natively throws an `EACCES` permission error attempting to write its heartbeat inside the container environment because the fully qualified path string doesn't exist natively.
 </Warning>
@@ -85782,6 +86218,16 @@ from the OpenClaw sandbox egress setting: Docker `network: "none"` stays
 offline, while `network: "bridge"` or a custom Docker network permits outbound
 access.
 
+On Ubuntu/AppArmor hosts, Codex bwrap can fail under `workspace-write` before
+the shell command starts. If you see
+`bwrap: setting up uid map: Permission denied` or
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, run
+`openclaw doctor` and fix the reported host namespace policy for the OpenClaw
+service user rather than granting broader Docker container privileges. Prefer
+a scoped AppArmor profile for the service process; the
+`kernel.apparmor_restrict_unprivileged_userns=0` fallback is host-wide and has
+security tradeoffs.
+
 ## Auth and environment isolation
 
 Auth is selected in this order:
@@ -93262,6 +93708,7 @@ commands.
 | [opencode-go](/plugins/reference/opencode-go)                     | Adds OpenCode Go model provider support to OpenClaw.                                                                                                                 | `@openclaw/opencode-go-provider`<br />included in OpenClaw           | providers: opencode-go; contracts: mediaUnderstandingProviders                                                                                                                                                                                                   |
 | [openrouter](/plugins/reference/openrouter)                       | Adds OpenRouter model provider support to OpenClaw.                                                                                                                  | `@openclaw/openrouter-provider`<br />included in OpenClaw            | providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders                                                                                                     |
 | [perplexity](/plugins/reference/perplexity)                       | Adds web search provider support.                                                                                                                                    | `@openclaw/perplexity-plugin`<br />included in OpenClaw              | contracts: webSearchProviders                                                                                                                                                                                                                                    |
+| [policy](/plugins/reference/policy)                               | Adds policy-backed doctor checks for workspace conformance.                                                                                                          | `@openclaw/policy`<br />included in OpenClaw                         | plugin                                                                                                                                                                                                                                                           |
 | [qianfan](/plugins/reference/qianfan)                             | Adds Qianfan model provider support to OpenClaw.                                                                                                                     | `@openclaw/qianfan-provider`<br />included in OpenClaw               | providers: qianfan                                                                                                                                                                                                                                               |
 | [qwen](/plugins/reference/qwen)                                   | Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenClaw.                                                                                   | `@openclaw/qwen-provider`<br />included in OpenClaw                  | providers: qwen, qwencloud, modelstudio, dashscope; contracts: mediaUnderstandingProviders, videoGenerationProviders                                                                                                                                             |
 | [runway](/plugins/reference/runway)                               | Adds video generation provider support.                                                                                                                              | `@openclaw/runway-provider`<br />included in OpenClaw                | contracts: videoGenerationProviders                                                                                                                                                                                                                              |
@@ -93435,6 +93882,7 @@ pnpm plugins:inventory:gen
 | [openrouter](/plugins/reference/openrouter)                         | Adds OpenRouter model provider support to OpenClaw.                                                                                                                  | `@openclaw/openrouter-provider`<br />included in OpenClaw                                        | providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders                                                                                                     |
 | [openshell](/plugins/reference/openshell)                           | Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.                                                                 | `@openclaw/openshell-sandbox`<br />npm; ClawHub                                                  | plugin                                                                                                                                                                                                                                                           |
 | [perplexity](/plugins/reference/perplexity)                         | Adds web search provider support.                                                                                                                                    | `@openclaw/perplexity-plugin`<br />included in OpenClaw                                          | contracts: webSearchProviders                                                                                                                                                                                                                                    |
+| [policy](/plugins/reference/policy)                                 | Adds policy-backed doctor checks for workspace conformance.                                                                                                          | `@openclaw/policy`<br />included in OpenClaw                                                     | plugin                                                                                                                                                                                                                                                           |
 | [qa-channel](/plugins/reference/qa-channel)                         | Adds the QA Channel surface for sending and receiving OpenClaw messages.                                                                                             | `@openclaw/qa-channel`<br />source checkout only                                                 | channels: qa-channel                                                                                                                                                                                                                                             |
 | [qa-lab](/plugins/reference/qa-lab)                                 | OpenClaw QA lab plugin with private debugger UI and scenario runner.                                                                                                 | `@openclaw/qa-lab`<br />source checkout only                                                     | plugin                                                                                                                                                                                                                                                           |
 | [qa-matrix](/plugins/reference/qa-matrix)                           | Matrix QA transport runner and substrate.                                                                                                                            | `@openclaw/qa-matrix`<br />source checkout only                                                  | plugin                                                                                                                                                                                                                                                           |
@@ -99655,6 +100103,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 | `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                      |
 | `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                 |
 | `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                              |
+| `plugin-sdk/health`            | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                               |
 
 ### Deprecated compatibility and test helpers
 
@@ -99949,6 +100398,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
+    | `plugin-sdk/realtime-bootstrap-context` | Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
@@ -104934,6 +105384,34 @@ contracts: webSearchProviders
 ## Related docs
 
 - [perplexity](/tools/perplexity-search)
+
+
+
+# Section: plugins/reference/policy.md
+
+---
+summary: "Adds policy-backed doctor checks for workspace conformance."
+read_when:
+  - You are installing, configuring, or auditing the policy plugin
+title: "Policy plugin"
+---
+
+# Policy plugin
+
+Adds policy-backed doctor checks for workspace conformance.
+
+## Distribution
+
+- Package: `@openclaw/policy`
+- Install route: included in OpenClaw
+
+## Surface
+
+plugin
+
+## Related docs
+
+- [policy](/cli/policy)
 
 
 
@@ -112457,7 +112935,7 @@ The bundled MiniMax plugin registers music generation through the shared
 - Default music model: `minimax/music-2.6`
 - OAuth music model: `minimax-portal/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
-- Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
+- Prompt controls: `lyrics`, `instrumental`
 - Output format: `mp3`
 - Session-backed runs detach through the shared task/status flow, including `action: "status"`
 
@@ -116359,8 +116837,58 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Provider routing metadata">
-    If you pass OpenRouter provider routing under model params, OpenClaw forwards
-    it as OpenRouter routing metadata before the shared stream wrappers run.
+    OpenRouter supports a `provider` request object for underlying provider
+    routing. Configure a default policy for all OpenRouter text-model requests
+    with `models.providers.openrouter.params.provider`:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openrouter: {
+            params: {
+              provider: {
+                sort: "latency",
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw forwards that object to OpenRouter as the request `provider`
+    payload. Use OpenRouter's documented snake_case fields, including `sort`,
+    `only`, `ignore`, `order`, `allow_fallbacks`, `require_parameters`,
+    `data_collection`, `quantizations`, `max_price`, `preferred_max_latency`,
+    `preferred_min_throughput`, `zdr`, and `enforce_distillable_text`.
+
+    Per-model params still override the provider-wide routing object:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-6": {
+              params: {
+                provider: {
+                  order: ["anthropic"],
+                  allow_fallbacks: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    This only applies on OpenRouter chat-completions routes. Direct Anthropic,
+    Google, OpenAI, or custom provider routes ignore OpenRouter routing params.
+
   </Accordion>
 </AccordionGroup>
 
@@ -123218,6 +123746,12 @@ beta publish, pass `release_package_spec=openclaw@YYYY.M.D-beta.N` to reuse the
 shipped npm package across release checks, Package Acceptance, cross-OS,
 release-path Docker, and package Telegram. Use `package_acceptance_package_spec`
 only when Package Acceptance should intentionally prove a different package.
+The Codex plugin live package lane follows the same state: published
+`release_package_spec` values derive `codex_plugin_spec=npm:@openclaw/codex@<version>`;
+SHA/artifact runs pack `extensions/codex` from the selected ref; and operators
+can set `codex_plugin_spec` directly for `npm:`, `npm-pack:`, or `git:` plugin
+sources. The lane grants the explicit Codex CLI install approval required by
+that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 
 ## Top-level stages
 
@@ -123261,15 +123795,15 @@ or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                          |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                             |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                    |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                     |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                               |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested.                  |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                             |
+| Chunk                                                           | Coverage                                                                                                                   |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                      |
+| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live turns, and Chat Completions tool calls. |
+| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                             |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                              |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                        |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested.                                           |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                      |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun
@@ -139877,13 +140411,13 @@ Generate an energetic chiptune loop about launching a rocket at sunrise.
 
 ## Supported providers
 
-| Provider   | Default model                | Reference inputs | Supported controls                                        | Auth                                   |
-| ---------- | ---------------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
-| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
-| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `FAL_KEY` or `FAL_API_KEY`             |
-| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY` or MiniMax OAuth     |
-| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `OPENROUTER_API_KEY`                   |
+| Provider   | Default model                | Reference inputs | Supported controls                                    | Auth                                   |
+| ---------- | ---------------------------- | ---------------- | ----------------------------------------------------- | -------------------------------------- |
+| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                       | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format` | `FAL_KEY` or `FAL_API_KEY`             |
+| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                    | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `format=mp3`                | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format` | `OPENROUTER_API_KEY`                   |
 
 ### Capability matrix
 
@@ -140057,8 +140591,8 @@ explicit `model`, `primary`, and `fallbacks` entries.
   </Accordion>
   <Accordion title="MiniMax">
     Uses the batch `music_generation` endpoint. Supports prompt, optional
-    lyrics, instrumental mode, duration steering, and mp3 output through
-    either `minimax` API-key auth or `minimax-portal` OAuth.
+    lyrics, instrumental mode, and mp3 output through either `minimax`
+    API-key auth or `minimax-portal` OAuth.
   </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter chat completions audio output with streaming enabled. The
@@ -141655,14 +142189,16 @@ Use native `openclaw skills` commands for discover/install/update, or the
 separate `clawhub` CLI for publish/sync workflows. Full guide:
 [ClawHub](/clawhub).
 
-| Action                                 | Command                                         |
-| -------------------------------------- | ----------------------------------------------- |
-| Install a skill into the workspace     | `openclaw skills install <skill-slug>`          |
-| Install a skill for all local agents   | `openclaw skills install <skill-slug> --global` |
-| Update all workspace-installed skills  | `openclaw skills update --all`                  |
-| Update a single shared managed skill   | `openclaw skills update <skill-slug> --global`  |
-| Update all shared managed/local skills | `openclaw skills update --all --global`         |
-| Sync (scan + publish updates)          | `clawhub sync --all`                            |
+| Action                                 | Command                                                |
+| -------------------------------------- | ------------------------------------------------------ |
+| Install a ClawHub skill into workspace | `openclaw skills install <skill-slug>`                 |
+| Install a Git skill into workspace     | `openclaw skills install git:owner/repo@ref`           |
+| Install a local skill into workspace   | `openclaw skills install ./path/to/skill --as my-tool` |
+| Install a skill for all local agents   | `openclaw skills install <skill-slug> --global`        |
+| Update all workspace-installed skills  | `openclaw skills update --all`                         |
+| Update a single shared managed skill   | `openclaw skills update <skill-slug> --global`         |
+| Update all shared managed/local skills | `openclaw skills update --all --global`                |
+| Sync (scan + publish updates)          | `clawhub sync --all`                                   |
 
 Native `openclaw skills install` installs into the active workspace
 `skills/` directory by default. Add `--global` to install into the shared
@@ -141674,6 +142210,14 @@ that up as `<workspace>/skills` on the next session.
 Configured skill roots also support one grouping level, such as
 `skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
 kept under a shared folder without broad recursive scanning.
+
+Git and local directory installs expect a `SKILL.md` at the source root. The
+install slug comes from `SKILL.md` frontmatter `name` when it is a valid slug,
+then falls back to the source directory or repository name. Use `--as <slug>` to
+override the inferred slug. `--version` applies only to ClawHub installs. Skill
+installs do not support npm package specs or zip/archive paths. `openclaw skills
+update` updates ClawHub-tracked installs only; reinstall Git or local sources to
+refresh them.
 
 Gateway clients that need private, non-ClawHub delivery can stage a zip skill
 archive with `skills.upload.begin`, `skills.upload.chunk`, and
@@ -141708,7 +142252,11 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
   `skills.install.allowUploadedArchives`; normal ClawHub installs do not require
   that setting.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
-- `openclaw skills install <slug>` is different — it downloads a ClawHub skill folder into the workspace, or into shared managed/local skills with `--global`, and does not use the installer-metadata path above.
+- `openclaw skills install <slug>` is different — it downloads a ClawHub skill
+  folder into the workspace, or into shared managed/local skills with
+  `--global`, and does not use the installer-metadata path above. Git and local
+  directory installs copy a trusted `SKILL.md` directory into the same skills
+  root, but are not tracked by `openclaw skills update`.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 
 For a broader threat model and checklists, see [Security](/gateway/security).
@@ -142215,7 +142763,7 @@ Current source-of-truth:
   <Accordion title="Skills, allowlists, approvals">
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
-    - `/approve <id> <decision>` resolves exec approval prompts.
+    - `/approve <id> <decision>` resolves exec or plugin approval prompts.
     - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
