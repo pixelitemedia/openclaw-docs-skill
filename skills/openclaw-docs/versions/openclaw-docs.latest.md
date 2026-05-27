@@ -611,7 +611,7 @@ The separate `Install Smoke` workflow reuses the same scope script through its o
 
 `main` pushes (including merge commits) do not force the full path; when changed-scope logic would request full coverage on a push, the workflow keeps the fast Docker smoke and leaves the full install smoke to nightly or release validation.
 
-The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule and from the release checks workflow, and manual `Install Smoke` dispatches can opt into it, but pull requests and `main` pushes do not. QR and installer Docker tests keep their own install-focused Dockerfiles.
+The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule and from the release checks workflow, and manual `Install Smoke` dispatches can opt into it, but pull requests and `main` pushes do not. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
 ## Local Docker E2E
 
@@ -811,7 +811,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+  "corepack pnpm check:changed"
 ```
 
 Focused test rerun:
@@ -826,7 +826,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test <path-or-filter>"
+  "corepack pnpm test <path-or-filter>"
 ```
 
 Full suite:
@@ -841,7 +841,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+  "corepack pnpm test"
 ```
 
 Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
@@ -876,7 +876,7 @@ Escalate to owned Crabbox capacity only when Blacksmith is down, quota-limited, 
 CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
   pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm check:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
 ```
 
@@ -3035,7 +3035,7 @@ Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 
 - Use a dedicated hook token; do not reuse gateway auth tokens.
 - Keep `hooks.path` on a dedicated subpath; `/` is rejected.
-- Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
+- Set `hooks.allowedAgentIds` to limit which effective agent a hook can target, including the default agent when `agentId` is omitted.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
 - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
@@ -5104,7 +5104,7 @@ OpenClaw can accept messages written by other bots on channels that support `all
 When that path is enabled, pair loop protection prevents two bot identities from
 replying to each other indefinitely.
 
-The guard is enforced by the core channel-turn kernel. Each supporting channel
+The guard is enforced by the core inbound reply runner. Each supporting channel
 maps its own inbound event into generic facts: account or scope, conversation id,
 sender bot id, and receiver bot id. Core then tracks the participant pair in both
 directions, applies a sliding-window budget, and suppresses the pair during a
@@ -8868,7 +8868,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
 
-For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Some harnesses, including Codex, also default direct/source chats to message-tool delivery when this is unset. Set `messages.visibleReplies: "automatic"` to force the old automatic final-reply path. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
+For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
@@ -15262,6 +15262,11 @@ Append `?` to any command for usage help (for example `/bot-upgrade ?`).
 
 Admin commands (`/bot-me`, `/bot-upgrade`, `/bot-logs`, `/bot-clear-storage`, `/bot-streaming`, `/bot-approve`) are direct-message-only and require the sender's openid in an explicit non-wildcard `allowFrom` list. A wildcard `allowFrom: ["*"]` permits chat but does not grant admin command access. Group messages match against `groupAllowFrom` first and fall back to `allowFrom`. Running an admin command in a group returns a hint rather than silently dropping.
 
+When QQ Bot exec approvals use the default same-chat fallback, native approval
+button clicks follow the same explicit non-wildcard command allowlist. To grant
+approval-only access without broader command access, configure
+`channels.qqbot.execApprovals.approvers`.
+
 ## Engine architecture
 
 QQ Bot ships as a self-contained engine inside the plugin:
@@ -17823,12 +17828,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for Telegram replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
-- DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
+- DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Multi-account startup bounds concurrent Telegram `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Long polling is guarded inside each gateway process so only one active poller can use a bot token at a time. If you still see `getUpdates` 409 conflicts, another OpenClaw gateway, script, or external poller is likely using the same token.
 - Long-polling watchdog restarts trigger after 120 seconds without completed `getUpdates` liveness by default. Increase `channels.telegram.pollingStallThresholdMs` only if your deployment still sees false polling-stall restarts during long-running work. The value is in milliseconds and is allowed from `30000` to `600000`; per-account overrides are supported.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
+
+<Note>
+  `channels.telegram.dm.threadReplies` and `channels.telegram.direct.<chatId>.threadReplies` were removed. Run `openclaw doctor --fix` after upgrading if your config still has those keys. DM topic routing now follows the bot capability from Telegram `getMe.has_topics_enabled`, which is controlled by BotFather threaded mode: topics-enabled bots use thread-scoped DM sessions when Telegram sends `message_thread_id`; other DMs stay on the flat session.
+</Note>
 
 ## Feature reference
 
@@ -18194,7 +18203,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly. OpenClaw pins the spawn confirmation in-topic. Requires `channels.telegram.threadBindings.spawnSessions` to remain enabled (default: `true`).
 
-    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep DM routing and reply metadata on flat sessions by default; they only use thread-aware session keys when configured with `threadReplies: "inbound"`, `threadReplies: "always"`, `requireTopic: true`, or a matching topic config. Use top-level `channels.telegram.dm.threadReplies` for the account default, or `direct.<chatId>.threadReplies` for one DM.
+    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata; they use thread-aware session keys only when Telegram `getMe` reports `has_topics_enabled: true` for the bot.
+    The former `dm.threadReplies` and `direct.*.threadReplies` overrides are intentionally retired; use BotFather threaded mode as the single source of truth and run `openclaw doctor --fix` to remove stale config keys.
 
   </Accordion>
 
@@ -18609,7 +18619,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - topic defaults: `groups.<chatId>.topics."*"` applies to unmatched forum topics; exact topic IDs override it
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
-- threading/replies: `replyToMode`, `dm.threadReplies`, `direct.*.threadReplies`
+- threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
@@ -24924,13 +24934,13 @@ Notes:
 summary: "CLI reference for `openclaw docs` (search the live docs index)"
 read_when:
   - You want to search the live OpenClaw docs from the terminal
-  - You need to know which helper binaries the docs CLI shells out to
+  - You need to know which hosted search API the docs CLI calls
 title: "Docs"
 ---
 
 # `openclaw docs`
 
-Search the live OpenClaw docs index from the terminal. The command shells out to the public Mintlify-hosted docs MCP search endpoint at `https://docs.openclaw.ai/mcp.search_open_claw` and renders the results in your terminal.
+Search the live OpenClaw docs index from the terminal. The command calls OpenClaw's Cloudflare-hosted docs search API and renders the results in your terminal.
 
 ## Usage
 
@@ -24957,17 +24967,7 @@ With no query, `openclaw docs` prints the docs entrypoint URL plus a sample sear
 
 ## How it works
 
-`openclaw docs` invokes the `mcporter` CLI to call the docs search MCP tool, then parses the `Title: / Link: / Content:` blocks from the tool output into a list of results.
-
-To resolve `mcporter`, OpenClaw checks in order:
-
-1. `mcporter` on `PATH` (used directly if present).
-2. `pnpm dlx mcporter ...` if `pnpm` is installed.
-3. `npx -y mcporter ...` if `npx` is installed.
-
-If none are available, the command fails with a hint to install `pnpm` (`npm install -g pnpm`).
-
-The search call uses a fixed 30 second timeout. Result snippets are truncated to ~220 characters per entry.
+`openclaw docs` calls `https://docs.openclaw.ai/api/search` and renders the JSON results. The search call uses a fixed 30 second timeout.
 
 ## Output
 
@@ -24984,10 +24984,10 @@ In non-rich output (piped, `--no-color`, scripts), the same data renders as Mark
 
 ## Exit codes
 
-| Code | Meaning                                             |
-| ---- | --------------------------------------------------- |
-| `0`  | Search succeeded (including zero-result responses). |
-| `1`  | The MCP tool call failed; stderr is printed inline. |
+| Code | Meaning                                                           |
+| ---- | ----------------------------------------------------------------- |
+| `0`  | Search succeeded (including zero-result responses).               |
+| `1`  | The hosted docs search API call failed; stderr is printed inline. |
 
 ## Related
 
@@ -26304,12 +26304,12 @@ Use the setup commands by intent:
 | Models and inference | [`models`](/cli/models) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                                                      |
 | Network and nodes    | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node)                                                                                                                                   |
 | Runtime and sandbox  | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)                 |
-| Automation           | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks)                                                                                                                                         |
+| Automation           | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                     |
 | Discovery and docs   | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                                   |
 | Pairing and channels | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                                 |
 | Security and plugins | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                     |
 | Legacy aliases       | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                         |
-| Plugins (optional)   | [`meeting-notes`](/cli/meeting-notes) · [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) (if installed)                                                                                                      |
+| Plugins (optional)   | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) (if installed)                                                                                                                                              |
 
 ## Global flags
 
@@ -26402,7 +26402,7 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
-  meeting-notes
+  transcripts
     list
     show
     path
@@ -27072,7 +27072,8 @@ Related:
 - `--json`: emit line-delimited JSON events
 - `--plain`: plain text output without styled formatting
 - `--no-color`: disable ANSI colors
-- `--local-time`: render timestamps in your local timezone
+- `--local-time`: render timestamps in your local timezone (default)
+- `--utc`: render timestamps in UTC
 
 ## Shared Gateway RPC options
 
@@ -27097,13 +27098,14 @@ openclaw logs --plain
 openclaw logs --no-color
 openclaw logs --limit 500
 openclaw logs --local-time
+openclaw logs --utc
 openclaw logs --follow --local-time
 openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
 ## Notes
 
-- Use `--local-time` to render timestamps in your local timezone.
+- Timestamps render in your local timezone by default. Use `--utc` for UTC output.
 - If the implicit local loopback Gateway asks for pairing, closes during connect, or times out before `logs.tail` answers, `openclaw logs` falls back to the configured Gateway file log automatically. Explicit `--url` targets do not use this fallback.
 - `openclaw logs --follow` does not follow configured-file fallbacks after implicit local Gateway RPC failures. On Linux, it uses the active user-systemd Gateway journal by PID when available and prints the selected log source; otherwise it keeps retrying the live Gateway instead of tailing a potentially stale side-by-side file.
 - When using `--follow`, transient gateway disconnects (WebSocket close, timeout, connection drop) trigger automatic reconnection with exponential backoff (up to 8 retries, capped at 30 s between attempts). A warning is printed to stderr on each retry, and a `[logs] gateway reconnected` notice is printed once a poll succeeds. In `--json` mode both the retry warning and the reconnect transition are emitted as `{"type":"notice"}` records on stderr. Non-recoverable errors (auth failure, bad configuration) still exit immediately.
@@ -27646,129 +27648,6 @@ Current limits:
 
 - [CLI reference](/cli)
 - [Plugins](/cli/plugins)
-
-
-
-# Section: cli/meeting-notes.md
-
----
-summary: "CLI reference for `openclaw meeting-notes` (list, show, and locate stored meeting notes)"
-read_when:
-  - You want to read stored meeting note summaries from the terminal
-  - You need the path to a meeting notes markdown summary
-  - You are debugging the meeting-notes plugin storage layout
-title: "Meeting Notes CLI"
----
-
-# `openclaw meeting-notes`
-
-Inspect meeting notes written by the external `meeting-notes` plugin. This CLI
-is read-only and is available when that plugin is installed or loaded from
-source. Capture, import, and summarization are owned by the `meeting_notes`
-agent tool and by configured auto-start sources.
-
-Use the CLI when you want to find yesterday's notes, open the Markdown file in
-an editor, feed a transcript to another tool, or debug where a session landed on
-disk. It does not start or stop capture.
-
-Artifacts live under the OpenClaw state directory:
-
-```text
-$OPENCLAW_STATE_DIR/meeting-notes/YYYY-MM-DD/<session>/
-  metadata.json
-  transcript.jsonl
-  summary.json
-  summary.md
-```
-
-The default state directory is `~/.openclaw`; set `OPENCLAW_STATE_DIR` to use a
-different one. The date directory comes from the session start time, and the
-session directory is a safe filesystem segment derived from the session id.
-
-## Commands
-
-```bash
-openclaw meeting-notes list
-openclaw meeting-notes show <session>
-openclaw meeting-notes show YYYY-MM-DD/<session>
-openclaw meeting-notes path <session>
-openclaw meeting-notes path YYYY-MM-DD/<session>
-openclaw meeting-notes path <session> --dir
-openclaw meeting-notes path <session> --metadata
-openclaw meeting-notes path <session> --transcript
-openclaw meeting-notes list --json
-openclaw meeting-notes show <session> --json
-openclaw meeting-notes path <session> --json
-```
-
-- `list`: list stored sessions, date-qualified selector, start time, title, and `summary.md` path.
-- `show <session>`: print the stored `summary.md`.
-- `path <session>`: print the `summary.md` path.
-- `path <session> --dir`: print the session directory.
-- `path <session> --metadata`: print `metadata.json`.
-- `path <session> --transcript`: print `transcript.jsonl`.
-- `--json`: print machine-readable output.
-
-When a human session id repeats across days, use the date-qualified selector
-from `list`, for example `openclaw meeting-notes show 2026-05-22/standup`.
-Default session ids include a timestamp and random suffix; configure fixed
-session ids only when they are unique within the day.
-
-## Output
-
-`list` prints one session per line:
-
-```text
-2026-05-22/standup  2026-05-22T09:00:00.000Z  Weekly standup  /Users/alex/.openclaw/meeting-notes/2026-05-22/standup/summary.md
-```
-
-The output is tab-separated. The columns are selector, start time, title, and
-summary path. The selector is the safest value to pass back to `show` or `path`.
-
-`list --json` prints objects with:
-
-- `sessionId`
-- `selector`
-- `date`
-- `title`
-- `startedAt`
-- `stoppedAt`
-- `source`
-- `path`
-- `summaryPath`
-- `hasSummary`
-
-`show --json` returns the stored session metadata, selector, session directory,
-summary path, and summary Markdown text. `path --json` returns the selected path
-and whether that file exists.
-
-## Many meetings per day
-
-Meeting Notes groups sessions by date, then by session id. Ten meetings on one
-day become ten sibling folders:
-
-```text
-~/.openclaw/meeting-notes/2026-05-22/
-  meeting-2026-05-22T09-00-00-000Z-a1b2c3d4/
-  meeting-2026-05-22T10-30-00-000Z-b2c3d4e5/
-  standup/
-```
-
-Use default generated ids for most automation. Use a fixed id such as `standup`
-only when the same id will not be used twice on the same date.
-
-## Missing summaries
-
-Live sessions write `summary.md` when the session stops. Imported transcripts
-write `summary.md` immediately after import. A session can still appear in
-`list` without a summary when capture is active, a provider failed during stop,
-or metadata was written before any utterances arrived.
-
-Use `path <session> --transcript` to inspect the append-only transcript, and use
-the `meeting_notes` tool action `summarize` to regenerate the Markdown summary.
-
-See [Meeting Notes](/plugins/meeting-notes) for configuration, auto-start, and
-source-provider details.
 
 
 
@@ -30086,7 +29965,7 @@ rewriting files.
 
 ```bash
 openclaw plugins search "calendar"                   # search ClawHub plugins
-openclaw plugins install <package>                      # npm by default
+openclaw plugins install <package>                      # source auto-detection
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install npm:<package>                  # npm only
 openclaw plugins install npm-pack:<path.tgz>            # local npm pack through npm install semantics
@@ -30106,7 +29985,7 @@ sources with guarded environment variables. See
 [Plugin install overrides](/plugins/install-overrides).
 
 <Warning>
-Bare package names install from npm by default during the launch cutover. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
+Bare package names install from npm by default during the launch cutover, unless they match an official plugin id. Raw `@openclaw/*` package specs that match bundled plugins use the bundled copy that shipped with the current OpenClaw build. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
 `plugins search` queries ClawHub for installable plugin packages and prints
@@ -30154,7 +30033,9 @@ is available, then fall back to `latest`.
 
     Npm specs are **registry-only** (package name + optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run project-local with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm roots inherit OpenClaw's package-level npm `overrides`, so host security pins apply to hoisted plugin dependencies too.
 
-    Use `npm:<package>` when you want to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover.
+    Use `npm:<package>` when you want to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover unless they match an official plugin id.
+
+    Raw `@openclaw/*` package specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin`.
 
     Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` are stable releases for this check. If npm resolves either of those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
 
@@ -30190,7 +30071,7 @@ openclaw plugins install clawhub:openclaw-codex-app-server
 openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
 ```
 
-Bare npm-safe plugin specs install from npm by default during the launch cutover:
+Bare npm-safe plugin specs install from npm by default during the launch cutover unless they match an official plugin id:
 
 ```bash
 openclaw plugins install openclaw-codex-app-server
@@ -30200,6 +30081,7 @@ Use `npm:` to make npm-only resolution explicit:
 
 ```bash
 openclaw plugins install npm:openclaw-codex-app-server
+openclaw plugins install npm:@openclaw/discord@2026.5.20
 openclaw plugins install npm:@scope/plugin-name@1.0.1
 ```
 
@@ -32520,6 +32402,162 @@ Inspects or cancels durable Task Flow state under the task ledger.
 
 
 
+# Section: cli/transcripts.md
+
+---
+summary: "CLI reference for `openclaw transcripts` (list, show, and locate stored transcripts)"
+read_when:
+  - You want to read stored transcript summaries from the terminal
+  - You need the path to a transcripts markdown summary
+  - You are debugging the core transcripts storage layout
+title: "Transcripts CLI"
+---
+
+# `openclaw transcripts`
+
+Inspect transcripts written by OpenClaw's core `transcripts` tool. This CLI is
+read-only; capture, import, and summarization are owned by the agent tool and
+configured auto-start sources.
+
+Use the CLI when you want to find yesterday's notes, open the Markdown file in
+an editor, feed a transcript to another tool, or debug where a session landed on
+disk. It does not start or stop capture.
+
+Artifacts live under the OpenClaw state directory:
+
+```text
+$OPENCLAW_STATE_DIR/transcripts/YYYY-MM-DD/<session>/
+  metadata.json
+  transcript.jsonl
+  summary.json
+  summary.md
+```
+
+The default state directory is `~/.openclaw`; set `OPENCLAW_STATE_DIR` to use a
+different one. The date directory comes from the session start time, and the
+session directory is a safe filesystem segment derived from the session id.
+
+## Commands
+
+```bash
+openclaw transcripts list
+openclaw transcripts show <session>
+openclaw transcripts show YYYY-MM-DD/<session>
+openclaw transcripts path <session>
+openclaw transcripts path YYYY-MM-DD/<session>
+openclaw transcripts path <session> --dir
+openclaw transcripts path <session> --metadata
+openclaw transcripts path <session> --transcript
+openclaw transcripts list --json
+openclaw transcripts show <session> --json
+openclaw transcripts path <session> --json
+```
+
+- `list`: list stored sessions, date-qualified selector, start time, title, and `summary.md` path.
+- `show <session>`: print the stored `summary.md`.
+- `path <session>`: print the `summary.md` path.
+- `path <session> --dir`: print the session directory.
+- `path <session> --metadata`: print `metadata.json`.
+- `path <session> --transcript`: print `transcript.jsonl`.
+- `--json`: print machine-readable output.
+
+When a human session id repeats across days, use the date-qualified selector
+from `list`, for example `openclaw transcripts show 2026-05-22/standup`.
+Default session ids include a timestamp and random suffix; configure fixed
+session ids only when they are unique within the day.
+
+## Output
+
+`list` prints one session per line:
+
+```text
+2026-05-22/standup  2026-05-22T09:00:00.000Z  Weekly standup  /Users/alex/.openclaw/transcripts/2026-05-22/standup/summary.md
+```
+
+The output is tab-separated. The columns are selector, start time, title, and
+summary path. The selector is the safest value to pass back to `show` or `path`.
+
+`list --json` prints objects with:
+
+- `sessionId`
+- `selector`
+- `date`
+- `title`
+- `startedAt`
+- `stoppedAt`
+- `source`
+- `path`
+- `summaryPath`
+- `hasSummary`
+
+`show --json` returns the stored session metadata, selector, session directory,
+summary path, and summary Markdown text. `path --json` returns the selected path
+and whether that file exists.
+
+## Many meetings per day
+
+Transcripts groups sessions by date, then by session id. Ten meetings on one
+day become ten sibling folders:
+
+```text
+~/.openclaw/transcripts/2026-05-22/
+  transcript-2026-05-22T09-00-00-000Z-a1b2c3d4/
+  transcript-2026-05-22T10-30-00-000Z-b2c3d4e5/
+  standup/
+```
+
+Use default generated ids for most automation. Use a fixed id such as `standup`
+only when the same id will not be used twice on the same date.
+
+## Missing summaries
+
+Live sessions write `summary.md` when the session stops. Imported transcripts
+write `summary.md` immediately after import. A session can still appear in
+`list` without a summary when capture is active, a provider failed during stop,
+or metadata was written before any utterances arrived.
+
+Use `path <session> --transcript` to inspect the append-only transcript, and use
+the `transcripts` tool action `summarize` to regenerate the Markdown summary.
+
+## Configuration
+
+Transcript capture is opt-in because live sources can join and record meeting
+audio. Enable the tool with top-level `transcripts.enabled`:
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "maxUtterances": 2000
+  }
+}
+```
+
+Configure auto-start sources with `transcripts.autoStart` in `openclaw.json`.
+Each entry is enabled by being present; omit an entry to disable that source.
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "autoStart": [
+      {
+        "providerId": "discord-voice",
+        "guildId": "1234567890",
+        "channelId": "2345678901"
+      },
+      {
+        "providerId": "slack-huddle",
+        "accountId": "workspace",
+        "channelId": "C123"
+      }
+    ]
+  }
+}
+```
+
+
+
 # Section: cli/tui.md
 
 ---
@@ -34533,7 +34571,7 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
 - Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
-- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work. Stale session bookkeeping releases the affected session lane immediately; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 - Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but it is still bounded by any lower `agents.defaults.timeoutSeconds` or run-specific timeout because those control the whole agent run. Otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered runs with no explicit model or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 - Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout, and keep the agent/runtime timeout at least as high when the model request needs to run longer.
 
@@ -39377,12 +39415,12 @@ openclaw memory index --force   # Rebuild the index
 summary: "Design plan for the unified durable message receive, send, preview, edit, and streaming lifecycle"
 read_when:
   - Refactoring channel send or receive behavior
-  - Changing channel turn, reply dispatch, outbound queue, preview streaming, or plugin SDK message APIs
+  - Changing channel inbound, reply dispatch, outbound queue, preview streaming, or plugin SDK message APIs
   - Designing a new channel plugin that needs durable sends, receipts, previews, edits, or retries
 title: "Message lifecycle refactor"
 ---
 
-This page is the target design for replacing scattered channel turn, reply
+This page is the target design for replacing scattered channel inbound, reply
 dispatch, preview streaming, and outbound delivery helpers with one durable
 message lifecycle.
 
@@ -39395,14 +39433,14 @@ The short version:
   commit, fail.
 - Receiving must be context based too: normalize, dedupe, route, record,
   dispatch, platform ack, fail.
-- The public plugin SDK should collapse to one small channel-message surface.
+- The public plugin SDK should collapse to one small channel-outbound surface.
 
 ## Problems
 
 The current channel stack grew from several valid local needs:
 
-- Simple inbound adapters use `runtime.channel.turn.run`.
-- Rich adapters use `runtime.channel.turn.runPrepared`.
+- Simple inbound adapters use `runtime.channel.inbound.run`.
+- Rich adapters use `runtime.channel.inbound.runPreparedReply`.
 - Legacy helpers use `dispatchInboundReplyWithBase`,
   `recordInboundSessionAndDispatchReply`, reply payload helpers, reply chunking,
   reply references, and outbound runtime helpers.
@@ -39442,7 +39480,7 @@ non-durable policy.
 - Shared preview, edit, stream, finalization, retry, recovery, and receipt
   semantics.
 - A small plugin SDK surface that third-party plugins can learn and maintain.
-- Compatibility for existing `channel.turn` callers during migration.
+- Compatibility for existing inbound reply compatibility callers during migration.
 - Clear extension points for new channel capabilities.
 - No platform-specific branches in core.
 - No token-delta channel messages. Channel streaming remains message preview,
@@ -39452,7 +39490,7 @@ non-durable policy.
 
 ## Non goals
 
-- Do not remove `runtime.channel.turn.*` in the first phase.
+- Do not force every existing channel onto durable message delivery in the first phase.
 - Do not force every channel into the same native transport behavior.
 - Do not teach core Telegram topics, Slack native streams, Matrix redactions,
   Feishu cards, QQ voice, or Teams activities.
@@ -39932,7 +39970,7 @@ This should cover current behavior:
 The public SDK target should be one subpath:
 
 ```typescript
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 ```
 
 Target shape:
@@ -40045,22 +40083,22 @@ should not need them.
 
 Bundled plugins may keep internal helper imports through reserved runtime
 subpaths while migrating. Public docs should steer plugin authors to
-`plugin-sdk/channel-message` once it exists.
+`plugin-sdk/channel-outbound` once it exists.
 
-## Relationship to channel turn
+## Relationship to channel inbound
 
-`runtime.channel.turn.*` should stay during migration.
+`runtime.channel.inbound.*` is the runtime bridge during migration.
 
 It should become a compatibility adapter:
 
 ```text
-channel.turn.run
+channel.inbound.run
   -> messages.receive context
   -> session dispatch
   -> messages.send context for visible output
 ```
 
-`channel.turn.runPrepared` should also remain initially:
+`channel.inbound.runPreparedReply` should also remain initially:
 
 ```text
 channel-owned dispatcher
@@ -40069,10 +40107,8 @@ channel-owned dispatcher
   -> messages.send for final delivery
 ```
 
-After all bundled plugins and known third-party compatibility paths are bridged,
-`channel.turn` can be deprecated. It should not be removed until there is a
-published SDK migration path and contract tests proving old plugins still work
-or fail with a clear version error.
+The old `channel.turn` runtime surface remains a deprecated alias only. New code
+uses inbound/message nouns.
 
 ## Compatibility guardrails
 
@@ -40081,10 +40117,10 @@ existing delivery callback has side effects beyond "send this payload".
 
 Legacy entry points are non-durable by default:
 
-- `channel.turn.run` and `dispatchAssembledChannelTurn` use the channel's
+- `channel.inbound.run` and `dispatchChannelInboundReply` use the channel's
   delivery callback unless that channel explicitly supplies an audited durable
   policy/options object.
-- `channel.turn.runPrepared` stays channel-owned until the prepared dispatcher
+- `channel.inbound.runPreparedReply` stays channel-owned until the prepared dispatcher
   explicitly calls the send context.
 - Public compatibility helpers such as `recordInboundSessionAndDispatchReply`,
   `dispatchInboundReplyWithBase`, and direct-DM helpers never inject generic
@@ -40277,7 +40313,7 @@ Core policy:
 - Make `deliverOutboundPayloads` call `messages.send`.
 - Make final-send durability the default and fail closed when the durable intent
   cannot be written in the new message lifecycle, after the adapter declares
-  replay safety. Existing channel-turn and SDK compatibility paths remain
+  replay safety. Existing inbound runner and SDK compatibility paths remain
   direct-send by default during this phase.
 - Record receipts consistently.
 - Return receipts and delivery results to the original dispatcher caller instead
@@ -40285,9 +40321,9 @@ Core policy:
 - Persist message origin through durable send intents so recovery, replay, and
   chunked sends preserve OpenClaw operational provenance.
 
-### Phase 3: Channel Turn Bridge
+### Phase 3: Channel Inbound Bridge
 
-- Reimplement `channel.turn.run` and `dispatchAssembledChannelTurn` on top of
+- Reimplement `channel.inbound.run` and `dispatchChannelInboundReply` on top of
   `messages.receive` and `messages.send`.
 - Keep current fact types stable.
 - Keep legacy behavior by default. An assembled-turn channel becomes durable
@@ -40325,12 +40361,12 @@ Core policy:
 
 ### Phase 6: Public SDK
 
-- Add `openclaw/plugin-sdk/channel-message`.
+- Add `openclaw/plugin-sdk/channel-outbound`.
 - Document it as the preferred channel plugin API.
 - Update package exports, entrypoint inventory, generated API baselines, and
   plugin SDK docs.
 - Include `MessageOrigin`, origin encode/decode hooks, and the shared
-  `shouldDropOpenClawEcho` predicate in the channel-message SDK surface.
+  `shouldDropOpenClawEcho` predicate in the channel-outbound SDK surface.
 - Keep compatibility wrappers for old subpaths.
 - Mark reply-named SDK helpers as deprecated in docs after bundled plugins are
   migrated.
@@ -40351,9 +40387,9 @@ Move all non-reply outbound producers onto `messages.send`:
 This is where the model stops being "agent replies" and becomes "OpenClaw sends
 messages".
 
-### Phase 8: Deprecate Turn
+### Phase 8: Remove Turn-Named Compatibility
 
-- Keep `channel.turn` as a wrapper for at least one compatibility window.
+- Keep inbound/message-named wrappers as the compatibility window.
 - Publish migration notes.
 - Run plugin SDK compatibility tests against old imports.
 - Remove or hide old internal helpers only after no bundled plugin needs them
@@ -40377,10 +40413,10 @@ Unit tests:
 
 Integration tests:
 
-- `channel.turn.run` simple adapter still records and sends.
+- `channel.inbound.run` simple adapter still records and sends.
 - Legacy assembled-event delivery does not become durable unless the channel
   explicitly opts in.
-- `channel.turn.runPrepared` bridge still records and finalizes.
+- `channel.inbound.runPreparedReply` bridge still records and finalizes.
 - Public compatibility helpers call caller-owned delivery callbacks by default
   and do not generic-send before those callbacks.
 - Durable fallback delivery replays the whole projected payload array after
@@ -40450,7 +40486,7 @@ Validation:
 - Whether durable live preview state should be stored in the same queue record
   as the final send intent or in a sibling live-state store.
 - How long compatibility wrappers stay documented after
-  `plugin-sdk/channel-message` ships.
+  `plugin-sdk/channel-outbound` ships.
 - Whether third-party plugins should implement receive adapters directly or only
   provide normalize/send/live hooks through `defineChannelMessageAdapter`.
 - Which receipt fields are safe to expose in public SDK versus internal runtime
@@ -40469,7 +40505,7 @@ Validation:
   documented compatibility wrapper.
 - Every preview/edit/stream channel uses `messages.live` for draft state and
   finalization.
-- `channel.turn` is only a wrapper.
+- `channel.inbound` is only a wrapper.
 - Reply-named SDK helpers are compatibility exports, not the recommended path.
 - Durable recovery can replay pending final sends after restart without losing
   the final response or duplicating already committed sends; sends whose
@@ -40477,7 +40513,7 @@ Validation:
   at-least-once for that adapter.
 - Durable final sends fail closed when the durable intent cannot be written,
   unless a caller explicitly selected a documented non-durable mode.
-- Legacy channel-turn and SDK compatibility helpers default to direct
+- Legacy SDK compatibility helpers default to direct
   channel-owned delivery; generic durable send is explicit opt-in only.
 - Receipts preserve all platform message ids for multi-part deliveries and a
   primary id for threading/edit convenience.
@@ -40500,7 +40536,7 @@ Validation:
 - [Streaming and chunking](/concepts/streaming)
 - [Progress drafts](/concepts/progress-drafts)
 - [Retry policy](/concepts/retry)
-- [Channel turn kernel](/plugins/sdk-channel-turn)
+- [Channel inbound API](/plugins/sdk-channel-inbound)
 
 
 
@@ -41413,7 +41449,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | BytePlus                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`               |
 | Cerebras                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                        |
 | Cloudflare AI Gateway   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                             |
-| DeepInfra               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V3.2`         |
+| DeepInfra               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`     |
 | DeepSeek                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                  |
 | GitHub Copilot          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                             |
 | Groq                    | `groq`                           | `GROQ_API_KEY`                                               | -                                             |
@@ -44167,8 +44203,11 @@ That script starts a local OTLP/HTTP receiver, runs the `otel-trace-smoke` QA
 scenario with the `diagnostics-otel` plugin enabled, then asserts traces,
 metrics, and logs are exported. It decodes the exported protobuf trace spans
 and checks the release-critical shape:
-`openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
-`openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
+`openclaw.run`, `openclaw.harness.run`, a latest GenAI semantic-convention
+model-call span, `openclaw.context.assembled`, and `openclaw.message.delivery`
+must be present. The smoke forces
+`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, so the model-call
+span must use the `{gen_ai.operation.name} {gen_ai.request.model}` name;
 model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
 `openclaw.content.*` attributes must stay out of the trace. The raw OTLP
 payloads must not contain the prompt sentinel, response sentinel, or QA session
@@ -45342,7 +45381,7 @@ keys.
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 
@@ -45606,10 +45645,12 @@ effective tool list.
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`), exact `label`, exact `agentId`, search text, or recency
 (`activeMinutes`). When you need mailbox-style triage, it can also ask for a
-visibility-scoped derived title, a last-message preview snippet, or bounded
-recent messages on each row. Derived titles and previews are produced only for
-sessions the caller can already see under the configured session tool
-visibility policy, so unrelated sessions stay hidden.
+visibility-scoped derived title, a last-message preview snippet, or bounded recent
+messages on each row. Derived titles and previews are produced only for sessions
+the caller can already see under the configured session tool visibility policy, so
+unrelated sessions stay hidden. When visibility is restricted, `sessions_list`
+returns optional `visibility` metadata showing the effective mode and a warning that
+results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
@@ -47284,6 +47325,50 @@ Disable all flags:
 OPENCLAW_DIAGNOSTICS=0
 ```
 
+`OPENCLAW_DIAGNOSTICS=0` is a process-level disable override: it disables
+flags from both env and config for that process.
+
+## Profiling flags
+
+Profiler flags enable targeted timing spans without raising global logging
+levels. They are disabled by default.
+
+Enable all profiler-gated spans for one gateway run:
+
+```bash
+OPENCLAW_DIAGNOSTICS=profiler openclaw gateway run
+```
+
+Enable only reply-dispatch profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=reply.profiler openclaw gateway run
+```
+
+Enable only Codex app-server startup/tool/thread profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=codex.profiler openclaw gateway run
+```
+
+Enable profiler flags from config:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["reply.profiler", "codex.profiler"]
+  }
+}
+```
+
+Restart the gateway after changing config flags. To disable a profiler flag,
+remove it from `diagnostics.flags` and restart. To temporarily disable every
+diagnostics flag even when config enables profiler flags, start the process with:
+
+```bash
+OPENCLAW_DIAGNOSTICS=0 openclaw gateway run
+```
+
 ## Timeline artifacts
 
 The `timeline` flag writes structured startup and runtime timing events for
@@ -48361,13 +48446,14 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 a new policy.
 </Note>
 
-The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
-two ways: the compact OpenClaw skills catalog in the appended system prompt, and
-a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
-only the eligible skills for that agent/session, so Claude Code's native skill
-resolver sees the same filtered set that OpenClaw would otherwise advertise in
-the prompt. Skill env/API key overrides are still applied by OpenClaw to the
-child process environment for the run.
+The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
 to the existing exec policy instead of adding Claude-specific policy config.
@@ -48598,6 +48684,22 @@ reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10
 minutes; set `0` to disable). One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
+
+## Reseed history cap
+
+When a fresh CLI session is seeded from a prior OpenClaw transcript (for
+example after a `session_expired` retry), the rendered
+`<conversation_history>` block is capped to keep reseed prompts from
+exploding. The default is `12288` characters (about 3000 tokens).
+
+Claude CLI backends automatically use a larger cap derived from the resolved
+Claude context tier. Standard 200K-token Claude runs keep a larger transcript
+slice, and 1M-token Claude runs keep a larger slice again, while other CLI
+backends keep the conservative default.
+
+- The cap only governs the reseed prompt's prior-history block. Live-session
+  output limits are tuned separately under `reliability.outputLimits`
+  (see [Sessions](#sessions)).
 
 ## Limitations
 
@@ -48862,7 +48964,6 @@ Shared defaults for bounded runtime context surfaces.
       contextLimits: {
         memoryGetMaxChars: 12000,
         memoryGetDefaultLines: 120,
-        toolResultMaxChars: 16000,
         postCompactionMaxChars: 1800,
       },
     },
@@ -48874,8 +48975,12 @@ Shared defaults for bounded runtime context surfaces.
   metadata and continuation notice are added.
 - `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
   omitted.
-- `toolResultMaxChars`: live tool-result cap used for persisted results and
-  overflow recovery.
+- `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
+  results and overflow recovery. Leave unset for the model-context auto cap:
+  `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
+  chars at 200K+ tokens. The effective cap is still limited to about 30% of the
+  model context window. `openclaw doctor --deep` prints the effective cap, and
+  doctor warns only when an explicit override is stale or has no effect.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -48890,7 +48995,6 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: {
         memoryGetMaxChars: 12000,
-        toolResultMaxChars: 16000,
       },
     },
     list: [
@@ -48898,7 +49002,7 @@ from `agents.defaults.contextLimits`.
         id: "tiny-local",
         contextLimits: {
           memoryGetMaxChars: 6000,
-          toolResultMaxChars: 8000,
+          toolResultMaxChars: 8000, // advanced ceiling for this agent
         },
       },
     ],
@@ -50956,7 +51060,7 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Normal group and channel requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Some harnesses, including Codex, default direct/source chats to message-tool delivery so visible output only posts after the agent calls `message(action=send)`. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata.
+Visible replies are controlled separately. Normal group, channel, and internal WebChat direct requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Opt into `messages.visibleReplies: "message_tool"` or `messages.groupChat.visibleReplies: "message_tool"` when visible output should only post after the agent calls `message(action=send)`. If the model returns final text without calling the message tool in an opted-in tool-only mode, that final text stays private and the gateway verbose log records suppressed payload metadata.
 
 Tool-only visible replies require a model/runtime that reliably calls tools, and are recommended for shared ambient rooms on latest-generation models such as GPT 5.5. If
 the session log shows assistant text with `didSendViaMessagingTool: false`, the
@@ -51002,7 +51106,7 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 
 `messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
 
-`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default. The Codex harness defaults direct/source chats to message-tool delivery; set `messages.visibleReplies: "automatic"` to use automatic final delivery. Channel allowlists and mention gating still decide whether an event is processed.
+`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default, but internal WebChat direct turns use automatic final delivery for Pi/Codex prompt parity. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. Channel allowlists and mention gating still decide whether an event is processed.
 
 #### DM history limits
 
@@ -51475,6 +51579,9 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+    - When not `all`, `sessions_list` includes a compact `visibility` field
+      describing the effective mode and a warning that some sessions may be
+      omitted outside the current scope.
 
   </Accordion>
 </AccordionGroup>
@@ -53311,8 +53418,8 @@ Validation and safety notes:
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
-- `agentId` routes to a specific agent; unknown IDs fall back to default.
-- `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `agentId` routes to a specific agent; unknown IDs fall back to the default agent.
+- `allowedAgentIds`: restricts effective agent routing, including the default-agent path when `agentId` is omitted (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
@@ -58914,8 +59021,8 @@ message bodies are also approved for export.
 - `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or `openclaw.channel=heartbeat`)
 - `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
+- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
 - `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
@@ -58940,8 +59047,9 @@ OpenClaw classifies sessions by the work it can still observe:
   turns behind the lane can resume. When unset, the abort threshold defaults to
   the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
-- `session.stuck`: stale session bookkeeping with no active work. This releases
-  the affected session lane immediately.
+- `session.stuck`: stale session bookkeeping with no active work, or an idle
+  queued session with stale ownerless model/tool activity. This releases the
+  affected session lane immediately after recovery gates pass.
 
 Recovery emits structured `session.recovery.requested` and
 `session.recovery.completed` events. Diagnostic session state is marked idle
@@ -72176,6 +72284,10 @@ Native dependency policy:
       processes by default to reduce V8 compile churn during big local runs.
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
       behavior.
+    - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs after
+      5 minutes with no stdout or stderr output. Set
+      `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for an
+      intentionally silent investigation.
 
   </Accordion>
 
@@ -72365,6 +72477,7 @@ These Docker runners split into two buckets:
 - Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if pre-dispatch startup imports package dependencies such as Commander, prompt UI, undici, or logging before command dispatch; it also keeps the bundled gateway run chunk under budget and rejects static imports of known cold gateway paths. Packaged CLI smoke also covers root help, onboard help, doctor help, status, config schema, and a model-list command.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:release-user-journey`, `test:docker:release-typed-onboarding`, `test:docker:release-media-memory`, `test:docker:release-upgrade-user-journey`, `test:docker:release-plugin-marketplace`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
+- Docker/Bash E2E lanes that install the packed OpenClaw tarball through `scripts/lib/openclaw-e2e-instance.sh` cap `npm install` at `OPENCLAW_E2E_NPM_INSTALL_TIMEOUT` (default `600s`; set `0` to disable the wrapper for debugging).
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
@@ -73825,7 +73938,10 @@ install method:
 - **`stable`** (package installs): updates via npm dist-tag `latest`.
 - **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
   `latest` when `beta` is missing or older than the current stable tag.
-- **`stable`** (git installs): checks out the latest stable git tag.
+- **`stable`** (git installs): checks out the latest stable git tag, excluding
+  semver prerelease tags such as `-alpha.N`, `-beta.N`, `-rc.N`, `-dev.N`,
+  `-next.N`, `-preview.N`, `-canary.N`, `-nightly.N`, and other prerelease
+  suffixes.
 - **`beta`** (git installs): prefers the latest beta git tag, but falls back to
   the latest stable git tag when beta is missing or older.
 - **`dev`**: ensures a git checkout (default `~/openclaw`, or
@@ -73909,9 +74025,11 @@ source (config, git tag, git branch, or default).
 ## Tagging best practices
 
 - Tag releases you want git checkouts to land on (`vYYYY.M.D` for stable,
-  `vYYYY.M.D-beta.N` for beta).
+  `vYYYY.M.D-beta.N` for beta; named semver prerelease suffixes such as
+  `-alpha.N`, `-rc.N`, and `-next.N` are not stable targets).
+- Legacy numeric stable tags such as `vYYYY.M.D-1` and `v1.0.1-1` are still
+  recognized as stable git tags for compatibility.
 - `vYYYY.M.D.beta.N` is also recognized for compatibility, but prefer `-beta.N`.
-- Legacy `vYYYY.M.D-<patch>` tags are still recognized as stable (non-beta).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable
@@ -76677,14 +76795,14 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
 <Steps>
   <Step title="Detect OS">
-    Supports macOS and Linux (including WSL). If macOS is detected, installs Homebrew if missing.
+    Supports macOS and Linux (including WSL).
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.19+`, for compatibility.
+    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. OpenClaw still supports Node 22 LTS, currently `22.19+`, for compatibility.
     On Alpine/musl Linux, the installer uses apk packages instead of NodeSource; the configured Alpine repositories must provide Node `22.19+` (Alpine 3.21 or newer at the time of writing).
   </Step>
   <Step title="Ensure Git">
-    Installs Git if missing using the detected package manager, including apk on Alpine.
+    Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install
@@ -86440,8 +86558,8 @@ barrel when authoring new plugins. Core subpaths:
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
-`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
-`channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
+`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-outbound`,
+`command-auth`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
@@ -86454,7 +86572,9 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/config-runtime`,
+`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
+small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
+`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
 and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
 older plugins. New code should import narrower generic primitives instead.
 </Info>
@@ -87017,7 +87137,7 @@ Capabilities are the public **native plugin** model inside OpenClaw. Every nativ
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |
 | Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `openai`, `google`                   |
-| Meeting notes source   | `api.registerMeetingNotesSourceProvider(...)`    | `discord`, `meeting-notes`           |
+| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`                            |
 | Image generation       | `api.registerImageGenerationProvider(...)`       | `openai`, `google`, `fal`, `minimax` |
 | Music generation       | `api.registerMusicGenerationProvider(...)`       | `google`, `minimax`                  |
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | `qwen`                               |
@@ -87664,12 +87784,81 @@ local proof.
   </Step>
 </Steps>
 
-<a id="registering-agent-tools"></a>
+## Plugin capabilities
 
-## Registering tools
+A single plugin can register any number of capabilities via the `api` object:
 
-Tools can be required or optional. Required tools are always available when the
-plugin is enabled. Optional tools require user opt-in.
+| Capability             | Registration method                              | Detailed guide                                                                  |
+| ---------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Text inference (LLM)   | `api.registerProvider(...)`                      | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | [CLI Backend Plugins](/plugins/cli-backend-plugins)                             |
+| Channel / messaging    | `api.registerChannel(...)`                       | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
+| Speech (TTS/STT)       | `api.registerSpeechProvider(...)`                | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Image generation       | `api.registerImageGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Music generation       | `api.registerMusicGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Tool-result middleware | `api.registerAgentToolResultMiddleware(...)`     | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
+| Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
+| Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
+| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
+| CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
+
+For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
+need async tool-result rewriting before the model sees the output. Declare the
+targeted runtimes in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex"]`. This is a trusted bundled-plugin seam; external
+plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
+explicit trust policy for this capability.
+
+If your plugin registers custom gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
+`operator.admin`, even if a plugin asks for a narrower scope.
+
+`openclaw/plugin-sdk/gateway-method-runtime` is a reserved control-plane bridge
+for plugin HTTP routes that declare
+`contracts.gatewayMethodDispatch: ["authenticated-request"]`. It is an
+intentional-use guard for reviewed native plugins, not a sandbox boundary.
+
+Hook guard semantics to keep in mind:
+
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: false }` is treated as no decision.
+- `before_tool_call`: `{ requireApproval: { ... } }` pauses agent execution and prompts the user for approval via the exec approval overlay, native channel approval clients, or the `/approve` command on any channel.
+- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_install`: `{ block: false }` is treated as no decision.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
+- `message_sending`: `{ cancel: false }` is treated as no decision.
+- `message_received`: prefer the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
+- `message_sending`: prefer typed `replyToId` / `threadId` routing fields over channel-specific metadata keys.
+
+The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
+
+If custom approval plumbing needs to detect that same bounded fallback case,
+prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
+instead of matching approval-expiry strings manually.
+
+See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
+
+## Registering agent tools
+
+Tools are typed functions the LLM can call. They can be required (always
+available) or optional (user opt-in):
+
+For simple plugins that only own a fixed set of tools, prefer
+[`defineToolPlugin`](/plugins/tool-plugins). It generates manifest metadata and
+keeps `contracts.tools` aligned. Use the lower-level `api.registerTool(...)`
+surface when the plugin also owns channels, providers, hooks, services,
+commands, or fully dynamic tool registration.
 
 ```typescript
 register(api) {
@@ -89088,7 +89277,7 @@ available timeout in this order:
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
-- The 30 second dynamic-tool default.
+- The 90 second dynamic-tool default.
 
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex
@@ -89131,7 +89320,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.133.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.134.0`. A `model/list` probe
 against that bundled app-server returned:
 
 | Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
@@ -89284,11 +89473,12 @@ newly selected model.
 ## Visible replies and heartbeats
 
 When a direct/source chat turn runs through the Codex harness, visible replies
-default to the message tool: final assistant text stays private unless the
-agent calls `message(action="send")`. This matches GPT models well because they
-can decide whether source-channel output is useful. Set
-`messages.visibleReplies: "automatic"` to restore the old mode where final
-assistant text posts automatically.
+default to automatic final assistant delivery for internal WebChat surfaces.
+This keeps Codex aligned with the Pi harness prompt contract: agents reply
+normally, and OpenClaw posts the final text to the source conversation. Set
+`messages.visibleReplies: "message_tool"` when a direct/source chat should
+intentionally keep final assistant text private unless the agent calls
+`message(action="send")`.
 
 Codex heartbeat turns also get `heartbeat_respond` in the searchable OpenClaw
 tool catalog by default, so the agent can record whether the wake should stay
@@ -90037,7 +90227,7 @@ Supported `appServer` fields:
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                               |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
+`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
 OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
 or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
@@ -92907,6 +93097,22 @@ type BeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    actions?: Array<
+      | {
+          kind: "decision";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          decision: "allow-once" | "allow-always" | "deny";
+          commandTemplate: string;
+        }
+      | {
+          kind: "command";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          commandTemplate: string;
+        }
+    >;
+    keepPendingWithoutRoute?: boolean;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -92922,6 +93128,21 @@ Hook guard behavior for typed lifecycle hooks:
 - `params` rewrites the tool parameters for execution.
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. The `/approve` command can approve both exec and plugin approvals.
+- `allowedDecisions` limits the built-in `/approve` decisions. Omit it to offer
+  `allow-once`, `allow-always`, and `deny`.
+- `actions` customizes the commands shown with the approval. OpenClaw replaces
+  `{id}` in each `commandTemplate` with the generated approval id before storing
+  or rendering the request.
+- Use `kind: "decision"` plus `decision` when the action resolves the approval
+  through OpenClaw's approval system. Native clients can render those actions as
+  buttons with canonical OpenClaw approval callbacks. Decision actions must be
+  included in `allowedDecisions` when that field is present. Use
+  `kind: "command"` for plugin-owned commands that collect more context or
+  verify an external workflow before resolving the approval; native clients
+  should leave those as visible command text.
+- `keepPendingWithoutRoute: true` keeps the request pending when no approval
+  client or initiating-channel route can receive it. Use this only when your
+  plugin provides another documented command or UI path to resolve the request.
 - A lower-priority `block: true` can still block after a higher-priority hook
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,
@@ -94137,7 +94358,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                       |
 | `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                                                     |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                  |
-| `meetingNotesSourceProviders`    | `string[]` | Meeting-notes source provider ids this plugin owns.                                                 |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                    |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                     |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                     |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |
@@ -94860,370 +95081,6 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
     Plugin SDK reference and subpath imports.
   </Card>
 </CardGroup>
-
-
-
-# Section: plugins/meeting-notes.md
-
----
-summary: "Meeting Notes plugin: capture transcripts from Discord voice and imported meeting sources, then write summaries"
-read_when:
-  - You want OpenClaw to take meeting notes
-  - You are wiring Discord voice, Google Meet, Slack huddles, or another meeting source into notes
-  - You need the meeting_notes tool contract
-title: "Meeting Notes plugin"
----
-
-The Meeting Notes plugin is the generic notes layer for live calls and imported
-meeting transcripts. It owns transcript storage, summary rendering, and the
-`meeting_notes` tool. Channel plugins own capture, authentication, and
-platform-specific meeting joins.
-
-Use this page when you want OpenClaw to capture Discord voice notes today, when
-you want to import a transcript from another meeting system, or when you are
-building a Google Meet, Slack huddle, Zoom, or calendar-owned source provider.
-
-## Source model
-
-Meeting sources register `meetingNotesSourceProviders` through the plugin SDK.
-The first live provider is `discord-voice`; the built-in `manual-transcript`
-provider imports post-meeting transcripts.
-
-- `live-audio`: source joins or listens to a call and streams final utterances.
-- `live-caption`: source reads captions from a browser or meeting surface.
-- `posthoc-transcript`: source imports a transcript or notes artifact after the meeting.
-- `recording-stt`: source transcribes a recording before importing utterances.
-
-This keeps Discord, Google Meet, Slack huddles, and future meeting surfaces out
-of the notes engine. Each source supplies speaker-labeled utterances; Meeting
-Notes writes the artifacts and summary.
-
-## Install and enable
-
-Meeting Notes is an external source plugin in this repository. It is not part of
-the core OpenClaw npm package and becomes available only when the plugin is
-installed as a plugin or loaded from a source checkout that contains
-`extensions/meeting-notes`.
-
-Once the plugin is loaded, it is enabled by default unless one of these settings
-blocks it:
-
-- `plugins.enabled: false` disables all plugins.
-- `plugins.deny` contains `meeting-notes`.
-- `plugins.allow` is set and does not contain `meeting-notes`.
-- `plugins.entries.meeting-notes.enabled: false` disables this plugin entry.
-- `plugins.entries.meeting-notes.config.enabled: false` keeps the plugin loaded
-  but disables the `meeting_notes` tool and auto-start service.
-
-The normal user config file is `~/.openclaw/openclaw.json`. The `plugins`
-section controls plugin loading, and the nested `entries.<pluginId>.config`
-object is passed to that plugin as plugin-specific config. A separate
-`config: { ... }` block under `meeting-notes` is expected; it is how plugins
-receive their own options without adding core config keys.
-
-Use this shape when your config has a plugin allowlist:
-
-```json5
-{
-  plugins: {
-    allow: ["discord", "meeting-notes"],
-    entries: {
-      "meeting-notes": {
-        enabled: true,
-        config: {
-          enabled: true,
-          maxUtterances: 2000,
-          autoStart: [],
-        },
-      },
-    },
-  },
-}
-```
-
-Run a config check after editing:
-
-```bash
-openclaw config validate
-```
-
-Gateway config hot reload applies plugin allowlist and plugin-entry changes.
-Restart the Gateway if you are also changing the source plugin itself, installing
-new plugin files, or changing Discord voice credentials.
-
-## Configuration
-
-Meeting Notes has three plugin config fields:
-
-- `enabled`: `true` by default. Set `false` to leave the plugin installed but
-  disable the tool and auto-start service.
-- `maxUtterances`: `2000` by default. Summary generation reads only the newest
-  N utterances from `transcript.jsonl`; valid values are clamped to `1` through
-  `10000`.
-- `autoStart`: empty by default. Each entry starts a live notes source when the
-  Gateway starts or reloads the plugin.
-
-An `autoStart` entry accepts:
-
-- `providerId`: required. Use `discord-voice` for Discord voice.
-- `enabled`: optional, default `true`. Set `false` to keep an entry without
-  starting it.
-- `sessionId`: optional. If omitted, OpenClaw generates a timestamped id.
-- `title`: optional human-readable title for summaries and CLI output.
-- `accountId`: optional source account id when more than one account exists.
-- `guildId`: provider-specific Discord guild id.
-- `channelId`: provider-specific Discord voice channel id.
-- `meetingUrl`: provider-specific meeting URL for browser or calendar sources.
-
-Use `autoStart` when OpenClaw should begin notes capture automatically on
-gateway startup:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "meeting-notes": {
-        config: {
-          autoStart: [
-            {
-              providerId: "discord-voice",
-              guildId: "123",
-              channelId: "456",
-              title: "Weekly planning",
-            },
-          ],
-        },
-      },
-    },
-  },
-}
-```
-
-Auto-start retries startup failures up to 12 times with a five-second delay.
-This lets the notes service wait for channel plugins such as Discord to finish
-initializing. Sessions that were started by auto-start are stopped and summarized
-when the plugin service stops cleanly.
-
-Discord voice capture still needs normal Discord voice setup and permissions.
-See [Discord voice](/channels/discord#voice-mode).
-
-## Discord voice
-
-Discord is the first live source. The Discord plugin owns the voice connection,
-speaker detection, audio decoding, and transcription. Meeting Notes receives
-final speaker-labeled utterances and persists them.
-
-For Discord live capture:
-
-- Enable and configure the Discord plugin first.
-- Configure Discord voice mode so OpenClaw can join the target voice channel.
-- Use `providerId: "discord-voice"`.
-- Provide `guildId` and `channelId`.
-- Add `accountId` only when you run more than one Discord account.
-
-The transcription model is not chosen by Meeting Notes. In Discord `stt-tts`
-voice mode, STT uses `tools.media.audio`; `voice.model` controls the agent reply
-model, not transcription. In realtime voice modes, transcription follows the
-configured realtime provider and model. See [Discord voice](/channels/discord#voice-mode)
-for the current Discord voice model and provider knobs.
-
-## Google Meet, Slack huddles, and other sources
-
-Meeting Notes is intentionally source-neutral. Google Meet, Slack huddles, Zoom,
-calendar recordings, or browser caption capture should be separate source
-providers that register with the plugin SDK.
-
-Recommended source choices:
-
-- Google Meet live browser/caption support: implement a `live-caption` provider
-  that accepts `meetingUrl` and emits final caption utterances.
-- Google Meet recordings or downloaded transcripts: implement
-  `posthoc-transcript` or use `manual-transcript` until a provider exists.
-- Slack huddles today: import post-meeting huddle notes or transcript artifacts.
-  Slack does not expose a general bot-join live huddle audio API.
-- Slack huddles later: keep the Slack-owned source provider responsible for
-  Slack auth, artifact lookup, and transcript normalization.
-
-The notes engine should not contain platform joins, browser automation, Slack
-API polling, or Discord voice logic. Those belong to the owning source plugin.
-
-## Tool
-
-Use `meeting_notes` with an `action`:
-
-- `status`: list registered providers and active sessions.
-- `start`: start a live notes session.
-- `stop`: stop a live session and write `summary.md`.
-- `import`: import a transcript and write `summary.md`.
-- `summarize`: regenerate a summary for an existing session.
-
-Discord live notes require `providerId: "discord-voice"`, plus `guildId` and
-`channelId`. `accountId` is optional when only one Discord account is active.
-
-```json
-{
-  "action": "start",
-  "providerId": "discord-voice",
-  "guildId": "123",
-  "channelId": "456",
-  "title": "Weekly planning"
-}
-```
-
-Stop by session id:
-
-```json
-{
-  "action": "stop",
-  "sessionId": "meeting-2026-05-22T10-00-00-000Z-a1b2c3d4"
-}
-```
-
-Import a transcript:
-
-```json
-{
-  "action": "import",
-  "providerId": "manual-transcript",
-  "title": "Design review",
-  "transcript": "Alex: We decided to ship the Discord source first.\nSam: Action item: add Slack huddle import later."
-}
-```
-
-`manual-transcript` splits plain transcript text into utterances. Use it for
-copied Google Meet notes, Slack huddle summaries, calendar transcripts, or any
-source that already produced text.
-
-## Storage layout
-
-Artifacts are stored under the OpenClaw state directory:
-
-```text
-$OPENCLAW_STATE_DIR/meeting-notes/YYYY-MM-DD/<session>/
-  metadata.json
-  transcript.jsonl
-  summary.json
-  summary.md
-```
-
-If `OPENCLAW_STATE_DIR` is unset, the default state directory is
-`~/.openclaw`. A normal local install therefore writes notes under
-`~/.openclaw/meeting-notes/...`.
-
-Each file has one job:
-
-- `metadata.json`: session id, source provider, title, start time, stop time,
-  and provider metadata.
-- `transcript.jsonl`: append-only speaker utterances. Each line is one JSON
-  object with the utterance text and the session id.
-- `summary.json`: structured summary data used by tooling, including the
-  speaker-labeled transcript window used for the generated summary.
-- `summary.md`: human-readable notes for terminals, editors, and document
-  workflows, including a speaker-labeled transcript section.
-
-The date directory comes from the session start time, so multiple meetings per
-day stay grouped. If a human session id repeats across days, use the
-date-qualified selector from `openclaw meeting-notes list`, such as
-`2026-05-22/standup`.
-
-By default, OpenClaw generates timestamped session ids:
-
-```text
-meeting-2026-05-22T10-00-00-000Z-a1b2c3d4
-```
-
-That means ten meetings on the same day become ten sibling directories:
-
-```text
-~/.openclaw/meeting-notes/2026-05-22/
-  meeting-2026-05-22T09-00-00-000Z-a1b2c3d4/
-  meeting-2026-05-22T10-30-00-000Z-b2c3d4e5/
-  meeting-2026-05-22T13-00-00-000Z-c3d4e5f6/
-```
-
-Configure `sessionId` only when that id is unique for the day. Human ids such as
-`standup` are fine for one recurring meeting per day. If the same id appears on
-multiple days, use the date-qualified selector in the CLI.
-
-## CLI access
-
-Use the read-only CLI to find or print stored summaries:
-
-```bash
-openclaw meeting-notes list
-openclaw meeting-notes show <session>
-openclaw meeting-notes path <session>
-openclaw meeting-notes path <session> --transcript
-```
-
-See [Meeting Notes CLI](/cli/meeting-notes) for the full command reference.
-
-## Long meetings
-
-For long meetings, utterances are appended to `transcript.jsonl` as they arrive.
-Summary generation reads a bounded window controlled by
-`plugins.entries.meeting-notes.config.maxUtterances` (default: `2000`) so a
-multi-hour call does not require unbounded summary memory.
-
-This means the transcript can keep growing on disk, while summarization stays
-bounded. Increase `maxUtterances` when you need more of a multi-hour meeting in
-the generated summary and speaker-labeled transcript section. Decrease it when
-summaries are too slow or too large.
-
-Current summaries are generated when a session stops, after an import, or when
-the `summarize` action runs. They are not continuously rewritten for every
-utterance.
-
-## Troubleshooting
-
-### `meeting_notes` is missing
-
-Check that the plugin is installed or loaded from source, and that plugin
-loading does not exclude it:
-
-```bash
-openclaw config validate
-openclaw meeting-notes list
-```
-
-If `plugins.allow` is set, it must include `meeting-notes`. If `plugins.deny`
-contains `meeting-notes`, remove it.
-
-### Auto-start does not join Discord
-
-Confirm the `autoStart` entry uses `providerId: "discord-voice"` and includes
-both `guildId` and `channelId`. If you run multiple Discord accounts, include
-`accountId`. Also verify Discord voice works outside Meeting Notes by joining
-the same voice channel through the Discord voice commands.
-
-### Summary is missing
-
-Live sessions write `summary.md` when stopped. Stop the session with
-`meeting_notes` action `stop`, then inspect it:
-
-```bash
-openclaw meeting-notes list
-openclaw meeting-notes path <session>
-```
-
-Use `meeting_notes` action `summarize` to regenerate `summary.md` for an
-existing stored session.
-
-### Selector is ambiguous
-
-If you reused a human session id such as `standup`, use the date-qualified
-selector shown by `openclaw meeting-notes list`:
-
-```bash
-openclaw meeting-notes show 2026-05-22/standup
-```
-
-## Related
-
-- [Meeting Notes CLI](/cli/meeting-notes)
-- [Discord voice](/channels/discord#voice-mode)
-- [Plugin management](/tools/plugin)
-- [Plugin architecture](/plugins/architecture)
 
 
 
@@ -96955,7 +96812,7 @@ commands.
 | [diagnostics-otel](/plugins/reference/diagnostics-otel)             | OpenClaw diagnostics OpenTelemetry exporter.                                                                        | `@openclaw/diagnostics-otel`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-otel`             | plugin                                                                       |
 | [diagnostics-prometheus](/plugins/reference/diagnostics-prometheus) | OpenClaw diagnostics Prometheus exporter.                                                                           | `@openclaw/diagnostics-prometheus`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus` | plugin                                                                       |
 | [diffs](/plugins/reference/diffs)                                   | Read-only diff viewer and file renderer for agents.                                                                 | `@openclaw/diffs`<br />npm; ClawHub                                                              | contracts: tools; skills                                                     |
-| [discord](/plugins/reference/discord)                               | Adds the Discord channel surface for sending and receiving OpenClaw messages.                                       | `@openclaw/discord`<br />npm; ClawHub                                                            | channels: discord; contracts: meetingNotesSourceProviders                    |
+| [discord](/plugins/reference/discord)                               | Adds the Discord channel surface for sending and receiving OpenClaw messages.                                       | `@openclaw/discord`<br />npm; ClawHub                                                            | channels: discord; contracts: transcriptSourceProviders                      |
 | [feishu](/plugins/reference/feishu)                                 | Adds the Feishu channel surface for sending and receiving OpenClaw messages.                                        | `@openclaw/feishu`<br />npm; ClawHub                                                             | channels: feishu; contracts: tools; skills                                   |
 | [google-meet](/plugins/reference/google-meet)                       | Join Google Meet calls through Chrome or Twilio transports.                                                         | `@openclaw/google-meet`<br />npm; ClawHub                                                        | contracts: tools                                                             |
 | [googlechat](/plugins/reference/googlechat)                         | Adds the Google Chat channel surface for sending and receiving OpenClaw messages.                                   | `@openclaw/googlechat`<br />npm; ClawHub                                                         | channels: googlechat                                                         |
@@ -96979,12 +96836,11 @@ commands.
 
 ## Source checkout only
 
-| Plugin                                            | Description                                                                 | Distribution                                        | Surface                                       |
-| ------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------- |
-| [meeting-notes](/plugins/reference/meeting-notes) | Capture meeting transcripts from channel-owned sources and write summaries. | `@openclaw/meeting-notes`<br />source checkout only | contracts: meetingNotesSourceProviders, tools |
-| [qa-channel](/plugins/reference/qa-channel)       | Adds the QA Channel surface for sending and receiving OpenClaw messages.    | `@openclaw/qa-channel`<br />source checkout only    | channels: qa-channel                          |
-| [qa-lab](/plugins/reference/qa-lab)               | OpenClaw QA lab plugin with private debugger UI and scenario runner.        | `@openclaw/qa-lab`<br />source checkout only        | plugin                                        |
-| [qa-matrix](/plugins/reference/qa-matrix)         | Matrix QA transport runner and substrate.                                   | `@openclaw/qa-matrix`<br />source checkout only     | plugin                                        |
+| Plugin                                      | Description                                                              | Distribution                                     | Surface              |
+| ------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ | -------------------- |
+| [qa-channel](/plugins/reference/qa-channel) | Adds the QA Channel surface for sending and receiving OpenClaw messages. | `@openclaw/qa-channel`<br />source checkout only | channels: qa-channel |
+| [qa-lab](/plugins/reference/qa-lab)         | OpenClaw QA lab plugin with private debugger UI and scenario runner.     | `@openclaw/qa-lab`<br />source checkout only     | plugin               |
+| [qa-matrix](/plugins/reference/qa-matrix)   | Matrix QA transport runner and substrate.                                | `@openclaw/qa-matrix`<br />source checkout only  | plugin               |
 
 
 
@@ -97234,7 +97090,7 @@ pnpm plugins:inventory:gen
 | [diagnostics-otel](/plugins/reference/diagnostics-otel)             | OpenClaw diagnostics OpenTelemetry exporter.                                                                                                                         | `@openclaw/diagnostics-otel`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-otel`             | plugin                                                                                                                                                                                                                                                           |
 | [diagnostics-prometheus](/plugins/reference/diagnostics-prometheus) | OpenClaw diagnostics Prometheus exporter.                                                                                                                            | `@openclaw/diagnostics-prometheus`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus` | plugin                                                                                                                                                                                                                                                           |
 | [diffs](/plugins/reference/diffs)                                   | Read-only diff viewer and file renderer for agents.                                                                                                                  | `@openclaw/diffs`<br />npm; ClawHub                                                              | contracts: tools; skills                                                                                                                                                                                                                                         |
-| [discord](/plugins/reference/discord)                               | Adds the Discord channel surface for sending and receiving OpenClaw messages.                                                                                        | `@openclaw/discord`<br />npm; ClawHub                                                            | channels: discord; contracts: meetingNotesSourceProviders                                                                                                                                                                                                        |
+| [discord](/plugins/reference/discord)                               | Adds the Discord channel surface for sending and receiving OpenClaw messages.                                                                                        | `@openclaw/discord`<br />npm; ClawHub                                                            | channels: discord; contracts: transcriptSourceProviders                                                                                                                                                                                                          |
 | [document-extract](/plugins/reference/document-extract)             | Extract text and fallback page images from local document attachments.                                                                                               | `@openclaw/document-extract-plugin`<br />included in OpenClaw                                    | contracts: documentExtractors                                                                                                                                                                                                                                    |
 | [duckduckgo](/plugins/reference/duckduckgo)                         | Adds web search provider support.                                                                                                                                    | `@openclaw/duckduckgo-plugin`<br />included in OpenClaw                                          | contracts: webSearchProviders                                                                                                                                                                                                                                    |
 | [elevenlabs](/plugins/reference/elevenlabs)                         | Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.                                       | `@openclaw/elevenlabs-speech`<br />included in OpenClaw                                          | contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders                                                                                                                                                                          |
@@ -97263,7 +97119,6 @@ pnpm plugins:inventory:gen
 | [lobster](/plugins/reference/lobster)                               | Typed workflow tool with resumable approvals.                                                                                                                        | `@openclaw/lobster`<br />npm; ClawHub                                                            | contracts: tools                                                                                                                                                                                                                                                 |
 | [matrix](/plugins/reference/matrix)                                 | Adds the Matrix channel surface for sending and receiving OpenClaw messages.                                                                                         | `@openclaw/matrix`<br />ClawHub: `clawhub:@openclaw/matrix`; npm                                 | channels: matrix                                                                                                                                                                                                                                                 |
 | [mattermost](/plugins/reference/mattermost)                         | Adds the Mattermost channel surface for sending and receiving OpenClaw messages.                                                                                     | `@openclaw/mattermost`<br />included in OpenClaw                                                 | channels: mattermost                                                                                                                                                                                                                                             |
-| [meeting-notes](/plugins/reference/meeting-notes)                   | Capture meeting transcripts from channel-owned sources and write summaries.                                                                                          | `@openclaw/meeting-notes`<br />source checkout only                                              | contracts: meetingNotesSourceProviders, tools                                                                                                                                                                                                                    |
 | [memory-core](/plugins/reference/memory-core)                       | Adds memory embedding provider support. Adds agent-callable tools.                                                                                                   | `@openclaw/memory-core`<br />included in OpenClaw                                                | contracts: memoryEmbeddingProviders, tools                                                                                                                                                                                                                       |
 | [memory-lancedb](/plugins/reference/memory-lancedb)                 | Adds agent-callable tools.                                                                                                                                           | `@openclaw/memory-lancedb`<br />npm; ClawHub                                                     | contracts: tools                                                                                                                                                                                                                                                 |
 | [memory-wiki](/plugins/reference/memory-wiki)                       | Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.                                                                                         | `@openclaw/memory-wiki`<br />included in OpenClaw                                                | contracts: tools; skills                                                                                                                                                                                                                                         |
@@ -97674,6 +97529,85 @@ on the same delivery path as PI-backed runs.
 
 
 
+# Section: plugins/sdk-channel-inbound.md
+
+---
+summary: "Inbound event helpers for channel plugins: context building, shared runner orchestration, session record, and prepared reply dispatch"
+title: "Channel inbound API"
+read_when:
+  - You are building or refactoring a messaging channel plugin receive path
+  - You need shared inbound context construction, session recording, or prepared reply dispatch
+  - You are migrating old channel turn helpers to inbound/message APIs
+---
+
+Channel plugins should model receive paths with inbound and message nouns:
+
+```text
+platform event -> inbound facts/context -> agent reply -> message delivery
+```
+
+Use `openclaw/plugin-sdk/channel-inbound` for inbound event normalization,
+formatting, roots, and orchestration. Use
+`openclaw/plugin-sdk/channel-outbound` for native
+send, receipt, durable delivery, and live preview behavior.
+
+## Core Helpers
+
+```ts
+import {
+  buildChannelInboundEventContext,
+  runChannelInboundEvent,
+  dispatchChannelInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
+```
+
+- `buildChannelInboundEventContext(...)`: project normalized channel facts into
+  the prompt/session context.
+- `runChannelInboundEvent(...)`: run ingest, classify, preflight, resolve,
+  record, dispatch, and finalize for one inbound platform event.
+- `dispatchChannelInboundReply(...)`: record and dispatch an already assembled
+  inbound reply with a delivery adapter.
+
+The injected plugin runtime exposes the same high-level helpers under
+`runtime.channel.inbound.*` for bundled/native channels that already receive the
+runtime object.
+
+```ts
+await runtime.channel.inbound.run({
+  channel: "demo",
+  accountId,
+  raw: platformEvent,
+  adapter: {
+    ingest: normalizePlatformEvent,
+    resolveTurn: resolveInboundReply,
+  },
+});
+```
+
+Compatibility dispatchers should assemble `dispatchChannelInboundReply(...)`
+inputs and keep platform delivery in the delivery adapter. New send paths should
+prefer message adapters and durable message helpers.
+
+## Migration
+
+- `runtime.channel.turn.run(...)` -> `runtime.channel.inbound.run(...)`
+- `runtime.channel.turn.runPrepared(...)` ->
+  `runtime.channel.inbound.runPreparedReply(...)`
+- `runtime.channel.turn.runAssembled(...)` ->
+  `runtime.channel.inbound.dispatchReply(...)`
+- `runtime.channel.turn.buildContext(...)` ->
+  `runtime.channel.inbound.buildContext(...)`
+
+New plugin code should not introduce `turn`-named channel APIs. Keep model or
+agent turn vocabulary inside agent/provider code; channel plugins use inbound,
+message, delivery, and reply terms.
+
+The `runtime.channel.turn.*` aliases remain only as deprecated compatibility
+for already published plugins. They can be removed in the next major SDK cleanup
+after external plugins have had a migration window.
+
+
+
 # Section: plugins/sdk-channel-ingress.md
 
 ---
@@ -97819,77 +97753,53 @@ pnpm plugin-sdk:api:check
 # Section: plugins/sdk-channel-message.md
 
 ---
-summary: "Message lifecycle API for channel plugins, including durable sends, receipts, live preview, receive ack policy, and legacy migration"
+summary: "Redirect to /plugins/sdk-channel-outbound"
 title: "Channel message API"
-read_when:
-  - You are building or refactoring a messaging channel plugin
-  - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
-  - You are migrating from legacy reply pipeline or inbound reply dispatch helpers
 ---
 
-Channel plugins should expose one `message` adapter from
-`openclaw/plugin-sdk/channel-message`. The adapter describes the native message
-lifecycle that the platform supports:
+This page moved to [Channel outbound API](/plugins/sdk-channel-outbound).
 
-```text
-receive -> route and record -> agent turn -> durable final send
-send -> render batch -> platform I/O -> receipt -> lifecycle side effects
-live preview -> final edit or fallback -> receipt
-```
+`openclaw/plugin-sdk/channel-message` and
+`openclaw/plugin-sdk/channel-message-runtime` remain deprecated compatibility
+subpaths for older plugins. New channel plugins should use
+`openclaw/plugin-sdk/channel-outbound` for message lifecycle, receipt, durable
+send, and live preview helpers.
+
+Removal plan: keep these aliases through the external plugin migration window,
+then remove them in the next major SDK cleanup after callers have moved to
+`channel-outbound`.
+
+
+
+# Section: plugins/sdk-channel-outbound.md
+
+---
+summary: "Outbound message lifecycle API for channel plugins: adapters, receipts, durable sends, live preview, and reply pipeline helpers"
+title: "Channel outbound API"
+read_when:
+  - You are building or refactoring a messaging channel plugin send path
+  - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
+  - You are migrating from channel-message, channel-message-runtime, or legacy reply dispatch helpers
+---
+
+Channel plugins should expose outbound message behavior from
+`openclaw/plugin-sdk/channel-outbound`. Use
+`openclaw/plugin-sdk/channel-inbound` for receive/context/dispatch orchestration.
 
 Core owns queueing, durability, generic retry policy, hooks, receipts, and the
 shared `message` tool. The plugin owns native send/edit/delete calls, target
 normalization, platform threading, selected quotes, notification flags, account
 state, and platform-specific side effects.
 
-Use this page together with [Building channel plugins](/plugins/sdk-channel-plugins).
+## Adapter
 
-The `channel-message` subpath is intentionally cheap enough for hot plugin
-bootstrap files such as `channel.ts`: it exposes adapter contracts, capability
-proofs, receipts, and compatibility facades without loading outbound delivery.
-Runtime delivery helpers are available from
-`openclaw/plugin-sdk/channel-message-runtime` for monitor/send code paths that
-are already doing asynchronous message I/O.
+Most plugins define one `message` adapter:
 
-New channel and plugin send code should use the message lifecycle helpers from
-`openclaw/plugin-sdk/channel-message-runtime`: `sendDurableMessageBatch`,
-`withDurableMessageSendContext`, or `deliverInboundReplyWithMessageSendContext`.
-The older
-`deliverOutboundPayloads(...)` helper in `openclaw/plugin-sdk/outbound-runtime`
-is deprecated compatibility/runtime substrate for outbound internals, recovery,
-and legacy adapters. Do not use it for new channel or plugin send paths.
-
-`sendDurableMessageBatch(...)` returns an explicit lifecycle outcome:
-
-- `sent` - at least one visible platform message was delivered.
-- `suppressed` - no platform message should be treated as missing. Stable
-  reasons include `cancelled_by_message_sending_hook`,
-  `empty_after_message_sending_hook`, `no_visible_payload`,
-  `adapter_returned_no_identity`, and legacy `no_visible_result`.
-- `partial_failed` - at least one platform message was delivered before a later
-  payload or side effect failed. The result includes the delivered receipt prefix
-  plus the failure.
-- `failed` - no platform receipt was produced.
-
-Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed payloads.
-Do not infer hook cancellation by checking whether the old direct-delivery array
-is empty.
-
-Compatibility dispatchers that still need the buffered reply dispatcher should
-build reply-prefix options with `createChannelMessageReplyPipeline(...)` from
-`openclaw/plugin-sdk/channel-message`, then call the runtime's
-`channel.turn.runPrepared(...)`. That keeps session recording and dispatch
-ordering on the shared turn lifecycle without adding another public turn wrapper.
-
-## Minimal adapter
-
-Most new channel plugins can start with a small adapter:
-
-```typescript
+```ts
 import {
   defineChannelMessageAdapter,
   createMessageReceiptFromOutboundResults,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 
 export const demoMessageAdapter = defineChannelMessageAdapter({
   id: "demo",
@@ -97926,356 +97836,56 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 });
 ```
 
-Then attach it to the channel plugin:
+Only declare capabilities the native transport actually preserves. Cover each
+declared send, receipt, live-preview, and receive-ack capability with the
+contract helpers exported from this subpath.
 
-```typescript
-export const demoPlugin = createChatChannelPlugin({
-  base: {
-    id: "demo",
-    message: demoMessageAdapter,
-    // other channel plugin fields
-  },
-});
-```
+## Existing Outbound Adapters
 
-Only declare capabilities that the adapter really preserves. Every declared
-capability should have a contract test.
+If the channel already has a compatible `outbound` adapter, derive the message
+adapter instead of duplicating send code:
 
-## Outbound bridge
+```ts
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 
-If the channel already has a compatible `outbound` adapter, prefer deriving the
-message adapter instead of duplicating send code:
-
-```typescript
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
-
-const demoMessageAdapter = createChannelMessageAdapterFromOutbound({
+export const messageAdapter = createChannelMessageAdapterFromOutbound({
   id: "demo",
-  outbound: demoOutboundAdapter,
-});
-```
-
-The bridge converts old outbound send results into `MessageReceipt` values. New
-code should pass receipts end to end and only derive legacy ids at compatibility
-edges with `listMessageReceiptPlatformIds(...)` or
-`resolveMessageReceiptPrimaryId(...)`.
-If no receive policy is supplied, `createChannelMessageAdapterFromOutbound(...)`
-uses `manual` receive acknowledgement policy. That makes plugin-owned platform
-acknowledgement explicit without changing channels that acknowledge webhooks,
-sockets, or polling offsets outside generic receive context.
-
-## Message tool sends
-
-The shared `message(action="send")` path should use the same core delivery
-lifecycle as final replies. If a channel needs provider-specific shaping for the
-tool send, implement `actions.prepareSendPayload(...)` instead of sending from
-`actions.handleAction(...)`.
-
-`prepareSendPayload(...)` receives the normalized core `ReplyPayload` plus the
-full action context. Return a payload with channel-specific data in
-`payload.channelData.<channel>` and let core call `sendMessage(...)`,
-the message lifecycle runtime, the write-ahead queue, message-sending hooks,
-retry, recovery, and ack cleanup. The lifecycle runtime may call
-`deliverOutboundPayloads(...)` internally as compatibility substrate, but channel
-plugins should not call it directly for new send behavior.
-
-Return `null` only when the send cannot be represented as a durable payload, for
-example because it contains a non-serializable component factory. Core will keep
-the legacy plugin action fallback for compatibility, but new channel send
-features should be expressible as durable payload data.
-
-```typescript
-export const demoActions: ChannelMessageActionAdapter = {
-  describeMessageTool: () => ({ actions: ["send"], capabilities: ["presentation"] }),
-  prepareSendPayload: ({ ctx, payload }) => {
-    if (ctx.action !== "send") {
-      return null;
-    }
-    return {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        demo: {
-          ...(payload.channelData?.demo as object | undefined),
-          nativeCard: ctx.params.card,
-        },
-      },
-    };
-  },
-};
-```
-
-The outbound adapter then reads `payload.channelData.demo` inside `sendPayload`.
-This keeps platform-specific rendering in the plugin while core still owns
-persist, retry, recover, hooks, and ack.
-
-Prepared `message(action="send")` payloads and generic final-reply delivery use
-core delivery with best-effort queueing by default. Required durable queueing is
-only valid after core verifies the channel can reconcile a send whose outcome is
-unknown after a crash. If the adapter cannot implement `reconcileUnknownSend`,
-keep the prepared send path best-effort; core will still try the write-ahead
-queue, but queue persistence or uncertain crash recovery is not part of the
-required delivery contract.
-
-## Durable final capabilities
-
-Durable final delivery is opt in per side effect. Core will only use generic
-durable delivery when the adapter declares every capability needed by the
-payload and delivery options.
-
-| Capability             | Declare when                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `text`                 | The adapter can send text and return a receipt.                                      |
-| `media`                | Media sends return receipts for every visible platform message.                      |
-| `payload`              | The adapter preserves rich reply payload semantics, not only text and one media URL. |
-| `replyTo`              | Native reply targets reach the platform.                                             |
-| `thread`               | Native thread, topic, or channel thread targets reach the platform.                  |
-| `silent`               | Notification suppression reaches the platform.                                       |
-| `nativeQuote`          | Selected quote metadata reaches the platform.                                        |
-| `messageSendingHooks`  | Core message-sending hooks can cancel or rewrite content before platform I/O.        |
-| `batch`                | Multi-part rendered batches are replayable as one durable plan.                      |
-| `reconcileUnknownSend` | The adapter can resolve `unknown_after_send` recovery without blind replay.          |
-| `afterSendSuccess`     | Channel-local after-send side effects run once.                                      |
-| `afterCommit`          | Channel-local after-commit side effects run once.                                    |
-
-Best-effort final delivery does not require `reconcileUnknownSend`; it uses the
-shared lifecycle when the adapter preserves the payload's visible semantics, and
-falls back to direct platform I/O if queue persistence is unavailable. Required
-durable final delivery must explicitly require `reconcileUnknownSend`. If the
-adapter cannot determine whether a started/unknown send reached the platform,
-do not declare that capability; core will reject required durable delivery
-before queueing.
-
-When a caller needs durable delivery, derive requirements instead of building
-maps by hand:
-
-```typescript
-import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-message";
-
-const requiredCapabilities = deriveDurableFinalDeliveryRequirements({
-  payload,
-  replyToId,
-  threadId,
-  silent,
-  payloadTransport: true,
-  extraCapabilities: {
-    nativeQuote: hasSelectedQuote(payload),
-  },
-});
-```
-
-`messageSendingHooks` is required by default. Set `messageSendingHooks: false`
-only for a path that intentionally cannot run global message-sending hooks.
-
-## Durable send contract
-
-A durable final send has stricter semantics than legacy channel-owned delivery:
-
-- Create the durable intent before platform I/O.
-- If durable delivery returns a handled result, do not fall back to legacy send.
-- Treat hook cancellation and no-send results as terminal.
-- Treat `unsupported` as a pre-intent result only.
-- For required durability, fail before platform I/O if the queue cannot record
-  that platform send has started.
-- For required final delivery and required prepared message-tool sends,
-  preflight `reconcileUnknownSend`; recovery must be able to ack an
-  already-sent message or replay only after the adapter proves the original send
-  did not happen.
-- For `best_effort`, queue write failures may fall back to direct platform I/O.
-- Forward abort signals to media loading and platform sends.
-- Run after-commit hooks after queue ack; direct best-effort fallback runs them
-  after successful platform I/O because there is no durable queue commit.
-- Return receipts for every visible platform message id.
-- Use `reconcileUnknownSend` when a platform can check whether an uncertain send
-  already reached the user.
-
-This contract avoids duplicate sends after crashes and avoids bypassing
-message-sending cancellation hooks.
-
-## Receipts
-
-`MessageReceipt` is the new internal record of what the platform accepted:
-
-```typescript
-type MessageReceipt = {
-  primaryPlatformMessageId?: string;
-  platformMessageIds: string[];
-  parts: MessageReceiptPart[];
-  threadId?: string;
-  replyToId?: string;
-  editToken?: string;
-  deleteToken?: string;
-  sentAt: number;
-  raw?: readonly MessageReceiptSourceResult[];
-};
-```
-
-Use `createMessageReceiptFromOutboundResults(...)` when adapting an existing
-send result. Use `createPreviewMessageReceipt(...)` when a live preview message
-becomes the final receipt. Avoid adding new owner-local `messageIds` fields.
-Legacy `ChannelDeliveryResult.messageIds` is still produced at compatibility
-edges.
-
-## Live preview
-
-Channels that stream draft previews or progress updates should declare live
-capabilities:
-
-```typescript
-const demoMessageAdapter = defineChannelMessageAdapter({
-  id: "demo",
-  live: {
+  outbound,
+  durableFinal: {
     capabilities: {
-      draftPreview: true,
-      previewFinalization: true,
-      progressUpdates: true,
-      quietFinalization: true,
-    },
-    finalizer: {
-      capabilities: {
-        finalEdit: true,
-        normalFallback: true,
-        discardPending: true,
-        previewReceipt: true,
-        retainOnAmbiguousFailure: true,
-      },
+      text: true,
+      media: true,
     },
   },
 });
 ```
 
-Use `defineFinalizableLivePreviewAdapter(...)` and
-`deliverWithFinalizableLivePreviewAdapter(...)` for runtime finalization. The
-finalizer decides whether the final reply edits the preview in place, sends a
-normal fallback, discards pending preview state, keeps an ambiguous failed edit
-without duplicating the message, and returns the final receipt.
+## Durable Sends
 
-## Receive ack policy
+Runtime send helpers also live on `channel-outbound`:
 
-Inbound receivers that control platform acknowledgement timing should declare
-receive policy:
+- `sendDurableMessageBatch(...)`
+- `withDurableMessageSendContext(...)`
+- `deliverInboundReplyWithMessageSendContext(...)`
+- draft streaming/progress helpers such as `resolveChannelStreamingPreviewChunk(...)`
 
-```typescript
-const demoMessageAdapter = defineChannelMessageAdapter({
-  id: "demo",
-  receive: {
-    defaultAckPolicy: "after_agent_dispatch",
-    supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
-  },
-});
-```
+`sendDurableMessageBatch(...)` returns one explicit outcome:
 
-Adapters that do not declare receive policy default to:
+- `sent`: at least one visible platform message was delivered.
+- `suppressed`: no platform message should be treated as missing.
+- `partial_failed`: at least one platform message was delivered before a later
+  payload or side effect failed.
+- `failed`: no platform receipt was produced.
 
-```typescript
-{
-  receive: {
-    defaultAckPolicy: "manual",
-    supportedAckPolicies: ["manual"],
-  },
-}
-```
+Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed payloads.
+Do not infer hook cancellation from an empty legacy direct-delivery result.
 
-Use the default when the platform has no acknowledgement to defer, already
-acknowledges before asynchronous processing, or needs protocol-specific response
-semantics. Declare one of the staged policies only when the receiver actually
-uses receive context to move platform acknowledgement later.
+## Compatibility Dispatch
 
-Policies:
-
-| Policy                 | Use when                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| `after_receive_record` | The platform can be acknowledged after the inbound event is parsed and recorded.         |
-| `after_agent_dispatch` | The platform should wait until the agent dispatch has been accepted.                     |
-| `after_durable_send`   | The platform should wait until final delivery has a durable decision.                    |
-| `manual`               | The plugin owns acknowledgement because platform semantics do not match a generic stage. |
-
-Use `createMessageReceiveContext(...)` in receivers that defer ack state, and
-`shouldAckMessageAfterStage(...)` when the receiver needs to test whether a
-stage has satisfied the configured policy.
-
-## Contract tests
-
-Capability declarations are part of the plugin contract. Back them with tests:
-
-```typescript
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveFinalizerProofs,
-  verifyChannelMessageReceiveAckPolicyAdapterProofs,
-} from "openclaw/plugin-sdk/channel-message";
-
-it("backs declared message capabilities", async () => {
-  await expect(
-    verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "demo",
-      adapter: demoMessageAdapter,
-      proofs: {
-        text: async () => {
-          const result = await demoMessageAdapter.send!.text!(textCtx);
-          expect(result.receipt.platformMessageIds).toContain("msg-1");
-        },
-        replyTo: async () => {
-          await demoMessageAdapter.send!.text!({ ...textCtx, replyToId: "parent-1" });
-          expect(sendDemoMessage).toHaveBeenCalledWith(
-            expect.objectContaining({
-              replyToId: "parent-1",
-            }),
-          );
-        },
-        messageSendingHooks: () => {
-          expect(demoMessageAdapter.durableFinal!.capabilities!.messageSendingHooks).toBe(true);
-        },
-      },
-    }),
-  ).resolves.toContainEqual({ capability: "text", status: "verified" });
-});
-```
-
-Add live and receive proof suites when the adapter declares those features. A
-missing proof should fail the test rather than silently widening the durable
-surface.
-
-## Deprecated compatibility APIs
-
-These APIs remain importable for third-party compatibility. Do not use them for
-new channel code.
-
-| Deprecated API                               | Replacement                                                                                                                |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/channel-reply-pipeline` | `openclaw/plugin-sdk/channel-message`                                                                                      |
-| `createChannelTurnReplyPipeline(...)`        | `createChannelMessageReplyPipeline(...)` for compatibility dispatchers, or a `message` adapter for new channel code        |
-| `buildChannelMessageReplyDispatchBase(...)`  | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `dispatchChannelMessageReplyWithBase(...)`   | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `recordChannelMessageReplyDispatch(...)`     | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `deliverOutboundPayloads(...)`               | `sendDurableMessageBatch(...)` or `deliverInboundReplyWithMessageSendContext(...)` from `channel-message-runtime`          |
-| `deliverDurableInboundReplyPayload(...)`     | `deliverInboundReplyWithMessageSendContext(...)` from `openclaw/plugin-sdk/channel-message-runtime`                        |
-| `dispatchInboundReplyWithBase(...)`          | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `recordInboundSessionAndDispatchReply(...)`  | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `resolveChannelSourceReplyDeliveryMode(...)` | `resolveChannelMessageSourceReplyDeliveryMode(...)`                                                                        |
-| `deliverFinalizableDraftPreview(...)`        | `defineFinalizableLivePreviewAdapter(...)` plus `deliverWithFinalizableLivePreviewAdapter(...)`                            |
-| `DraftPreviewFinalizerDraft`                 | `LivePreviewFinalizerDraft`                                                                                                |
-| `DraftPreviewFinalizerResult`                | `LivePreviewFinalizerResult`                                                                                               |
-
-Compatibility dispatchers can still use `createReplyPrefixContext(...)`,
-`createReplyPrefixOptions(...)`, and `createTypingCallbacks(...)` through the
-message facade. New lifecycle code should avoid the old
-`channel-reply-pipeline` subpath.
-
-## Migration checklist
-
-1. Add `message: defineChannelMessageAdapter(...)` or
-   `message: createChannelMessageAdapterFromOutbound(...)` to the channel plugin.
-2. Return `MessageReceipt` from text, media, and payload sends.
-3. Declare only capabilities backed by native behavior and tests.
-4. Replace hand-written durable requirement maps with
-   `deriveDurableFinalDeliveryRequirements(...)`.
-5. Move preview finalization through the live preview helpers when the channel
-   edits draft messages in place.
-6. Declare receive ack policy only when the receiver can really defer platform
-   acknowledgement.
-7. Keep legacy reply dispatch helpers only at compatibility edges.
+Inbound reply dispatch should be assembled through
+`dispatchChannelInboundReply(...)` from `channel-inbound`. Keep platform
+delivery in the delivery adapter; use `channel-outbound` for message adapters,
+durable sends, receipts, live preview, and reply pipeline options.
 
 
 
@@ -98318,14 +97928,14 @@ Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
 New channel plugins should also expose a `message` adapter with
-`defineChannelMessageAdapter` from `openclaw/plugin-sdk/channel-message`. The
+`defineChannelMessageAdapter` from `openclaw/plugin-sdk/channel-outbound`. The
 adapter declares which durable final-send capabilities the native transport
 actually supports and points text/media sends at the same transport functions as
 the legacy `outbound` adapter. Only declare a capability when a contract test
 proves the native side effect and returned receipt.
 For the full API contract, examples, capability matrix, receipt rules, live
 preview finalization, receive ack policy, tests, and migration table, see
-[Channel message API](/plugins/sdk-channel-message).
+[Channel outbound API](/plugins/sdk-channel-outbound).
 If the existing `outbound` adapter already has the right send methods and
 capability metadata, use `createChannelMessageAdapterFromOutbound(...)` to
 derive the `message` adapter instead of hand-writing another bridge.
@@ -98351,11 +97961,11 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply/turn helpers such as `createChannelTurnReplyPipeline`,
+Legacy reply helpers such as `createChannelTurnReplyPipeline`,
 `dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
 remain available for compatibility dispatchers. Do not use those names for new
 channel code; new plugins should start with the `message` adapter, receipts, and
-receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-message`.
+receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-outbound`.
 
 Channels migrating inbound authorization can use the experimental
 `openclaw/plugin-sdk/channel-ingress-runtime` subpath from runtime receive
@@ -98435,6 +98045,8 @@ Most channel plugins do not need approval-specific code.
 - Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
+- If custom approval auth intentionally allows only same-chat fallback, return `markImplicitSameChatApprovalAuthorization({ authorized: true })` from `openclaw/plugin-sdk/approval-auth-runtime`; otherwise core treats the result as explicit approver authorization.
+- If a channel-owned native callback resolves approvals directly, use `isImplicitSameChatApprovalAuthorization(...)` before resolving so implicit fallback still goes through the channel's normal actor authorization.
 - If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route matcher by default for `{ to, accountId, threadId }` targets. Pass `targetsMatch` only when a channel has provider-specific equivalence rules, such as Slack timestamp prefix matching.
 - Pass `normalizeTargetForMatch` to `createChannelNativeOriginTargetResolver` when the channel needs to canonicalize provider ids before the default route matcher or a custom `targetsMatch` callback runs, while preserving the original target for delivery. Use `normalizeTarget` only when the resolved delivery target itself should be canonicalized.
@@ -98534,12 +98146,12 @@ surfaces:
   `openclaw/plugin-sdk/account-helpers` for multi-account config and
   default-account fallback
 - `openclaw/plugin-sdk/inbound-envelope` and
-  `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
+  `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` and
-  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates and payload planning
+- `openclaw/plugin-sdk/outbound-media` for media loading and
+  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
   explicit `replyToId`/`threadId` or recover the current `:thread:` session
@@ -99019,7 +98631,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
   </Card>
-  <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
+  <Card title="Channel inbound API" icon="bolt" href="/plugins/sdk-channel-inbound">
     Shared inbound event lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>
@@ -99049,585 +98661,16 @@ surface unless you are maintaining that bundled plugin family directly.
 # Section: plugins/sdk-channel-turn.md
 
 ---
-summary: "runtime.channel.turn -- the shared inbound event kernel that bundled and third-party channel plugins use to record, dispatch, and finalize agent turns"
-title: "Channel turn kernel"
-sidebarTitle: "Channel turn"
-read_when:
-  - You are building a channel plugin and want the shared inbound event lifecycle
-  - You are migrating a channel monitor off hand-rolled record/dispatch glue
-  - You need to understand admission, ingest, classify, preflight, resolve, record, dispatch, and finalize stages
+summary: "Redirect to /plugins/sdk-channel-inbound"
+title: "Channel turn"
 ---
 
-The channel turn kernel is the shared inbound state machine that turns a normalized platform event into an agent turn. Channel plugins provide the platform facts and the delivery callback. Core owns the orchestration: ingest, classify, preflight, resolve, authorize, assemble, record, dispatch, and finalize.
-
-Use this when your plugin is on the inbound message hot path. For non-message events (slash commands, modals, button interactions, lifecycle events, reactions, voice state), keep them plugin-local. The kernel only owns events that may become an agent text turn.
-
-<Info>
-  The kernel is reached through the injected plugin runtime as `runtime.channel.turn.*`. The plugin runtime type is exported from `openclaw/plugin-sdk/core`, so third-party native plugins can use these entry points the same way bundled channel plugins do.
-</Info>
-
-## Why a shared kernel
-
-Channel plugins repeat the same inbound flow: normalize, route, gate, build a context, record session metadata, dispatch the agent turn, finalize delivery state. Without a shared kernel, a change to mention gating, tool-only visible replies, session metadata, pending history, or dispatch finalization has to be applied per channel.
-
-The kernel keeps four concepts deliberately separate:
-
-- `ConversationFacts`: where the message came from
-- `RouteFacts`: which agent and session should process it
-- `ReplyPlanFacts`: where visible replies should go
-- `MessageFacts`: what body and supplemental context the agent should see
-
-Slack DMs, Telegram topics, Matrix threads, and Feishu topic sessions all distinguish these in practice. Treating them as one identifier causes drift over time.
-
-## Stage lifecycle
-
-The kernel runs the same fixed pipeline regardless of channel:
-
-1. `ingest` -- adapter converts a raw platform event into `NormalizedTurnInput`
-2. `classify` -- adapter declares whether this event can start an agent turn
-3. `preflight` -- adapter does dedupe, self-echo, hydration, debounce, decryption, partial fact prefill
-4. `resolve` -- adapter returns a fully assembled turn (route, reply plan, message, delivery)
-5. `authorize` -- DM, group, mention, and command policy applied to the assembled facts
-6. `assemble` -- `FinalizedMsgContext` built from the facts via `buildContext`
-7. `record` -- inbound session metadata and last route persisted
-8. `dispatch` -- agent turn executed through the buffered block dispatcher
-9. `finalize` -- adapter `onFinalize` runs even on dispatch error
-
-Each stage emits a structured log event when a `log` callback is supplied. See [Observability](#observability).
-
-## Admission kinds
-
-The kernel does not throw when a turn is gated. It returns a `ChannelTurnAdmission`:
-
-| Kind          | When                                                                                                                                         |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dispatch`    | Turn is admitted. Agent turn runs and the visible reply path is exercised.                                                                   |
-| `observeOnly` | Turn runs end-to-end but the delivery adapter sends nothing visible. Used for broadcast observer agents and other passive multi-agent flows. |
-| `handled`     | A platform event was consumed locally (lifecycle, reaction, button, modal). Kernel skips dispatch.                                           |
-| `drop`        | Skip path. Optionally `recordHistory: true` keeps the message in pending group history so a future mention has context.                      |
-
-Admission can come from `classify` (event class said it cannot start a turn), from `preflight` (dedupe, self-echo, missing mention with history record), or from `resolveTurn` itself.
-
-## Entry points
-
-The runtime exposes three preferred entry points so adapters can opt in at the level that matches the channel.
-
-```typescript
-runtime.channel.turn.run(...)             // adapter-driven full pipeline
-runtime.channel.turn.runAssembled(...)    // already-built context + delivery adapter
-runtime.channel.turn.runPrepared(...)     // channel owns dispatch; kernel runs record + finalize
-runtime.channel.turn.buildContext(...)    // pure facts to FinalizedMsgContext mapping
-```
-
-Two older runtime helpers remain available for Plugin SDK compatibility:
-
-```typescript
-runtime.channel.turn.runResolved(...)      // deprecated compatibility alias; prefer run
-runtime.channel.turn.dispatchAssembled(...) // deprecated compatibility alias; prefer runAssembled
-```
-
-### run
-
-Use when your channel can express its inbound flow as a `ChannelTurnAdapter<TRaw>`. The adapter has callbacks for `ingest`, optional `classify`, optional `preflight`, mandatory `resolveTurn`, and optional `onFinalize`.
-
-```typescript
-await runtime.channel.turn.run({
-  channel: "tlon",
-  accountId,
-  raw: platformEvent,
-  adapter: {
-    ingest(raw) {
-      return {
-        id: raw.messageId,
-        timestamp: raw.timestamp,
-        rawText: raw.body,
-        textForAgent: raw.body,
-      };
-    },
-    classify(input) {
-      return { kind: "message", canStartAgentTurn: input.rawText.length > 0 };
-    },
-    async preflight(input, eventClass) {
-      if (await isDuplicate(input.id)) {
-        return { admission: { kind: "drop", reason: "dedupe" } };
-      }
-      return {};
-    },
-    resolveTurn(input) {
-      return buildAssembledTurn(input);
-    },
-    onFinalize(result) {
-      clearPendingGroupHistory(result);
-    },
-  },
-});
-```
-
-`run` is the right shape when the channel has small adapter logic and benefits from owning the lifecycle through hooks.
-
-### runAssembled
-
-Use when the channel has already resolved routing, built a `FinalizedMsgContext`,
-and only needs the shared record, reply-pipeline, dispatch, and finalize
-ordering. This is the preferred shape for simple bundled inbound paths that
-would otherwise repeat `createChannelMessageReplyPipeline(...)` and
-`runPrepared(...)` boilerplate.
-
-```typescript
-await runtime.channel.turn.runAssembled({
-  cfg,
-  channel: "irc",
-  accountId,
-  agentId: route.agentId,
-  routeSessionKey: route.sessionKey,
-  storePath,
-  ctxPayload,
-  recordInboundSession: runtime.channel.session.recordInboundSession,
-  dispatchReplyWithBufferedBlockDispatcher:
-    runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-  delivery: {
-    deliver: async (payload) => {
-      await sendPlatformReply(payload);
-    },
-    onError: (err, info) => {
-      runtime.error?.(`reply ${info.kind} failed: ${String(err)}`);
-    },
-  },
-});
-```
-
-Choose `runAssembled` over `runPrepared` when the only channel-owned dispatch
-behavior is final payload delivery plus optional typing, reply options, durable
-delivery, or error logging.
-
-### runPrepared
-
-Use when the channel has a complex local dispatcher with previews, retries, edits, or thread bootstrap that must stay channel-owned. The kernel still records the inbound session before dispatch and surfaces a uniform `DispatchedChannelTurnResult`.
-
-```typescript
-const { dispatchResult } = await runtime.channel.turn.runPrepared({
-  channel: "matrix",
-  accountId,
-  routeSessionKey,
-  storePath,
-  ctxPayload,
-  recordInboundSession,
-  record: {
-    onRecordError,
-    updateLastRoute,
-  },
-  onPreDispatchFailure: async (err) => {
-    await stopStatusReactions();
-  },
-  runDispatch: async () => {
-    return await runMatrixOwnedDispatcher();
-  },
-});
-```
-
-Rich channels (Matrix, Mattermost, Microsoft Teams, Feishu, QQ Bot) use `runPrepared` because their dispatcher orchestrates platform-specific behavior the kernel must not learn about.
-
-### buildContext
-
-A pure function that maps fact bundles into `FinalizedMsgContext`. Use it when your channel hand-rolls part of the pipeline but wants consistent context shape.
-
-```typescript
-const ctxPayload = runtime.channel.turn.buildContext({
-  channel: "googlechat",
-  accountId,
-  messageId,
-  timestamp,
-  from,
-  sender,
-  conversation,
-  route,
-  reply,
-  message,
-  access,
-  media,
-  supplemental,
-});
-```
-
-`buildContext` is also useful inside `resolveTurn` callbacks when assembling a turn for `run`.
-
-<Note>
-  Deprecated SDK helpers such as `dispatchInboundReplyWithBase` still bridge through an assembled-turn helper. New plugin code should use `run` or `runPrepared`.
-</Note>
-
-## Fact types
-
-The facts the kernel consumes from your adapter are platform-agnostic. Translate platform objects into these shapes before handing them to the kernel.
-
-### NormalizedTurnInput
-
-| Field             | Purpose                                                                      |
-| ----------------- | ---------------------------------------------------------------------------- |
-| `id`              | Stable message id used for dedupe and logs                                   |
-| `timestamp`       | Optional epoch ms                                                            |
-| `rawText`         | Body as received from the platform                                           |
-| `textForAgent`    | Optional cleaned body for the agent (mention strip, typing trim)             |
-| `textForCommands` | Optional body used for `/command` parsing                                    |
-| `raw`             | Optional pass-through reference for adapter callbacks that need the original |
-
-### ChannelEventClass
-
-| Field                  | Purpose                                                                 |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `kind`                 | `message`, `command`, `interaction`, `reaction`, `lifecycle`, `unknown` |
-| `canStartAgentTurn`    | If false the kernel returns `{ kind: "handled" }`                       |
-| `requiresImmediateAck` | Hint for adapters that need to ACK before dispatch                      |
-
-### SenderFacts
-
-| Field          | Purpose                                                        |
-| -------------- | -------------------------------------------------------------- |
-| `id`           | Stable platform sender id                                      |
-| `name`         | Display name                                                   |
-| `username`     | Handle if distinct from `name`                                 |
-| `tag`          | Discord-style discriminator or platform tag                    |
-| `roles`        | Role ids, used for member-role allowlist matching              |
-| `isBot`        | True when the sender is a known bot (kernel uses for dropping) |
-| `isSelf`       | True when the sender is the configured agent itself            |
-| `displayLabel` | Pre-rendered label for envelope text                           |
-
-### ConversationFacts
-
-| Field             | Purpose                                                              |
-| ----------------- | -------------------------------------------------------------------- |
-| `kind`            | `direct`, `group`, or `channel`                                      |
-| `id`              | Conversation id used for routing                                     |
-| `label`           | Human label for the envelope                                         |
-| `spaceId`         | Optional outer space identifier (Slack workspace, Matrix homeserver) |
-| `parentId`        | Outer conversation id when this is a thread                          |
-| `threadId`        | Thread id when this message is inside a thread                       |
-| `nativeChannelId` | Platform-native channel id when different from the routing id        |
-| `routePeer`       | Peer used for `resolveAgentRoute` lookup                             |
-
-### RouteFacts
-
-| Field                   | Purpose                                                    |
-| ----------------------- | ---------------------------------------------------------- |
-| `agentId`               | Agent that should handle this turn                         |
-| `accountId`             | Optional override (multi-account channels)                 |
-| `routeSessionKey`       | Session key used for routing                               |
-| `dispatchSessionKey`    | Session key used at dispatch when different from route key |
-| `persistedSessionKey`   | Session key written to persisted session metadata          |
-| `parentSessionKey`      | Parent for branched/threaded sessions                      |
-| `modelParentSessionKey` | Model-side parent for branched sessions                    |
-| `mainSessionKey`        | Main DM owner pin for direct conversations                 |
-| `createIfMissing`       | Allow record step to create a missing session row          |
-
-### ReplyPlanFacts
-
-| Field                     | Purpose                                                 |
-| ------------------------- | ------------------------------------------------------- |
-| `to`                      | Logical reply target written into context `To`          |
-| `originatingTo`           | Originating context target (`OriginatingTo`)            |
-| `nativeChannelId`         | Platform-native channel id for delivery                 |
-| `replyTarget`             | Final visible-reply destination if it differs from `to` |
-| `deliveryTarget`          | Lower-level delivery override                           |
-| `replyToId`               | Quoted/anchored message id                              |
-| `replyToIdFull`           | Full-form quoted id when the platform has both          |
-| `messageThreadId`         | Thread id at delivery time                              |
-| `threadParentId`          | Parent message id of the thread                         |
-| `sourceReplyDeliveryMode` | `thread`, `reply`, `channel`, `direct`, or `none`       |
-
-### AccessFacts
-
-`AccessFacts` carries the booleans the authorize stage needs. Identity matching stays in the channel: the kernel only consumes the result.
-
-| Field      | Purpose                                                                   |
-| ---------- | ------------------------------------------------------------------------- |
-| `dm`       | DM allow/pairing/deny decision and `allowFrom` list                       |
-| `group`    | Group policy, route allow, sender allow, allowlist, mention requirement   |
-| `commands` | Command authorization across configured authorizers                       |
-| `mentions` | Whether mention detection is possible and whether the agent was mentioned |
-
-### MessageFacts
-
-| Field            | Purpose                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| `body`           | Final envelope body (formatted)                                |
-| `rawBody`        | Raw inbound body                                               |
-| `bodyForAgent`   | Body the agent sees                                            |
-| `commandBody`    | Body used for command parsing                                  |
-| `envelopeFrom`   | Pre-rendered sender label for the envelope                     |
-| `senderLabel`    | Optional override for the rendered sender                      |
-| `preview`        | Short redacted preview for logs                                |
-| `inboundHistory` | Recent inbound history entries when the channel keeps a buffer |
-
-### SupplementalContextFacts
-
-Supplemental context covers quote, forwarded, and thread-bootstrap context. The kernel applies the configured `contextVisibility` policy. The channel adapter only provides facts and `senderAllowed` flags so cross-channel policy stays consistent.
-
-### InboundMediaFacts
-
-Media is fact-shaped. Platform download, auth, SSRF policy, CDN rules, and decryption stay channel-local. The kernel maps facts into `MediaPath`, `MediaUrl`, `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`, and `MediaTranscribedIndexes`.
-
-Use `toInboundMediaFacts(...)` from `openclaw/plugin-sdk/channel-inbound` when
-your channel has a resolved media list and only needs to attach generic facts:
-
-```typescript
-media: toInboundMediaFacts(resolvedMedia, {
-  kind: "image",
-  messageId: input.id,
-});
-```
-
-If media mixes local files and URL-only entries, keep the list as media facts.
-Core preserves array indexes when it writes legacy context fields so downstream
-media understanding, transcription markers, and prompt notes continue to refer
-to the same attachment.
-
-For skipped group messages that should be available to a later mention, pass
-media facts through the turn `preflight.media` field. The kernel converts those
-facts into bounded history media entries before recording:
-
-```typescript
-preflight(input) {
-  return {
-    admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
-    media: () => toInboundMediaFacts(resolveLocalImages(input), {
-      kind: "image",
-      messageId: input.id,
-    }),
-    history: {
-      key: historyKey,
-      limit: historyLimit,
-      mediaLimit: 4,
-      shouldRecord: () => stillCurrent(input),
-    },
-  };
-}
-```
-
-History media is intentionally conservative: image-only today, local readable
-paths only, bounded by the configured media limit, and still tied to the
-channel history key. Authenticated provider URLs should be downloaded by the
-plugin before they become model-visible media.
-
-## History windows
-
-Message-turn code should use `createChannelHistoryWindow(...)` instead of
-calling low-level `reply-history` map helpers directly. The old map helpers
-remain importable as deprecated compatibility exports, but new plugin runtime
-code should not call them. The window facade keeps text context, structured
-`InboundHistory`, history-media normalization, and clearing behind one
-core-owned API while still letting the channel choose how a history line is
-rendered.
-
-```typescript
-const history = createChannelHistoryWindow({ historyMap: groupHistories });
-
-await history.recordWithMedia({
-  historyKey,
-  limit: historyLimit,
-  entry,
-  media: () =>
-    toInboundMediaFacts(resolvedImages, {
-      kind: "image",
-      messageId: entry.messageId,
-    }),
-});
-
-const combinedBody = history.buildPendingContext({
-  historyKey,
-  limit: historyLimit,
-  currentMessage,
-  formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
-});
-```
-
-The older `buildPendingHistoryContextFromMap`,
-`buildInboundHistoryFromMap`, `recordPendingHistoryEntry*`, and
-`clearHistoryEntries*` exports remain as deprecated compatibility for plugins
-that have not migrated yet. New channel work should use the window or the turn
-kernel record/finalize options.
-
-## Common message patterns
-
-Text-only group with mention required:
-
-```typescript
-preflight(input) {
-  const decision = resolveInboundMentionDecision({ facts, policy });
-  if (decision.shouldSkip) {
-    return {
-      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
-      history: { key: historyKey, limit: historyLimit },
-    };
-  }
-  return { access: { mentions: decision } };
-}
-```
-
-Image-only message followed by a later mention:
-
-```typescript
-preflight(input) {
-  if (!wasMentioned && resolvedImages.length > 0) {
-    return {
-      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
-      media: () => toInboundMediaFacts(resolvedImages, {
-        kind: "image",
-        messageId: input.id,
-      }),
-      history: { key: historyKey, limit: historyLimit, mediaLimit: 4 },
-    };
-  }
-  return {};
-}
-```
-
-Explicit reply-to-image:
-
-```typescript
-resolveTurn(input, _eventClass, preflight) {
-  return {
-    ...assembled,
-    media: toInboundMediaFacts([...currentMedia, ...referencedReplyMedia]),
-    supplemental: {
-      quote: preflight.supplemental?.quote,
-    },
-  };
-}
-```
-
-Direct message with history:
-
-```typescript
-resolveTurn(input) {
-  return {
-    ...assembled,
-    history: undefined,
-    message: {
-      rawBody: input.rawText,
-      bodyForAgent: input.textForAgent,
-    },
-  };
-}
-```
-
-## Adapter contract
-
-For full `run`, the adapter shape is:
-
-```typescript
-type ChannelTurnAdapter<TRaw> = {
-  ingest(raw: TRaw): Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
-  classify?(input: NormalizedTurnInput): Promise<ChannelEventClass> | ChannelEventClass;
-  preflight?(
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-  ): Promise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
-  resolveTurn(
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ): Promise<ChannelTurnResolved> | ChannelTurnResolved;
-  onFinalize?(result: ChannelTurnResult): Promise<void> | void;
-};
-```
-
-`resolveTurn` returns a `ChannelTurnResolved`, which is an `AssembledChannelTurn` with an optional admission kind. Returning `{ admission: { kind: "observeOnly" } }` runs the turn without producing visible output. The adapter still owns the delivery callback; it just becomes a no-op for that turn.
-
-`onFinalize` runs on every result, including dispatch errors. Use it to clear pending group history, remove ack reactions, stop status indicators, and flush local state.
-
-## Delivery adapter
-
-The kernel does not call the platform directly. The channel hands the kernel a `ChannelEventDeliveryAdapter`:
-
-```typescript
-type ChannelEventDeliveryAdapter = {
-  deliver(payload: ReplyPayload, info: ChannelDeliveryInfo): Promise<ChannelDeliveryResult | void>;
-  onError?(err: unknown, info: { kind: string }): void;
-  durable?: false | DurableInboundReplyDeliveryOptions;
-};
-
-type ChannelDeliveryResult = {
-  messageIds?: string[];
-  receipt?: MessageReceipt;
-  threadId?: string;
-  replyToId?: string;
-  visibleReplySent?: boolean;
-};
-```
-
-`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-event delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelEventDeliveryAdapter()`.
-
-Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelEventDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
-
-Public compatibility helpers such as `recordInboundSessionAndDispatchReply`, `dispatchInboundReplyWithBase`, and direct-DM helpers must stay behavior-preserving during migration. They should not call generic durable delivery before caller-owned `deliver` or `reply` callbacks.
-
-## Record options
-
-The record stage wraps `recordInboundSession`. Most channels can use the defaults. Override via `record`:
-
-```typescript
-record: {
-  groupResolution,
-  createIfMissing: true,
-  updateLastRoute,
-  onRecordError: (err) => log.warn("record failed", err),
-  trackSessionMetaTask: (task) => pendingTasks.push(task),
-}
-```
-
-The dispatcher waits for the record stage. If record throws, the kernel runs `onPreDispatchFailure` (when provided to `runPrepared`) and rethrows.
-
-## Observability
-
-Each stage emits a structured event when a `log` callback is supplied:
-
-```typescript
-await runtime.channel.turn.run({
-  channel: "twitch",
-  accountId,
-  raw,
-  adapter,
-  log: (event) => {
-    runtime.log?.debug?.(`turn.${event.stage}:${event.event}`, {
-      channel: event.channel,
-      accountId: event.accountId,
-      messageId: event.messageId,
-      sessionKey: event.sessionKey,
-      admission: event.admission,
-      reason: event.reason,
-    });
-  },
-});
-```
-
-Logged stages: `ingest`, `classify`, `preflight`, `resolve`, `authorize`, `assemble`, `record`, `dispatch`, `finalize`. Avoid logging raw bodies; use `MessageFacts.preview` for short redacted previews.
-
-## What stays channel-local
-
-The kernel owns orchestration. The channel still owns:
-
-- Platform transports (gateway, REST, websocket, polling, webhooks)
-- Identity resolution and display-name matching
-- Native commands, slash commands, autocomplete, modals, buttons, voice state
-- Card, modal, and adaptive-card rendering
-- Media auth, CDN rules, encrypted media, transcription
-- Edit, reaction, redaction, and presence APIs
-- Backfill and platform-side history fetch
-- Pairing flows that require platform-specific verification
-
-If two channels start needing the same helper for one of these, extract a shared SDK helper instead of pushing it into the kernel.
-
-## Stability
-
-`runtime.channel.turn.*` is part of the public plugin runtime surface. The fact types (`SenderFacts`, `ConversationFacts`, `RouteFacts`, `ReplyPlanFacts`, `AccessFacts`, `MessageFacts`, `SupplementalContextFacts`, `InboundMediaFacts`) and admission shapes (`ChannelTurnAdmission`, `ChannelEventClass`) are reachable through `PluginRuntime` from `openclaw/plugin-sdk/core`.
-
-Backward compatibility rules apply: new fact fields are additive, admission kinds are not renamed, and the entry point names stay stable. New channel needs that require a non-additive change must go through the plugin SDK migration process.
-
-## Related
-
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) for the planned send/receive/live lifecycle that will wrap this kernel
-- [Building channel plugins](/plugins/sdk-channel-plugins) for the broader channel plugin contract
-- [Plugin runtime helpers](/plugins/sdk-runtime) for other `runtime.*` surfaces
-- [Plugin internals](/plugins/architecture-internals) for load pipeline and registry mechanics
+This page moved to [Channel inbound API](/plugins/sdk-channel-inbound).
+
+The old channel-turn runtime names remain deprecated compatibility only. New
+plugin code should use `runtime.channel.inbound.*`, `channel-inbound`, and
+`channel-outbound`; the aliases can be removed in the next major SDK cleanup
+after external plugin migration.
 
 
 
@@ -100497,13 +99540,15 @@ releases.
   | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
-  | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
+  | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
-  | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
+  | `plugin-sdk/channel-inbound` | Inbound receive helpers | Context building, formatting, roots, runners, prepared reply dispatch, and dispatch predicates |
   | `plugin-sdk/messaging-targets` | Deprecated target parsing import path | Use `plugin-sdk/channel-targets` for generic target parsing helpers, `plugin-sdk/channel-route` for route comparison, and plugin-owned `messaging.targetResolver` / `messaging.resolveOutboundSessionRoute` for provider-specific target resolution |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
-  | `plugin-sdk/outbound-send-deps` | Outbound send dependency helpers | Lightweight `resolveOutboundSendDep` lookup without importing the full outbound runtime |
-  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
+  | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/channel-outbound` | Outbound message lifecycle helpers | Message adapters, receipts, durable send helpers, live preview/streaming helpers, reply options, lifecycle helpers, outbound identity, and payload planning |
+  | `plugin-sdk/channel-streaming` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
   | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
@@ -100613,7 +99658,8 @@ releases.
   | `plugin-sdk/channel-status` | Channel status helpers | Shared channel status snapshot/summary helpers |
   | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
   | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
-  | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
+  | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades | Use `plugin-sdk/channel-inbound` |
+  | `plugin-sdk/direct-dm-guard-policy` | Direct-DM guard helpers | Narrow pre-crypto guard policy helpers |
   | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
   | `plugin-sdk/webhook-path` | Deprecated webhook path alias | Use `plugin-sdk/webhook-ingress` |
@@ -102350,7 +101396,7 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
-Use the channel-turn `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
 
@@ -102386,7 +101432,7 @@ return {
 ```
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
-two-party event loops that do not go through the shared channel-turn kernel.
+two-party event loops that do not go through the shared inbound reply runner.
 
 ## Runtime namespaces
 
@@ -103563,14 +102609,19 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ### Deprecated compatibility and test helpers
 
-These subpaths remain package exports for older plugins and OpenClaw test suites,
-but new code should not add imports from them: `agent-runtime-test-contracts`,
+Deprecated subpaths stay exported for older plugins, but new code should use the
+focused SDK subpaths below. The maintained list is
+`scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; CI rejects bundled
+production imports from it. Broad barrels such as `compat`, `config-types`,
+`infra-runtime`, `text-runtime`, and `zod` are compatibility only. Import `zod`
+directly from `zod`.
+
+OpenClaw's Vitest-backed test-helper subpaths are repo-local only and are no
+longer package exports: `agent-runtime-test-contracts`,
 `channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
-`plugin-test-api`, `plugin-test-contracts`, `provider-http-test-mocks`,
-`provider-test-contracts`, `test-env`, `test-fixtures`, `test-node-mocks`,
-`testing`, `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
-`text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
-`plugin-test-runtime` is still an active focused test helper subpath.
+`plugin-test-api`, `plugin-test-contracts`, `plugin-test-runtime`,
+`provider-http-test-mocks`, `provider-test-contracts`, `test-env`,
+`test-fixtures`, `test-node-mocks`, and `testing`.
 
 ### Reserved bundled plugin helper subpaths
 
@@ -103578,41 +102629,6 @@ These subpaths are plugin-owned compatibility surfaces for their owning bundled
 plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
 `plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
 by package contract guardrails.
-
-### Deprecated unused public subpaths
-
-These public subpaths existed for at least one month and currently have no
-bundled extension production imports. They remain importable for compatibility,
-but new plugin code should use focused, actively consumed SDK subpaths instead:
-`agent-config-primitives`, `channel-config-schema-legacy`,
-`channel-reply-pipeline`, `channel-runtime`, `channel-secret-runtime`,
-`command-auth`, `compat`, `config-runtime`, `config-schema`, `discord`,
-`group-access`, `infra-runtime`, `matrix`, `mattermost`,
-`media-generation-runtime-shared`, `memory-core-engine-runtime`,
-`memory-core-host-multimodal`, `memory-core-host-query`,
-`music-generation-core`, `self-hosted-provider-setup`, `telegram-account`,
-`telegram-command-config`, and `zalouser`.
-
-### Deprecated rare public subpaths
-
-Public subpaths currently used by only one or two bundled plugin owners are also
-deprecated for new plugin code. They remain package exports for compatibility,
-but new code should prefer actively shared SDK seams or plugin-owned package
-APIs. Maintainers track the exact set in
-`scripts/lib/plugin-sdk-deprecated-public-subpaths.json` and the current budget
-with `pnpm plugin-sdk:surface`.
-
-### Deprecated broad barrels
-
-These broad re-export barrels remain buildable for OpenClaw source and
-compatibility checks, but new code should prefer focused SDK subpaths:
-`agent-runtime`, `channel-lifecycle`, `channel-runtime`, `cli-runtime`,
-`compat`, `config-types`, `conversation-runtime`, `hook-runtime`,
-`infra-runtime`, `media-runtime`, `plugin-runtime`, `security-runtime`, and
-`text-runtime`. `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
-and `text-runtime` remain package exports only for backwards compatibility; use
-focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
-`text-chunking`, `text-utility-runtime`, and `logging-core` instead.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -103632,7 +102648,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
     | `plugin-sdk/access-groups` | Access-group allowlist parsing and redacted group diagnostics helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
-    | `plugin-sdk/channel-reply-pipeline` | Legacy reply pipeline helpers. New channel reply pipeline code should use `createChannelMessageReplyPipeline` and `resolveChannelMessageSourceReplyDeliveryMode` from `plugin-sdk/channel-message`. |
+    | `plugin-sdk/channel-reply-pipeline` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
     | `plugin-sdk/channel-config-schema` | Shared channel config schema primitives plus Zod and direct JSON/TypeBox builders |
     | `plugin-sdk/bundled-channel-config-schema` | Bundled OpenClaw channel config schemas for maintained bundled plugins only |
@@ -103642,15 +102658,16 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-ingress` | Deprecated low-level channel ingress compatibility facade. New receive paths should use `plugin-sdk/channel-ingress-runtime`. |
     | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, `createChannelRunQueue`, and legacy draft stream lifecycle helpers. New preview finalization code should use `plugin-sdk/channel-message`. |
-    | `plugin-sdk/channel-message` | Cheap message lifecycle contract helpers such as `defineChannelMessageAdapter`, `createChannelMessageAdapterFromOutbound`, `createChannelMessageReplyPipeline`, `createReplyPrefixContext`, `resolveChannelMessageSourceReplyDeliveryMode`, durable-final capability derivation, capability proof helpers for send/receipt/side-effect capabilities, `MessageReceiveContext`, receive ack policy proofs, `defineFinalizableLivePreviewAdapter`, `deliverWithFinalizableLivePreviewAdapter`, live-preview and live-finalizer capability proofs, durable recovery state, `RenderedMessageBatch`, message receipt types, and receipt id helpers. See [Channel message API](/plugins/sdk-channel-message). Legacy reply-dispatch facades are deprecated compatibility only. |
-    | `plugin-sdk/channel-message-runtime` | Runtime delivery helpers that may load outbound delivery, including `deliverInboundReplyWithMessageSendContext`, `sendDurableMessageBatch`, and `withDurableMessageSendContext`. Deprecated reply-dispatch bridges remain importable for compatibility dispatchers only. Use from monitor/send runtime modules, not hot plugin bootstrap files. |
+    | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus reply pipeline options, receipts, live preview/streaming, lifecycle helpers, outbound identity, payload planning, durable sends, and message-send context helpers. See [Channel outbound API](/plugins/sdk-channel-outbound). |
+    | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
+    | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
-    | `plugin-sdk/inbound-reply-dispatch` | Legacy shared inbound record-and-dispatch helpers, visible/final dispatch predicates, and deprecated `deliverDurableInboundReplyPayload` compatibility for prepared channel dispatchers. New channel receive/dispatch code should import runtime lifecycle helpers from `plugin-sdk/channel-message-runtime`. |
+    | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
     | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
-    | `plugin-sdk/outbound-send-deps` | Lightweight outbound send dependency lookup for channel adapters |
-    | `plugin-sdk/outbound-runtime` | Outbound identity, send delegate, session, formatting, and payload planning helpers. Direct delivery helpers such as `deliverOutboundPayloads` are deprecated compatibility substrate; use `plugin-sdk/channel-message-runtime` for new send paths. |
+    | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
@@ -103663,17 +102680,19 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
-    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound`. |
+    | `plugin-sdk/direct-dm-guard-policy` | Narrow direct-DM pre-crypto guard policy helpers |
     | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13` and tracked owner compatibility; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
     | `plugin-sdk/zalouser` | Deprecated Zalo Personal compatibility facade for published Lark/Zalo packages that still import sender command authorization; new plugins should use `plugin-sdk/command-auth` |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
-    | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, debounce, mention matching, mention-policy, and envelope formatting |
+    | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
-    | `plugin-sdk/channel-envelope` | Narrow inbound envelope formatting helpers |
-    | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
-    | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
+    | `plugin-sdk/channel-envelope`, `plugin-sdk/channel-inbound-roots`, `plugin-sdk/channel-location`, `plugin-sdk/channel-logging` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound` or `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-pairing-paths` | Deprecated compatibility facade. Use `plugin-sdk/channel-pairing`. |
+    | `plugin-sdk/channel-reply-options-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-streaming` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
     | `plugin-sdk/channel-route` | Shared route normalization, parser-driven target resolution, thread-id stringification, dedupe/compact route keys, parsed-target types, and route/target comparison helpers |
@@ -103682,6 +102701,14 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
     | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract helpers such as `collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, and secret target types |
   </Accordion>
+
+Deprecated channel helper families stay available only for published-plugin
+compatibility. The removal plan is: keep them through the external plugin
+migration window, keep repo/bundled plugins on `channel-inbound` and
+`channel-outbound`, then remove the compatibility subpaths in the next major
+SDK cleanup. This applies to the old channel message/runtime, channel
+streaming, direct-DM access, inbound helper splinter, reply-options,
+pairing-path, and runtime `channel.turn.*` families.
 
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
@@ -103728,7 +102755,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
+    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers and local native exec prompt suppression |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/reply-dedupe` | Narrow inbound reply dedupe reset helpers |
@@ -103775,6 +102803,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
@@ -103852,9 +102881,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry lookup, and provider id normalization helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry helpers, and provider id normalization |
     | `plugin-sdk/text-chunking` | Text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
@@ -103868,7 +102895,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/meeting-notes` | Shared meeting-notes source provider types, registry helpers, session descriptors, and utterance metadata |
+    | `plugin-sdk/transcripts` | Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
     | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
@@ -103958,7 +102985,8 @@ plugins.
 ## Test utilities
 
 These test-helper subpaths are repo-local source entrypoints for OpenClaw's own
-bundled plugin tests. They are not package exports for third-party plugins.
+bundled plugin tests. They are not package exports for third-party plugins, and
+they may import Vitest or other repo-only test dependencies.
 
 **Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
 
@@ -103984,7 +103012,8 @@ bundled plugin tests. They are not package exports for third-party plugins.
 
 **Node builtin mock import:** `openclaw/plugin-sdk/test-node-mocks`
 
-Prefer the focused subpaths below for new plugin tests. The broad
+Inside the OpenClaw repo, prefer the focused subpaths below for new bundled
+plugin tests. The broad
 `openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
 Repo guardrails reject new real imports from `plugin-sdk/testing` and
 `plugin-sdk/test-utils`; those names remain only as deprecated compatibility
@@ -107454,7 +106483,7 @@ Adds the Discord channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: discord; contracts: meetingNotesSourceProviders
+channels: discord; contracts: transcriptSourceProviders
 
 ## Related docs
 
@@ -108231,34 +107260,6 @@ channels: mattermost
 ## Related docs
 
 - [mattermost](/channels/mattermost)
-
-
-
-# Section: plugins/reference/meeting-notes.md
-
----
-summary: "Capture meeting transcripts from channel-owned sources and write summaries."
-read_when:
-  - You are installing, configuring, or auditing the meeting-notes plugin
-title: "Meeting Notes plugin"
----
-
-# Meeting Notes plugin
-
-Capture meeting transcripts from channel-owned sources and write summaries.
-
-## Distribution
-
-- Package: `@openclaw/meeting-notes`
-- Install route: source checkout only
-
-## Surface
-
-contracts: meetingNotesSourceProviders, tools
-
-## Related docs
-
-- [meeting-notes](/plugins/meeting-notes)
 
 
 
@@ -112597,7 +111598,7 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
   env: { DEEPINFRA_API_KEY: "<your-deepinfra-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "deepinfra/deepseek-ai/DeepSeek-V3.2" },
+      model: { primary: "deepinfra/deepseek-ai/DeepSeek-V4-Flash" },
     },
   },
 }
@@ -112606,17 +111607,20 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
 ## Supported OpenClaw surfaces
 
 The bundled plugin registers all DeepInfra surfaces that match current
-OpenClaw provider contracts:
+OpenClaw provider contracts. Chat, image generation, and video generation
+refresh their model catalogues live from `/v1/openai/models?sort_by=openclaw&filter=with_meta`
+when `DEEPINFRA_API_KEY` is configured; the other surfaces use the curated
+static defaults below.
 
-| Surface                  | Default model                      | OpenClaw config/tool                                     |
-| ------------------------ | ---------------------------------- | -------------------------------------------------------- |
-| Chat / model provider    | `deepseek-ai/DeepSeek-V3.2`        | `agents.defaults.model`                                  |
-| Image generation/editing | `black-forest-labs/FLUX-1-schnell` | `image_generate`, `agents.defaults.imageGenerationModel` |
-| Media understanding      | `moonshotai/Kimi-K2.5` for images  | inbound image understanding                              |
-| Speech-to-text           | `openai/whisper-large-v3-turbo`    | inbound audio transcription                              |
-| Text-to-speech           | `hexgrad/Kokoro-82M`               | `messages.tts.provider: "deepinfra"`                     |
-| Video generation         | `Pixverse/Pixverse-T2V`            | `video_generate`, `agents.defaults.videoGenerationModel` |
-| Memory embeddings        | `BAAI/bge-m3`                      | `agents.defaults.memorySearch.provider: "deepinfra"`     |
+| Surface                  | Default model                                                                                         | OpenClaw config/tool                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Chat / model provider    | first chat-tagged entry from live catalog (manifest fallback `deepseek-ai/DeepSeek-V4-Flash`)         | `agents.defaults.model`                                  |
+| Image generation/editing | first `image-gen`-tagged entry from live catalog (static fallback `black-forest-labs/FLUX-1-schnell`) | `image_generate`, `agents.defaults.imageGenerationModel` |
+| Media understanding      | `moonshotai/Kimi-K2.5` for images                                                                     | inbound image understanding                              |
+| Speech-to-text           | `openai/whisper-large-v3-turbo`                                                                       | inbound audio transcription                              |
+| Text-to-speech           | `hexgrad/Kokoro-82M`                                                                                  | `messages.tts.provider: "deepinfra"`                     |
+| Video generation         | first `video-gen`-tagged entry from live catalog (static fallback `Pixverse/Pixverse-T2V`)            | `video_generate`, `agents.defaults.videoGenerationModel` |
+| Memory embeddings        | `BAAI/bge-m3`                                                                                         | `agents.defaults.memorySearch.provider: "deepinfra"`     |
 
 DeepInfra also exposes reranking, classification, object-detection, and other
 native model types. OpenClaw does not currently have first-class provider
@@ -112630,9 +111634,11 @@ OpenClaw dynamically discovers available DeepInfra models at startup. Use
 Any model available on [DeepInfra.com](https://deepinfra.com/) can be used with the `deepinfra/` prefix:
 
 ```
-deepinfra/MiniMaxAI/MiniMax-M2.5
+deepinfra/deepseek-ai/DeepSeek-V4-Flash
 deepinfra/deepseek-ai/DeepSeek-V3.2
+deepinfra/MiniMaxAI/MiniMax-M2.5
 deepinfra/moonshotai/Kimi-K2.5
+deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 deepinfra/zai-org/GLM-5.1
 ...and many more
 ```
@@ -112640,7 +111646,7 @@ deepinfra/zai-org/GLM-5.1
 ## Notes
 
 - Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/Qwen/Qwen3-Max`).
-- Default model: `deepinfra/deepseek-ai/DeepSeek-V3.2`
+- Default model: `deepinfra/deepseek-ai/DeepSeek-V4-Flash`
 - Base URL: `https://api.deepinfra.com/v1/openai`
 - Native video generation uses `https://api.deepinfra.com/v1/inference/<model>`.
 
@@ -118662,20 +117668,42 @@ explicit runtime config.
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                                                 | Status                                                 |
-| ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider                                                  | Yes                                                    |
-| Codex subscription models | `openai/<model>` with `openai-codex` OAuth                                       | Yes                                                    |
-| Legacy Codex model refs   | `openai-codex/<model>` or `codex-cli/<model>`                                    | Repaired by doctor to `openai/<model>`                 |
-| Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex` | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool                                                     | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                                                                 | Yes                                                    |
-| Videos                    | `video_generate`                                                                 | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                                        | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding                                        | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                        | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk                       | Yes                                                    |
-| Embeddings                | memory embedding provider                                                        | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                                                              | Status                                                                 |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Chat / Responses          | `openai/<model>` model provider                                                               | Yes                                                                    |
+| Codex subscription models | `openai/<model>` with `openai-codex` OAuth                                                    | Yes                                                                    |
+| Legacy Codex model refs   | `openai-codex/<model>` or `codex-cli/<model>`                                                 | Repaired by doctor to `openai/<model>`                                 |
+| Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex`              | Yes                                                                    |
+| Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no provider pinned                 |
+| Images                    | `image_generate`                                                                              | Yes                                                                    |
+| Videos                    | `video_generate`                                                                              | Yes                                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                                                     | Yes                                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (requires OpenAI Platform credits, not Codex/ChatGPT subscription) |
+| Embeddings                | memory embedding provider                                                                     | Yes                                                                    |
+
+<Note>
+  OpenAI Realtime voice (used by Voice Call's `realtime.provider: "openai"` and
+  Control UI Talk with `talk.realtime.provider: "openai"`) goes through the
+  public **OpenAI Platform Realtime API**, which is billed against OpenAI
+  Platform credits rather than Codex/ChatGPT subscription quota. An account
+  with healthy Codex OAuth that runs `openai-codex/*` chat models without
+  issue can still hit `insufficient_quota` / "You exceeded your current
+  quota" on the first Realtime turn if the same OpenAI organization has no
+  Platform billing set up.
+
+Fix: top up Platform credits at
+[platform.openai.com/account/billing](https://platform.openai.com/account/billing)
+for the organization backing your realtime credentials. Realtime accepts
+either a Platform `OPENAI_API_KEY` (configured via `talk.realtime.providers.openai.apiKey`
+for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
+for Voice Call) or an `openai-codex` OAuth profile whose underlying
+organization has Platform billing — both routes mint Realtime client secrets
+through the Platform API, so either way the org needs funded Platform
+credits. For chat turns you can still use `openai-codex/*` against the same
+OpenClaw install; Realtime is the one route that needs Platform billing.
+</Note>
 
 ## Memory embeddings
 
@@ -129903,6 +128931,11 @@ Per-agent overrides live under `agents.list[].contextLimits`. These knobs are
 for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
+
+`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+the live tool-result cap from the effective model context window: `16000` chars
+below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
+tokens, still bounded by the runtime context-share guard.
 
 For images, OpenClaw downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
@@ -145013,7 +144046,9 @@ Before installing a plugin, make sure you have:
     ```
 
     ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm. Use an
+    launch cutover, ordinary bare package specs still install from npm unless
+    they match an official plugin id. Raw `@openclaw/*` package specs that match
+    bundled plugins use the bundled copy from the current OpenClaw build. Use an
     explicit prefix when you need one source.
 
   </Step>
@@ -145099,10 +144134,13 @@ Before installing a plugin, make sure you have:
 Bare package specs have special compatibility behavior. If the bare name matches
 a bundled plugin id, OpenClaw uses that bundled source. If it matches an
 official external plugin id, OpenClaw uses the official package catalog. Other
-ordinary bare package specs install through npm during the launch cutover. Use
-`clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need deterministic source
-selection. See [`openclaw plugins`](/cli/plugins#install) for the full command
-contract.
+ordinary bare package specs install through npm during the launch cutover. Raw
+`@openclaw/*` package specs that match bundled plugins also resolve to the
+bundled copy before npm fallback. Use `npm:@openclaw/<plugin>@<version>` when
+you deliberately want the external npm package instead of the image-owned
+bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
+deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
+for the full command contract.
 
 ### Configure plugin policy
 
