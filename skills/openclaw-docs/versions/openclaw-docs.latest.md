@@ -3843,7 +3843,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   <Accordion title="Notify defaults for cron and media">
     Main-session cron tasks use `silent` notify policy by default - they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
-    Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. Generated-media completion events require message-tool delivery: the agent must send the finished media with the `message` tool, then reply `NO_REPLY`. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
+    Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. The requester agent follows its normal visible-reply contract: automatic final reply when configured, or `message(action="send")` plus `NO_REPLY` when the session requires message-tool replies. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
 
   </Accordion>
   <Accordion title="Concurrent media-generation guardrail">
@@ -7280,7 +7280,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 ## Quick start
 
 <Note>
-Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
+Requires OpenClaw 2026.5.29 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
 </Note>
 
 <Steps>
@@ -32397,6 +32397,7 @@ Notes:
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
 - Local mode adds `/auth [provider]` inside the TUI command surface.
 - Plugin approval gates still apply in local mode. Tools that require approval prompt for a decision in the terminal; nothing is silently auto-approved because the Gateway is not involved.
+- Session [goals](/tools/goal) appear in the footer and can be managed with `/goal`.
 
 ## Examples
 
@@ -32441,6 +32442,7 @@ rerun `openclaw config validate`. See [TUI](/web/tui) and [Config](/cli/config).
 
 - [CLI reference](/cli)
 - [TUI](/web/tui)
+- [Goal](/tools/goal)
 
 
 
@@ -34428,7 +34430,7 @@ There are two runtime families:
   model, execute through Claude CLI." `claude-cli` is not an embedded harness id
   and must not be passed to AgentHarness selection.
 
-The `copilot` harness is a separate, opt-in plugin harness for the
+The `copilot` harness is a separate, opt-in external plugin harness for the
 GitHub Copilot CLI; see [GitHub Copilot agent runtime](/plugins/copilot)
 for the user-facing decision between PI, Codex, and GitHub Copilot agent runtime.
 
@@ -34595,7 +34597,7 @@ If `openclaw doctor` warns that the `codex` plugin is enabled while
 
 ## GitHub Copilot agent runtime
 
-The bundled `copilot` extension registers an opt-in `copilot` runtime
+The external `@openclaw/copilot` plugin registers an opt-in `copilot` runtime
 backed by the GitHub Copilot CLI (`@github/copilot-sdk`). It claims the
 canonical subscription `github-copilot` provider and is **never** selected by
 `auto`. Opt in per-model or per-provider via `agentRuntime.id`:
@@ -41293,32 +41295,36 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ### Other bundled provider plugins
 
-| Provider                | Id                               | Auth env                                                     | Example model                                      |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------ | -------------------------------------------------- |
-| BytePlus                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                    |
-| Cerebras                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                             |
-| Cloudflare AI Gateway   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                  |
-| DeepInfra               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`          |
-| DeepSeek                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                       |
-| GitHub Copilot          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                  |
-| Groq                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                  |
-| Hugging Face Inference  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`              |
-| Kilo Gateway            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                               |
-| Kimi Coding             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                             |
-| MiniMax                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                             |
-| Mistral                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                     |
-| Moonshot                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                               |
-| NVIDIA                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`         |
-| OpenRouter              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                  |
-| Qianfan                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                            |
-| Qwen Cloud              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                |
-| StepFun                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                           |
-| Together                | `together`                       | `TOGETHER_API_KEY`                                           | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` |
-| Venice                  | `venice`                         | `VENICE_API_KEY`                                             | -                                                  |
-| Vercel AI Gateway       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6`      |
-| Volcano Engine (Doubao) | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`                  |
-| xAI                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                     |
-| Xiaomi                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                             |
+| Provider                                | Id                               | Auth env                                                     | Example model                                      |
+| --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | -------------------------------------------------- |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                    |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                             |
+| Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                  |
+| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`          |
+| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                       |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                  |
+| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                                | `gmi/google/gemini-3.1-flash-lite`                 |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                  |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`              |
+| Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                               |
+| Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                             |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                             |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                     |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                               |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`         |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                 |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                           |
+| OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                  |
+| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                            |
+| Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                |
+| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                          |
+| StepFun                                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                           |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                                           | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                                             | -                                                  |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6`      |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`                  |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                     |
+| Xiaomi                                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                             |
 
 #### Quirks worth knowing
 
@@ -41746,7 +41752,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the bundled GitHub Copilot agent runtime — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -43771,6 +43777,50 @@ Progress lines are enabled by default in progress mode. They come from real run
 events: tool starts, item updates, task plans, approvals, command output, patch
 summaries, and similar agent activity.
 
+Tools can also emit typed progress while a single tool call is still running.
+That is how a slow fetch or search can update the visible draft before the tool
+returns its final result. The progress update is a partial tool result with
+empty model content and explicit public channel metadata:
+
+```json
+{
+  "content": [],
+  "progress": {
+    "text": "Fetching page content...",
+    "visibility": "channel",
+    "privacy": "public",
+    "id": "web_fetch:fetching"
+  }
+}
+```
+
+OpenClaw renders only the `progress.text` in the channel progress UI. The
+normal tool result still arrives later as `content` and `details`, and is the
+only part returned to the model.
+
+When adding progress to a tool, use a short, generic message and delay it until
+the operation has been pending long enough to be useful:
+
+```typescript
+const clearProgressTimer = scheduleToolProgress(
+  onUpdate,
+  { text: "Fetching page content...", id: "web_fetch:fetching" },
+  5_000,
+  { signal },
+);
+
+try {
+  return await runToolWork();
+} finally {
+  clearProgressTimer();
+}
+```
+
+This pattern means fast calls do not show a progress line, long calls show one
+while they are still pending, and canceled calls clear the timer before stale
+progress can appear. Progress text is a public UI side channel, so it must not
+include secrets, raw arguments, fetched content, command output, or page text.
+
 OpenClaw uses the same formatter for progress drafts and `/verbose`:
 
 ```json5
@@ -44225,6 +44275,10 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 ## Live transport coverage
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
+
+Live transport runners should import the shared scenario ids, baseline
+coverage helpers, and scenario-selection helper from
+`openclaw/plugin-sdk/qa-live-transport-scenarios`.
 
 | Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
 | -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
@@ -46168,6 +46222,12 @@ Matrix:
 
 Preview streaming can also include **tool-progress** updates - short status lines like "searching the web", "reading file", or "calling tool" - that appear in the same preview message while tools are running, ahead of the final reply. In Codex app-server mode, Codex preamble/commentary messages use this same preview path, so short "I am checking..." progress notes can stream into the editable draft without becoming part of the final answer. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
 
+Long-running tools may emit typed progress before they return. For example,
+`web_fetch` arms a five-second timer when it starts: if the fetch is still
+pending, the preview can show `Fetching page content...`; if the fetch finishes
+or is canceled before then, no progress line is emitted. The later final tool
+result is still delivered normally to the model.
+
 Supported surfaces:
 
 - **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress and Codex preamble updates into the live preview edit by default when preview streaming is active. Microsoft Teams uses its native progress stream in personal chats.
@@ -46408,12 +46468,14 @@ prompt surface that matches their lifetime:
 On the native Codex harness, OpenClaw avoids repeating stable workspace files
 in every user turn. Codex loads `AGENTS.md` through its own project-doc
 discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
-Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
-turns get a collaboration-mode note pointing to the file when it exists and is
-non-empty. `MEMORY.md` content from the configured agent workspace is not pasted
-into every native Codex turn; when memory tools are available for that workspace,
-Codex turns get a small workspace-memory note and should use `memory_search` or
-`memory_get` when durable memory is relevant. If tools are disabled, memory
+Codex developer instructions. The compact OpenClaw skills list is also forwarded
+as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
+not injected; heartbeat turns get a collaboration-mode note pointing to the file
+when it exists and is non-empty. `MEMORY.md` content from the configured agent
+workspace is not pasted into every native Codex turn; when memory tools are
+available for that workspace, Codex turns get a small workspace-memory note in
+turn-scoped collaboration developer instructions and should use `memory_search`
+or `memory_get` when durable memory is relevant. If tools are disabled, memory
 search is unavailable, or the active workspace differs from the agent memory
 workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
 `BOOTSTRAP.md` content keeps the normal turn-context role for now.
@@ -46484,6 +46546,11 @@ When eligible skills exist, OpenClaw injects a compact **available skills list**
 prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
+
+Native Codex turns receive this list as turn-scoped collaboration developer
+instructions instead of per-turn user input, except lightweight cron turns that
+preserve the exact scheduled prompt. Other harnesses keep the normal prompt
+section.
 
 The location can point at a nested skill, such as
 `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still
@@ -49249,7 +49316,7 @@ Periodic heartbeat runs.
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
-- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds`.
+- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
@@ -51498,12 +51565,13 @@ Controls inline attachment support for `sessions_spawn`.
 
 <AccordionGroup>
   <Accordion title="Attachment notes">
-    - Attachments are only supported for `runtime: "subagent"`. ACP runtime rejects them.
-    - Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - Attachments require `enabled: true`.
+    - Subagent attachments are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - ACP attachments are image-only and forwarded inline to the ACP runtime after the same file count, per-file byte, and total byte limits pass.
     - Attachment content is automatically redacted from transcript persistence.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
-    - File permissions are `0700` for directories and `0600` for files.
-    - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+    - Subagent attachment file permissions are `0700` for directories and `0600` for files.
+    - Subagent cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
   </Accordion>
 </AccordionGroup>
@@ -54333,9 +54401,9 @@ candidate contains redacted secret placeholders such as `***`.
   </Accordion>
 
   <Accordion title="Enable relay-backed push for official iOS builds">
-    Relay-backed push is configured in `openclaw.json`.
+    Relay-backed push uses the hosted OpenClaw relay by default: `https://ios-push-relay.openclaw.ai`.
 
-    Set this in gateway config:
+    To use a custom relay, set this in gateway config:
 
     ```json5
     {
@@ -54369,8 +54437,8 @@ candidate contains redacted secret placeholders such as `***`.
 
     End-to-end flow:
 
-    1. Install an official/TestFlight iOS build that was compiled with the same relay base URL.
-    2. Configure `gateway.push.apns.relay.baseUrl` on the gateway.
+    1. Install an official/TestFlight iOS build.
+    2. Optional: configure `gateway.push.apns.relay.baseUrl` on the gateway only when using a custom relay deployment.
     3. Pair the iOS app to the gateway and let both node and operator sessions connect.
     4. The iOS app fetches the gateway identity, registers with the relay using App Attest plus the app receipt, and then publishes the relay-backed `push.apns.register` payload to the paired gateway.
     5. The gateway stores the relay handle and send grant, then uses them for `push.test`, wake nudges, and reconnect wakes.
@@ -54383,6 +54451,7 @@ candidate contains redacted secret placeholders such as `***`.
     Compatibility note:
 
     - `OPENCLAW_APNS_RELAY_BASE_URL` and `OPENCLAW_APNS_RELAY_TIMEOUT_MS` still work as temporary env overrides.
+    - Custom gateway relay URLs must match the relay base URL baked into the official/TestFlight iOS build.
     - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true` remains a loopback-only development escape hatch; do not persist HTTP relay URLs in config.
 
     See [iOS App](/platforms/ios#relay-backed-push-for-official-builds) for the end-to-end flow and [Authentication and trust flow](/platforms/ios#authentication-and-trust-flow) for the relay security model.
@@ -55498,7 +55567,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="3c. Session lock cleanup">
-    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
+    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, malformed owner metadata, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes locks with dead, orphaned, recycled, malformed-old, or non-OpenClaw owners automatically. Old locks that are still owned by a live OpenClaw process are reported but left in place so doctor does not cut off an active transcript writer.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected file next to the original and rewrites the transcript to the active branch so gateway history and memory readers no longer see duplicate turns.
@@ -55879,6 +55948,7 @@ Example config:
 
 - Interval: `30m` (or `1h` when Anthropic OAuth/token auth is the detected auth mode, including Claude CLI reuse). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.list[].heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeat" section only when heartbeats are enabled for the default agent, and the run is flagged internally.
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
@@ -56089,6 +56159,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">
   When true, suppresses tool error warning payloads during heartbeat runs.
+
+</ParamField>
+<ParamField path="timeoutSeconds" type="number" default="global timeout or min(every, 600)">
+  Maximum seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 
 </ParamField>
 <ParamField path="activeHours" type="object">
@@ -62054,6 +62128,13 @@ Define providers under `secrets.providers`:
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
       },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
+      },
     },
     defaults: {
       env: "default",
@@ -62090,6 +62171,11 @@ Define providers under `secrets.providers`:
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
     - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - Plugin-managed exec providers can use `pluginIntegration` instead of
+      copied `command`/`args`. OpenClaw resolves the current command details
+      from the installed plugin manifest during startup/reload. If the plugin is
+      disabled, removed, untrusted, or no longer declares the integration,
+      active SecretRefs using that provider fail closed.
 
     Request payload (stdin):
 
@@ -82659,7 +82745,9 @@ openclaw gateway call node.list --params "{}"
 Official distributed iOS builds use the external push relay instead of publishing the raw APNs
 token to the gateway.
 
-Gateway-side requirement:
+By default, official/TestFlight builds and gateways use the hosted relay at `https://ios-push-relay.openclaw.ai`.
+
+Custom relay deployments can override the gateway relay URL:
 
 ```json5
 {
@@ -82682,7 +82770,7 @@ How the flow works:
 - The iOS app fetches the paired gateway identity and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
 - The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
 - The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
-- The gateway relay base URL must match the relay URL baked into the official/TestFlight iOS build.
+- Custom gateway relay URLs must match the relay URL baked into the official/TestFlight iOS build.
 - If the app later connects to a different gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
 
 What the gateway does **not** need for this path:
@@ -82693,7 +82781,7 @@ What the gateway does **not** need for this path:
 Expected operator flow:
 
 1. Install the official/TestFlight iOS build.
-2. Set `gateway.push.apns.relay.baseUrl` on the gateway.
+2. Optional: set `gateway.push.apns.relay.baseUrl` on the gateway only when using a custom relay deployment.
 3. Pair the app to the gateway and let it finish connecting.
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
@@ -82712,6 +82800,7 @@ compatible but does not count as a durable last-seen update.
 Compatibility note:
 
 - `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
+- `OPENCLAW_PUSH_RELAY_BASE_URL` still works as a temporary env override for official/TestFlight iOS builds.
 
 ## Authentication and trust flow
 
@@ -88383,25 +88472,25 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                              |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                        |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                             |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                 |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                              |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                   |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                           |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                          |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | unset                                                  | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Defaults to the assistant completion idle timeout when unset. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                       |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                  |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                             |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                         |
-| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                              |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                       |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                               |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                  |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                          |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                               |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                   |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                     |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                             |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                            |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                         |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                    |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                               |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                           |
+| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                         |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                 |
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
@@ -88416,7 +88505,11 @@ prompts that nobody is around to answer.
 
 If Codex's local system requirements file disallows implicit YOLO approval,
 reviewer, or sandbox values, OpenClaw treats the implicit default as guardian
-instead and selects allowed guardian permissions. Hostname-matching
+instead and selects allowed guardian permissions. `tools.exec.mode: "auto"`
+also forces guardian-reviewed Codex approvals and does not preserve unsafe
+legacy `approvalPolicy: "never"` or `sandbox: "danger-full-access"` overrides;
+set `tools.exec.mode: "full"` for an intentional no-approval posture.
+Hostname-matching
 `[[remote_sandbox_config]]` entries in the same requirements file are honored
 for the sandbox default decision.
 
@@ -88631,10 +88724,15 @@ Codex then goes quiet without `turn/completed`, OpenClaw best-effort interrupts
 the native turn and releases the session lane. Post-tool raw assistant progress
 keeps waiting for `turn/completed` while a completion-idle guard stays armed; the
 guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when
-configured and falls back to the assistant completion idle timeout otherwise.
-Timeout diagnostics include the last app-server notification method and, for raw
-assistant response items, the item type, role, id, and a bounded assistant text
-preview.
+configured and defaults to five minutes otherwise. Replay-safe stdio app-server
+failures, including turn-completion idle timeouts without assistant, tool,
+active-item, or side-effect evidence, are retried once on a fresh app-server
+attempt. Unsafe timeouts still retire the stuck app-server client and release
+the OpenClaw session lane. They also clear the stale native thread binding and
+surface a recoverable timeout message for user or maintainer judgment instead of
+being replayed automatically. Timeout diagnostics include the last
+app-server notification method and, for raw assistant response items, the item
+type, role, id, and a bounded assistant text preview.
 
 ## Model discovery
 
@@ -88716,15 +88814,17 @@ filenames for persona files, because Codex fallbacks only apply when
 For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
 files. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
 OpenClaw Codex developer instructions because they define the active agent,
-available workspace guidance, and user profile. `HEARTBEAT.md` content is not
-injected; heartbeat turns get a collaboration-mode pointer to read the file when
-it exists and is non-empty. `MEMORY.md` content from the configured agent
-workspace is not pasted into native Codex turn input when memory tools are
-available for that workspace; when it exists, the harness adds a small
-workspace-memory pointer and Codex should use `memory_search` or `memory_get`
-when durable memory is relevant. If tools are disabled, memory search is
-unavailable, or the active workspace differs from the agent memory workspace,
-`MEMORY.md` uses the normal bounded turn-context path.
+available workspace guidance, and user profile. The compact OpenClaw skills
+list is forwarded as turn-scoped collaboration developer instructions.
+`HEARTBEAT.md` content is not injected; heartbeat turns get a collaboration-mode
+pointer to read the file when it exists and is non-empty. `MEMORY.md` content
+from the configured agent workspace is not pasted into native Codex turn input
+when memory tools are available for that workspace; when it exists, the harness
+adds a small workspace-memory pointer to turn-scoped collaboration developer
+instructions and Codex should use `memory_search` or `memory_get` when durable
+memory is relevant. If tools are disabled, memory search is unavailable, or the
+active workspace differs from the agent memory workspace, `MEMORY.md` uses the
+normal bounded turn-context path.
 `BOOTSTRAP.md` when present is forwarded as OpenClaw turn input reference
 context.
 
@@ -88796,9 +88896,10 @@ personality files and OpenClaw agent identity stay authoritative. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
 developer instructions cover OpenClaw runtime concerns such as source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
-and active `BOOTSTRAP.md` content are projected as turn input reference context
-for native Codex.
+active agent workspace profile files. OpenClaw skill catalogs and tool-routed
+`MEMORY.md` pointers are projected as turn-scoped collaboration developer
+instructions for native Codex. Active `BOOTSTRAP.md` content and full
+`MEMORY.md` fallback injection still use turn input reference context.
 
 ## Thread bindings and model changes
 
@@ -89396,30 +89497,35 @@ turn instead of relying on Codex host-side sandboxing. Shell access is exposed
 through OpenClaw sandbox-backed dynamic tools such as `sandbox_exec` and
 `sandbox_process` when the normal exec/process tools are available.
 
-Use guardian mode when you want Codex native auto-review before sandbox escapes
-or extra permissions:
+Use normalized OpenClaw exec mode when you want Codex native auto-review before
+sandbox escapes or extra permissions:
 
 ```json5
 {
+  tools: {
+    exec: {
+      mode: "auto",
+    },
+  },
   plugins: {
     entries: {
       codex: {
         enabled: true,
-        config: {
-          appServer: {
-            mode: "guardian",
-            serviceTier: "priority",
-          },
-        },
       },
     },
   },
 }
 ```
 
-Guardian mode expands to Codex app-server approvals, usually
+For Codex app-server sessions, OpenClaw maps `tools.exec.mode: "auto"` to Codex
+Guardian-reviewed approvals, usually
 `approvalPolicy: "on-request"`, `approvalsReviewer: "auto_review"`, and
 `sandbox: "workspace-write"` when the local requirements allow those values.
+In `tools.exec.mode: "auto"`, OpenClaw does not preserve legacy unsafe Codex
+`approvalPolicy: "never"` or `sandbox: "danger-full-access"` overrides; use
+`tools.exec.mode: "full"` for an intentional no-approval Codex posture. The
+legacy `plugins.entries.codex.config.appServer.mode: "guardian"` preset still
+works, but `tools.exec.mode: "auto"` is the normalized OpenClaw surface.
 
 For every app-server field, auth order, environment isolation, discovery, and
 timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference).
@@ -89554,25 +89660,25 @@ Supported top-level Codex plugin fields:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                              |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                                                          |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                        |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                             |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                 |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                              |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                    |
-| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                    |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                           |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                                                                                                           |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | unset                                                  | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Defaults to the assistant completion idle timeout when unset. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                                                                 |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                                                                  |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                           |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                    |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                       |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                               |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                    |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                              |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                   |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                       |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                    |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                          |
+| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                          |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                 |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                                                                 |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                     |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                       |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                        |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting. |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                          |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                             |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                     |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
@@ -89603,10 +89709,15 @@ goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
 turn and releases the session lane. Post-tool raw assistant progress keeps
 waiting for `turn/completed` while a completion-idle guard stays armed; the guard
 uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when configured and
-falls back to the assistant completion idle timeout otherwise. Timeout
-diagnostics include the last app-server notification method and, for raw
-assistant response items, the item type, role, id, and a bounded assistant text
-preview.
+defaults to five minutes otherwise. Replay-safe stdio app-server failures,
+including turn-completion idle timeouts without assistant, tool, active-item, or
+side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+timeouts still retire the stuck app-server client and release the OpenClaw
+session lane. They also clear the stale native thread binding and surface a
+recoverable timeout message for user or maintainer judgment instead of being
+replayed automatically. Timeout diagnostics include the last app-server
+notification method and, for raw assistant response items, the item type, role,
+id, and a bounded assistant text preview.
 
 Environment overrides remain available for local testing:
 
@@ -90342,15 +90453,15 @@ path moves to `removal-pending` or `removed`.
 # Section: plugins/copilot.md
 
 ---
-summary: "Run OpenClaw embedded agent turns through the bundled GitHub Copilot SDK harness"
+summary: "Run OpenClaw embedded agent turns through the external GitHub Copilot SDK harness"
 title: "Copilot SDK harness"
 read_when:
-  - You want to use the bundled GitHub Copilot SDK harness for an agent
+  - You want to use the GitHub Copilot SDK harness for an agent
   - You need configuration examples for the `copilot` runtime
   - You are wiring an agent to subscription Copilot (github / openclaw / copilot) and want it to run through the Copilot CLI
 ---
 
-The bundled `copilot` extension lets OpenClaw run embedded subscription
+The external `@openclaw/copilot` plugin lets OpenClaw run embedded subscription
 Copilot agent turns through the GitHub Copilot CLI (`@github/copilot-sdk`)
 instead of the built-in PI harness.
 
@@ -90367,11 +90478,11 @@ For the broader model/provider/runtime split, start with
 
 ## Requirements
 
-- OpenClaw with the bundled `copilot` extension available.
+- OpenClaw with the `@openclaw/copilot` plugin installed.
 - If your config uses `plugins.allow`, include `copilot` (the manifest
-  id in `extensions/copilot/openclaw.plugin.json`). A restrictive
+  id declared by the plugin). A restrictive
   allowlist that uses the npm-style `@openclaw/copilot` package name
-  will leave the bundled plugin blocked and the runtime will not load
+  will leave the plugin blocked and the runtime will not load
   even with `agentRuntime.id: "copilot"`.
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
@@ -90381,56 +90492,38 @@ For the broader model/provider/runtime split, start with
   or `~/.config/copilot` elsewhere) is used as the doctor probe fallback when
   no explicit home is set.
 
-`openclaw doctor` runs the bundled
+`openclaw doctor` runs the plugin
 [doctor contract](#doctor-and-probes) for the extension; failures there are
 the canonical way to confirm the environment is ready before opting an agent
 in.
 
-## On-demand SDK install
+## Plugin install
 
-The Copilot agent runtime ships its small TypeScript code bundled inside
-the openclaw tarball, but the underlying `@github/copilot-sdk` package
-(and its platform-specific `@github/copilot-<platform>-<arch>` CLI
-binary) is **not** installed by default — together they add ~260 MB to
-your openclaw install footprint, and most openclaw users do not select
-a Copilot model.
+The Copilot runtime is an external plugin so the core `openclaw` package does
+not carry the `@github/copilot-sdk` dependency or its platform-specific
+`@github/copilot-<platform>-<arch>` CLI binary. Together they add roughly
+260 MB, so install them only for agents that opt into this runtime:
 
-The wizard offers to install the SDK the first time you select a
+```bash
+openclaw plugins install @openclaw/copilot
+```
+
+The wizard installs the plugin the first time you select a
 `github-copilot/*` model **and** your config opts the model (or its
 provider) into the Copilot agent runtime via
 `agentRuntime: { id: "copilot" }` (see [Quickstart](#quickstart) below).
 Without the opt-in, openclaw uses its built-in GitHub Copilot provider
-and never prompts for the SDK install:
-
-```
-The Copilot agent runtime needs @github/copilot-sdk (~260 MB on first
-install, downloads the @github/copilot CLI binary for your platform).
-Install now? [Y/n]
-```
-
-If you accept, the SDK is installed into
-`~/.openclaw/npm-runtime/copilot/` and detected on subsequent runs. The
-install runs `npm ci` against a checked-in `package-lock.json` shipped
-with openclaw at
-`src/commands/copilot-sdk-install-manifest/package-lock.json`, so the
-exact transitive graph reviewed for this release lands on disk on every
-user machine.
-
-If you decline, the runtime will fail at first invocation with an
-actionable install message; re-run `openclaw setup` to retry the install
-(or copy the pinned manifest into `~/.openclaw/npm-runtime/copilot/` and
-run `npm ci` yourself if you need to install offline).
+and never installs the runtime plugin.
 
 The runtime resolves the SDK in this order:
 
-1. `import("@github/copilot-sdk")` against the host openclaw install
-   (covers source/dev checkouts and any environment that pre-installs
-   the SDK alongside openclaw).
+1. `import("@github/copilot-sdk")` from the installed `@openclaw/copilot`
+   package.
 2. The well-known fallback dir `~/.openclaw/npm-runtime/copilot/` (the
-   wizard install target).
+   legacy on-demand install target).
 
 A missing SDK surfaces a single error with code `COPILOT_SDK_MISSING`
-and the manual install command above.
+and the plugin reinstall command above.
 
 ## Quickstart
 
@@ -93603,6 +93696,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `modelIdNormalization`               | No       | `object`                         | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                       |
 | `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                        |
 | `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                          |
+| `secretProviderIntegrations`         | No       | `Record<string, object>`         | Declarative SecretRef exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                 |
 | `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                     |
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                          |
 | `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                            |
@@ -94513,6 +94607,72 @@ Provider fields:
 | `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
 | `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
 | `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
+
+## secretProviderIntegrations reference
+
+Use `secretProviderIntegrations` when a plugin can publish a reusable SecretRef
+exec provider preset. OpenClaw reads this metadata before plugin runtime loads,
+stores plugin ownership in `secrets.providers.<alias>.pluginIntegration`, and
+leaves actual secret resolution to the SecretRef runtime.
+Presets are exposed only for bundled plugins and installed plugins discovered
+from the managed plugin install roots, such as git and ClawHub installs.
+
+```json
+{
+  "secretProviderIntegrations": {
+    "secret-store": {
+      "providerAlias": "team-secrets",
+      "displayName": "Team secrets",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./bin/resolve-secrets.mjs"]
+    }
+  }
+}
+```
+
+The map key is the integration id. If `providerAlias` is omitted, OpenClaw uses
+the integration id as the SecretRef provider alias. Provider aliases must match
+the normal SecretRef provider alias pattern, for example `team-secrets` or
+`onepassword-work`.
+
+When an operator selects the preset, OpenClaw writes a provider reference like:
+
+```json
+{
+  "secrets": {
+    "providers": {
+      "team-secrets": {
+        "source": "exec",
+        "pluginIntegration": {
+          "pluginId": "acme-secrets",
+          "integrationId": "secret-store"
+        }
+      }
+    }
+  }
+}
+```
+
+At startup/reload, OpenClaw resolves that provider by loading current plugin
+manifest metadata, checking that the owning plugin is installed and active, and
+materializing the exec command from the manifest. Disabling or removing the
+plugin revokes the provider for active SecretRefs. Operators who want standalone
+exec configuration can still write manual `command`/`args` providers directly.
+
+Only `source: "exec"` presets are currently supported. `command` must be
+`${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script.
+OpenClaw materializes it at startup/reload to the current Node executable and
+the absolute in-plugin script path. Node options such as `--require`, `--import`,
+`--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest
+preset contract. Operators who need non-Node commands can configure standalone
+manual exec providers directly.
+
+OpenClaw derives `trustedDirs` for manifest presets from the plugin root and,
+for `${node}` presets, the current Node executable directory. Manifest-authored
+`trustedDirs` are ignored. Other exec provider options such as `timeoutMs`,
+`maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass
+through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 
@@ -96468,7 +96628,6 @@ commands.
 | [cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway) | Adds Cloudflare AI Gateway model provider support to OpenClaw.                                                                                                       | `@openclaw/cloudflare-ai-gateway-provider`<br />included in OpenClaw | providers: cloudflare-ai-gateway                                                                                                                                                                                                                                 |
 | [codex-supervisor](/plugins/reference/codex-supervisor)           | Supervise Codex app-server sessions from OpenClaw.                                                                                                                   | `@openclaw/codex-supervisor`<br />included in OpenClaw               | contracts: tools                                                                                                                                                                                                                                                 |
 | [comfy](/plugins/reference/comfy)                                 | Adds ComfyUI model provider support to OpenClaw.                                                                                                                     | `@openclaw/comfy-provider`<br />included in OpenClaw                 | providers: comfy; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders                                                                                                                                                        |
-| [copilot](/plugins/reference/copilot)                             | Registers the GitHub Copilot agent runtime.                                                                                                                          | `@openclaw/copilot`<br />included in OpenClaw                        | plugin                                                                                                                                                                                                                                                           |
 | [copilot-proxy](/plugins/reference/copilot-proxy)                 | Adds Copilot Proxy model provider support to OpenClaw.                                                                                                               | `@openclaw/copilot-proxy`<br />included in OpenClaw                  | providers: copilot-proxy                                                                                                                                                                                                                                         |
 | [deepgram](/plugins/reference/deepgram)                           | Adds media understanding provider support. Adds realtime transcription provider support.                                                                             | `@openclaw/deepgram-provider`<br />included in OpenClaw              | contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders                                                                                                                                                                                           |
 | [deepinfra](/plugins/reference/deepinfra)                         | Adds DeepInfra model provider support to OpenClaw.                                                                                                                   | `@openclaw/deepinfra-provider`<br />included in OpenClaw             | providers: deepinfra; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, speechProviders, videoGenerationProviders                                                                                                      |
@@ -96482,6 +96641,7 @@ commands.
 | [firecrawl](/plugins/reference/firecrawl)                         | Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.                                                                        | `@openclaw/firecrawl-plugin`<br />included in OpenClaw               | contracts: tools, webFetchProviders, webSearchProviders                                                                                                                                                                                                          |
 | [fireworks](/plugins/reference/fireworks)                         | Adds Fireworks model provider support to OpenClaw.                                                                                                                   | `@openclaw/fireworks-provider`<br />included in OpenClaw             | providers: fireworks                                                                                                                                                                                                                                             |
 | [github-copilot](/plugins/reference/github-copilot)               | Adds GitHub Copilot model provider support to OpenClaw.                                                                                                              | `@openclaw/github-copilot-provider`<br />included in OpenClaw        | providers: github-copilot; contracts: memoryEmbeddingProviders                                                                                                                                                                                                   |
+| [gmi](/plugins/reference/gmi)                                     | Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw.                                                                                                    | `@openclaw/gmi-provider`<br />included in OpenClaw                   | providers: gmi, gmi-cloud, gmicloud                                                                                                                                                                                                                              |
 | [google](/plugins/reference/google)                               | Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.                                                                                    | `@openclaw/google-plugin`<br />included in OpenClaw                  | providers: google, google-gemini-cli, google-vertex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, musicGenerationProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders, webSearchProviders |
 | [gradium](/plugins/reference/gradium)                             | Adds text-to-speech provider support.                                                                                                                                | `@openclaw/gradium-speech`<br />included in OpenClaw                 | contracts: speechProviders                                                                                                                                                                                                                                       |
 | [groq](/plugins/reference/groq)                                   | Adds Groq model provider support to OpenClaw.                                                                                                                        | `@openclaw/groq-provider`<br />included in OpenClaw                  | providers: groq; contracts: mediaUnderstandingProviders                                                                                                                                                                                                          |
@@ -96504,9 +96664,10 @@ commands.
 | [minimax](/plugins/reference/minimax)                             | Adds MiniMax, MiniMax Portal model provider support to OpenClaw.                                                                                                     | `@openclaw/minimax-provider`<br />included in OpenClaw               | providers: minimax, minimax-portal; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders, webSearchProviders                                                                    |
 | [mistral](/plugins/reference/mistral)                             | Adds Mistral model provider support to OpenClaw.                                                                                                                     | `@openclaw/mistral-provider`<br />included in OpenClaw               | providers: mistral; contracts: mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders                                                                                                                                             |
 | [moonshot](/plugins/reference/moonshot)                           | Adds Moonshot model provider support to OpenClaw.                                                                                                                    | `@openclaw/moonshot-provider`<br />included in OpenClaw              | providers: moonshot; contracts: mediaUnderstandingProviders, webSearchProviders                                                                                                                                                                                  |
+| [novita](/plugins/reference/novita)                               | Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.                                                                                                 | `@openclaw/novita-provider`<br />included in OpenClaw                | providers: novita, novita-ai, novitaai                                                                                                                                                                                                                           |
 | [nvidia](/plugins/reference/nvidia)                               | Adds NVIDIA model provider support to OpenClaw.                                                                                                                      | `@openclaw/nvidia-provider`<br />included in OpenClaw                | providers: nvidia                                                                                                                                                                                                                                                |
 | [oc-path](/plugins/reference/oc-path)                             | Adds the openclaw path CLI for oc:// workspace file addressing.                                                                                                      | `@openclaw/oc-path`<br />included in OpenClaw                        | plugin                                                                                                                                                                                                                                                           |
-| [ollama](/plugins/reference/ollama)                               | Adds Ollama model provider support to OpenClaw.                                                                                                                      | `@openclaw/ollama-provider`<br />included in OpenClaw                | providers: ollama; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                                       |
+| [ollama](/plugins/reference/ollama)                               | Adds Ollama, Ollama Cloud model provider support to OpenClaw.                                                                                                        | `@openclaw/ollama-provider`<br />included in OpenClaw                | providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                         |
 | [open-prose](/plugins/reference/open-prose)                       | OpenProse VM skill pack with a /prose slash command.                                                                                                                 | `@openclaw/open-prose`<br />included in OpenClaw                     | skills                                                                                                                                                                                                                                                           |
 | [openai](/plugins/reference/openai)                               | Adds OpenAI, OpenAI Codex model provider support to OpenClaw.                                                                                                        | `@openclaw/openai-provider`<br />included in OpenClaw                | providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                   |
 | [opencode](/plugins/reference/opencode)                           | Adds OpenCode model provider support to OpenClaw.                                                                                                                    | `@openclaw/opencode-provider`<br />included in OpenClaw              | providers: opencode; contracts: mediaUnderstandingProviders                                                                                                                                                                                                      |
@@ -96515,7 +96676,7 @@ commands.
 | [perplexity](/plugins/reference/perplexity)                       | Adds web search provider support.                                                                                                                                    | `@openclaw/perplexity-plugin`<br />included in OpenClaw              | contracts: webSearchProviders                                                                                                                                                                                                                                    |
 | [policy](/plugins/reference/policy)                               | Adds policy-backed doctor checks for workspace conformance.                                                                                                          | `@openclaw/policy`<br />included in OpenClaw                         | plugin                                                                                                                                                                                                                                                           |
 | [qianfan](/plugins/reference/qianfan)                             | Adds Qianfan model provider support to OpenClaw.                                                                                                                     | `@openclaw/qianfan-provider`<br />included in OpenClaw               | providers: qianfan                                                                                                                                                                                                                                               |
-| [qwen](/plugins/reference/qwen)                                   | Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenClaw.                                                                                   | `@openclaw/qwen-provider`<br />included in OpenClaw                  | providers: qwen, qwencloud, modelstudio, dashscope; contracts: mediaUnderstandingProviders, videoGenerationProviders                                                                                                                                             |
+| [qwen](/plugins/reference/qwen)                                   | Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.                                                | `@openclaw/qwen-provider`<br />included in OpenClaw                  | providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwen-cli; contracts: mediaUnderstandingProviders, videoGenerationProviders                                                                                                          |
 | [runway](/plugins/reference/runway)                               | Adds video generation provider support.                                                                                                                              | `@openclaw/runway-provider`<br />included in OpenClaw                | contracts: videoGenerationProviders                                                                                                                                                                                                                              |
 | [searxng](/plugins/reference/searxng)                             | Adds web search provider support.                                                                                                                                    | `@openclaw/searxng-plugin`<br />included in OpenClaw                 | contracts: webSearchProviders                                                                                                                                                                                                                                    |
 | [senseaudio](/plugins/reference/senseaudio)                       | Adds media understanding provider support.                                                                                                                           | `@openclaw/senseaudio-provider`<br />included in OpenClaw            | contracts: mediaUnderstandingProviders                                                                                                                                                                                                                           |
@@ -96528,7 +96689,6 @@ commands.
 | [telegram](/plugins/reference/telegram)                           | Adds the Telegram channel surface for sending and receiving OpenClaw messages.                                                                                       | `@openclaw/telegram`<br />included in OpenClaw                       | channels: telegram                                                                                                                                                                                                                                               |
 | [tencent](/plugins/reference/tencent)                             | Adds Tencent TokenHub model provider support to OpenClaw.                                                                                                            | `@openclaw/tencent-provider`<br />included in OpenClaw               | providers: tencent-tokenhub                                                                                                                                                                                                                                      |
 | [together](/plugins/reference/together)                           | Adds Together model provider support to OpenClaw.                                                                                                                    | `@openclaw/together-provider`<br />included in OpenClaw              | providers: together; contracts: videoGenerationProviders                                                                                                                                                                                                         |
-| [tokenjuice](/plugins/reference/tokenjuice)                       | Compacts exec and bash tool results with tokenjuice reducers.                                                                                                        | `@openclaw/tokenjuice`<br />included in OpenClaw                     | contracts: agentToolResultMiddleware                                                                                                                                                                                                                             |
 | [tts-local-cli](/plugins/reference/tts-local-cli)                 | Adds text-to-speech provider support.                                                                                                                                | `@openclaw/tts-local-cli`<br />included in OpenClaw                  | contracts: speechProviders                                                                                                                                                                                                                                       |
 | [venice](/plugins/reference/venice)                               | Adds Venice model provider support to OpenClaw.                                                                                                                      | `@openclaw/venice-provider`<br />included in OpenClaw                | providers: venice                                                                                                                                                                                                                                                |
 | [vercel-ai-gateway](/plugins/reference/vercel-ai-gateway)         | Adds Vercel AI Gateway model provider support to OpenClaw.                                                                                                           | `@openclaw/vercel-ai-gateway-provider`<br />included in OpenClaw     | providers: vercel-ai-gateway                                                                                                                                                                                                                                     |
@@ -96538,6 +96698,7 @@ commands.
 | [vydra](/plugins/reference/vydra)                                 | Adds Vydra model provider support to OpenClaw.                                                                                                                       | `@openclaw/vydra-provider`<br />included in OpenClaw                 | providers: vydra; contracts: imageGenerationProviders, speechProviders, videoGenerationProviders                                                                                                                                                                 |
 | [web-readability](/plugins/reference/web-readability)             | Extract readable article content from local HTML web fetch responses.                                                                                                | `@openclaw/web-readability-plugin`<br />included in OpenClaw         | contracts: webContentExtractors                                                                                                                                                                                                                                  |
 | [webhooks](/plugins/reference/webhooks)                           | Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.                                                                                  | `@openclaw/webhooks`<br />included in OpenClaw                       | plugin                                                                                                                                                                                                                                                           |
+| [workboard](/plugins/reference/workboard)                         | Dashboard workboard for agent-owned issues and sessions.                                                                                                             | `@openclaw/workboard`<br />included in OpenClaw                      | contracts: tools                                                                                                                                                                                                                                                 |
 | [xai](/plugins/reference/xai)                                     | Adds xAI model provider support to OpenClaw.                                                                                                                         | `@openclaw/xai-plugin`<br />included in OpenClaw                     | providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders, tools, videoGenerationProviders, webSearchProviders                                                                           |
 | [xiaomi](/plugins/reference/xiaomi)                               | Adds Xiaomi model provider support to OpenClaw.                                                                                                                      | `@openclaw/xiaomi-provider`<br />included in OpenClaw                | providers: xiaomi; contracts: speechProviders                                                                                                                                                                                                                    |
 | [zai](/plugins/reference/zai)                                     | Adds Z.AI model provider support to OpenClaw.                                                                                                                        | `@openclaw/zai-provider`<br />included in OpenClaw                   | providers: zai; contracts: mediaUnderstandingProviders                                                                                                                                                                                                           |
@@ -96552,6 +96713,7 @@ commands.
 | [anthropic-vertex](/plugins/reference/anthropic-vertex)             | OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.                                | `@openclaw/anthropic-vertex-provider`<br />npm; ClawHub                                          | providers: anthropic-vertex                                                  |
 | [brave](/plugins/reference/brave)                                   | OpenClaw Brave Search provider plugin for web search.                                                           | `@openclaw/brave-plugin`<br />npm; ClawHub                                                       | contracts: webSearchProviders                                                |
 | [codex](/plugins/reference/codex)                                   | OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.                   | `@openclaw/codex`<br />npm; ClawHub                                                              | providers: codex; contracts: mediaUnderstandingProviders, migrationProviders |
+| [copilot](/plugins/reference/copilot)                               | Registers the GitHub Copilot agent runtime.                                                                     | `@openclaw/copilot`<br />npm; ClawHub: `clawhub:@openclaw/copilot`                               | plugin                                                                       |
 | [diagnostics-otel](/plugins/reference/diagnostics-otel)             | OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.                                             | `@openclaw/diagnostics-otel`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-otel`             | plugin                                                                       |
 | [diagnostics-prometheus](/plugins/reference/diagnostics-prometheus) | OpenClaw diagnostics Prometheus exporter for runtime metrics.                                                   | `@openclaw/diagnostics-prometheus`<br />npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus` | plugin                                                                       |
 | [diffs](/plugins/reference/diffs)                                   | OpenClaw read-only diff viewer plugin and file renderer for agents.                                             | `@openclaw/diffs`<br />npm; ClawHub                                                              | contracts: tools; skills                                                     |
@@ -96568,11 +96730,12 @@ commands.
 | [nextcloud-talk](/plugins/reference/nextcloud-talk)                 | OpenClaw Nextcloud Talk channel plugin for conversations.                                                       | `@openclaw/nextcloud-talk`<br />npm; ClawHub                                                     | channels: nextcloud-talk                                                     |
 | [nostr](/plugins/reference/nostr)                                   | OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.                                             | `@openclaw/nostr`<br />npm; ClawHub                                                              | channels: nostr                                                              |
 | [openshell](/plugins/reference/openshell)                           | OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution. | `@openclaw/openshell-sandbox`<br />npm; ClawHub                                                  | plugin                                                                       |
-| [pixverse](/plugins/reference/pixverse)                             | OpenClaw PixVerse video generation provider plugin.                                                             | `@openclaw/pixverse-provider`<br />npm; ClawHub                                                  | contracts: videoGenerationProviders                                          |
+| [pixverse](/plugins/reference/pixverse)                             | OpenClaw PixVerse video generation provider plugin.                                                             | `@openclaw/pixverse-provider`<br />npm; ClawHub: `clawhub:@openclaw/pixverse-provider`           | contracts: videoGenerationProviders                                          |
 | [qqbot](/plugins/reference/qqbot)                                   | OpenClaw QQ Bot channel plugin for group and direct-message workflows.                                          | `@openclaw/qqbot`<br />npm; ClawHub                                                              | channels: qqbot; contracts: tools; skills                                    |
 | [slack](/plugins/reference/slack)                                   | OpenClaw Slack channel plugin for channels, DMs, commands, and app events.                                      | `@openclaw/slack`<br />npm; ClawHub                                                              | channels: slack                                                              |
 | [synology-chat](/plugins/reference/synology-chat)                   | Synology Chat channel plugin for OpenClaw channels and direct messages.                                         | `@openclaw/synology-chat`<br />npm; ClawHub                                                      | channels: synology-chat                                                      |
 | [tlon](/plugins/reference/tlon)                                     | OpenClaw Tlon/Urbit channel plugin for chat workflows.                                                          | `@openclaw/tlon`<br />npm; ClawHub                                                               | channels: tlon; skills                                                       |
+| [tokenjuice](/plugins/reference/tokenjuice)                         | Compacts exec and bash tool results with tokenjuice reducers.                                                   | `@openclaw/tokenjuice`<br />npm; ClawHub: `clawhub:@openclaw/tokenjuice`                         | contracts: agentToolResultMiddleware                                         |
 | [twitch](/plugins/reference/twitch)                                 | OpenClaw Twitch channel plugin for chat and moderation workflows.                                               | `@openclaw/twitch`<br />npm; ClawHub                                                             | channels: twitch                                                             |
 | [voice-call](/plugins/reference/voice-call)                         | OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.                                           | `@openclaw/voice-call`<br />npm; ClawHub                                                         | contracts: tools                                                             |
 | [whatsapp](/plugins/reference/whatsapp)                             | OpenClaw WhatsApp channel plugin for WhatsApp Web chats.                                                        | `@openclaw/whatsapp`<br />ClawHub: `clawhub:@openclaw/whatsapp`; npm                             | channels: whatsapp                                                           |
@@ -96829,7 +96992,7 @@ pnpm plugins:inventory:gen
 | [codex](/plugins/reference/codex)                                   | OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.                                                                        | `@openclaw/codex`<br />npm; ClawHub                                                              | providers: codex; contracts: mediaUnderstandingProviders, migrationProviders                                                                                                                                                                                     |
 | [codex-supervisor](/plugins/reference/codex-supervisor)             | Supervise Codex app-server sessions from OpenClaw.                                                                                                                   | `@openclaw/codex-supervisor`<br />included in OpenClaw                                           | contracts: tools                                                                                                                                                                                                                                                 |
 | [comfy](/plugins/reference/comfy)                                   | Adds ComfyUI model provider support to OpenClaw.                                                                                                                     | `@openclaw/comfy-provider`<br />included in OpenClaw                                             | providers: comfy; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders                                                                                                                                                        |
-| [copilot](/plugins/reference/copilot)                               | Registers the GitHub Copilot agent runtime.                                                                                                                          | `@openclaw/copilot`<br />included in OpenClaw                                                    | plugin                                                                                                                                                                                                                                                           |
+| [copilot](/plugins/reference/copilot)                               | Registers the GitHub Copilot agent runtime.                                                                                                                          | `@openclaw/copilot`<br />npm; ClawHub: `clawhub:@openclaw/copilot`                               | plugin                                                                                                                                                                                                                                                           |
 | [copilot-proxy](/plugins/reference/copilot-proxy)                   | Adds Copilot Proxy model provider support to OpenClaw.                                                                                                               | `@openclaw/copilot-proxy`<br />included in OpenClaw                                              | providers: copilot-proxy                                                                                                                                                                                                                                         |
 | [deepgram](/plugins/reference/deepgram)                             | Adds media understanding provider support. Adds realtime transcription provider support.                                                                             | `@openclaw/deepgram-provider`<br />included in OpenClaw                                          | contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders                                                                                                                                                                                           |
 | [deepinfra](/plugins/reference/deepinfra)                           | Adds DeepInfra model provider support to OpenClaw.                                                                                                                   | `@openclaw/deepinfra-provider`<br />included in OpenClaw                                         | providers: deepinfra; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, speechProviders, videoGenerationProviders                                                                                                      |
@@ -96849,6 +97012,7 @@ pnpm plugins:inventory:gen
 | [firecrawl](/plugins/reference/firecrawl)                           | Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.                                                                        | `@openclaw/firecrawl-plugin`<br />included in OpenClaw                                           | contracts: tools, webFetchProviders, webSearchProviders                                                                                                                                                                                                          |
 | [fireworks](/plugins/reference/fireworks)                           | Adds Fireworks model provider support to OpenClaw.                                                                                                                   | `@openclaw/fireworks-provider`<br />included in OpenClaw                                         | providers: fireworks                                                                                                                                                                                                                                             |
 | [github-copilot](/plugins/reference/github-copilot)                 | Adds GitHub Copilot model provider support to OpenClaw.                                                                                                              | `@openclaw/github-copilot-provider`<br />included in OpenClaw                                    | providers: github-copilot; contracts: memoryEmbeddingProviders                                                                                                                                                                                                   |
+| [gmi](/plugins/reference/gmi)                                       | Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw.                                                                                                    | `@openclaw/gmi-provider`<br />included in OpenClaw                                               | providers: gmi, gmi-cloud, gmicloud                                                                                                                                                                                                                              |
 | [google](/plugins/reference/google)                                 | Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.                                                                                    | `@openclaw/google-plugin`<br />included in OpenClaw                                              | providers: google, google-gemini-cli, google-vertex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, musicGenerationProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders, webSearchProviders |
 | [google-meet](/plugins/reference/google-meet)                       | OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.                                                                       | `@openclaw/google-meet`<br />npm; ClawHub                                                        | contracts: tools                                                                                                                                                                                                                                                 |
 | [googlechat](/plugins/reference/googlechat)                         | OpenClaw Google Chat channel plugin for spaces and direct messages.                                                                                                  | `@openclaw/googlechat`<br />npm; ClawHub                                                         | channels: googlechat                                                                                                                                                                                                                                             |
@@ -96880,9 +97044,10 @@ pnpm plugins:inventory:gen
 | [msteams](/plugins/reference/msteams)                               | OpenClaw Microsoft Teams channel plugin for bot conversations.                                                                                                       | `@openclaw/msteams`<br />npm; ClawHub                                                            | channels: msteams                                                                                                                                                                                                                                                |
 | [nextcloud-talk](/plugins/reference/nextcloud-talk)                 | OpenClaw Nextcloud Talk channel plugin for conversations.                                                                                                            | `@openclaw/nextcloud-talk`<br />npm; ClawHub                                                     | channels: nextcloud-talk                                                                                                                                                                                                                                         |
 | [nostr](/plugins/reference/nostr)                                   | OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.                                                                                                  | `@openclaw/nostr`<br />npm; ClawHub                                                              | channels: nostr                                                                                                                                                                                                                                                  |
+| [novita](/plugins/reference/novita)                                 | Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.                                                                                                 | `@openclaw/novita-provider`<br />included in OpenClaw                                            | providers: novita, novita-ai, novitaai                                                                                                                                                                                                                           |
 | [nvidia](/plugins/reference/nvidia)                                 | Adds NVIDIA model provider support to OpenClaw.                                                                                                                      | `@openclaw/nvidia-provider`<br />included in OpenClaw                                            | providers: nvidia                                                                                                                                                                                                                                                |
 | [oc-path](/plugins/reference/oc-path)                               | Adds the openclaw path CLI for oc:// workspace file addressing.                                                                                                      | `@openclaw/oc-path`<br />included in OpenClaw                                                    | plugin                                                                                                                                                                                                                                                           |
-| [ollama](/plugins/reference/ollama)                                 | Adds Ollama model provider support to OpenClaw.                                                                                                                      | `@openclaw/ollama-provider`<br />included in OpenClaw                                            | providers: ollama; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                                       |
+| [ollama](/plugins/reference/ollama)                                 | Adds Ollama, Ollama Cloud model provider support to OpenClaw.                                                                                                        | `@openclaw/ollama-provider`<br />included in OpenClaw                                            | providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                         |
 | [open-prose](/plugins/reference/open-prose)                         | OpenProse VM skill pack with a /prose slash command.                                                                                                                 | `@openclaw/open-prose`<br />included in OpenClaw                                                 | skills                                                                                                                                                                                                                                                           |
 | [openai](/plugins/reference/openai)                                 | Adds OpenAI, OpenAI Codex model provider support to OpenClaw.                                                                                                        | `@openclaw/openai-provider`<br />included in OpenClaw                                            | providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                   |
 | [opencode](/plugins/reference/opencode)                             | Adds OpenCode model provider support to OpenClaw.                                                                                                                    | `@openclaw/opencode-provider`<br />included in OpenClaw                                          | providers: opencode; contracts: mediaUnderstandingProviders                                                                                                                                                                                                      |
@@ -96890,14 +97055,14 @@ pnpm plugins:inventory:gen
 | [openrouter](/plugins/reference/openrouter)                         | Adds OpenRouter model provider support to OpenClaw.                                                                                                                  | `@openclaw/openrouter-provider`<br />included in OpenClaw                                        | providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders                                                                                                     |
 | [openshell](/plugins/reference/openshell)                           | OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.                                                      | `@openclaw/openshell-sandbox`<br />npm; ClawHub                                                  | plugin                                                                                                                                                                                                                                                           |
 | [perplexity](/plugins/reference/perplexity)                         | Adds web search provider support.                                                                                                                                    | `@openclaw/perplexity-plugin`<br />included in OpenClaw                                          | contracts: webSearchProviders                                                                                                                                                                                                                                    |
-| [pixverse](/plugins/reference/pixverse)                             | OpenClaw PixVerse video generation provider plugin.                                                                                                                  | `@openclaw/pixverse-provider`<br />npm; ClawHub                                                  | contracts: videoGenerationProviders                                                                                                                                                                                                                              |
+| [pixverse](/plugins/reference/pixverse)                             | OpenClaw PixVerse video generation provider plugin.                                                                                                                  | `@openclaw/pixverse-provider`<br />npm; ClawHub: `clawhub:@openclaw/pixverse-provider`           | contracts: videoGenerationProviders                                                                                                                                                                                                                              |
 | [policy](/plugins/reference/policy)                                 | Adds policy-backed doctor checks for workspace conformance.                                                                                                          | `@openclaw/policy`<br />included in OpenClaw                                                     | plugin                                                                                                                                                                                                                                                           |
 | [qa-channel](/plugins/reference/qa-channel)                         | Adds the QA Channel surface for sending and receiving OpenClaw messages.                                                                                             | `@openclaw/qa-channel`<br />source checkout only                                                 | channels: qa-channel                                                                                                                                                                                                                                             |
 | [qa-lab](/plugins/reference/qa-lab)                                 | OpenClaw QA lab plugin with private debugger UI and scenario runner.                                                                                                 | `@openclaw/qa-lab`<br />source checkout only                                                     | plugin                                                                                                                                                                                                                                                           |
 | [qa-matrix](/plugins/reference/qa-matrix)                           | Matrix QA transport runner and substrate.                                                                                                                            | `@openclaw/qa-matrix`<br />source checkout only                                                  | plugin                                                                                                                                                                                                                                                           |
 | [qianfan](/plugins/reference/qianfan)                               | Adds Qianfan model provider support to OpenClaw.                                                                                                                     | `@openclaw/qianfan-provider`<br />included in OpenClaw                                           | providers: qianfan                                                                                                                                                                                                                                               |
 | [qqbot](/plugins/reference/qqbot)                                   | OpenClaw QQ Bot channel plugin for group and direct-message workflows.                                                                                               | `@openclaw/qqbot`<br />npm; ClawHub                                                              | channels: qqbot; contracts: tools; skills                                                                                                                                                                                                                        |
-| [qwen](/plugins/reference/qwen)                                     | Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenClaw.                                                                                   | `@openclaw/qwen-provider`<br />included in OpenClaw                                              | providers: qwen, qwencloud, modelstudio, dashscope; contracts: mediaUnderstandingProviders, videoGenerationProviders                                                                                                                                             |
+| [qwen](/plugins/reference/qwen)                                     | Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.                                                | `@openclaw/qwen-provider`<br />included in OpenClaw                                              | providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwen-cli; contracts: mediaUnderstandingProviders, videoGenerationProviders                                                                                                          |
 | [runway](/plugins/reference/runway)                                 | Adds video generation provider support.                                                                                                                              | `@openclaw/runway-provider`<br />included in OpenClaw                                            | contracts: videoGenerationProviders                                                                                                                                                                                                                              |
 | [searxng](/plugins/reference/searxng)                               | Adds web search provider support.                                                                                                                                    | `@openclaw/searxng-plugin`<br />included in OpenClaw                                             | contracts: webSearchProviders                                                                                                                                                                                                                                    |
 | [senseaudio](/plugins/reference/senseaudio)                         | Adds media understanding provider support.                                                                                                                           | `@openclaw/senseaudio-provider`<br />included in OpenClaw                                        | contracts: mediaUnderstandingProviders                                                                                                                                                                                                                           |
@@ -96913,7 +97078,7 @@ pnpm plugins:inventory:gen
 | [tencent](/plugins/reference/tencent)                               | Adds Tencent TokenHub model provider support to OpenClaw.                                                                                                            | `@openclaw/tencent-provider`<br />included in OpenClaw                                           | providers: tencent-tokenhub                                                                                                                                                                                                                                      |
 | [tlon](/plugins/reference/tlon)                                     | OpenClaw Tlon/Urbit channel plugin for chat workflows.                                                                                                               | `@openclaw/tlon`<br />npm; ClawHub                                                               | channels: tlon; skills                                                                                                                                                                                                                                           |
 | [together](/plugins/reference/together)                             | Adds Together model provider support to OpenClaw.                                                                                                                    | `@openclaw/together-provider`<br />included in OpenClaw                                          | providers: together; contracts: videoGenerationProviders                                                                                                                                                                                                         |
-| [tokenjuice](/plugins/reference/tokenjuice)                         | Compacts exec and bash tool results with tokenjuice reducers.                                                                                                        | `@openclaw/tokenjuice`<br />included in OpenClaw                                                 | contracts: agentToolResultMiddleware                                                                                                                                                                                                                             |
+| [tokenjuice](/plugins/reference/tokenjuice)                         | Compacts exec and bash tool results with tokenjuice reducers.                                                                                                        | `@openclaw/tokenjuice`<br />npm; ClawHub: `clawhub:@openclaw/tokenjuice`                         | contracts: agentToolResultMiddleware                                                                                                                                                                                                                             |
 | [tts-local-cli](/plugins/reference/tts-local-cli)                   | Adds text-to-speech provider support.                                                                                                                                | `@openclaw/tts-local-cli`<br />included in OpenClaw                                              | contracts: speechProviders                                                                                                                                                                                                                                       |
 | [twitch](/plugins/reference/twitch)                                 | OpenClaw Twitch channel plugin for chat and moderation workflows.                                                                                                    | `@openclaw/twitch`<br />npm; ClawHub                                                             | channels: twitch                                                                                                                                                                                                                                                 |
 | [venice](/plugins/reference/venice)                                 | Adds Venice model provider support to OpenClaw.                                                                                                                      | `@openclaw/venice-provider`<br />included in OpenClaw                                            | providers: venice                                                                                                                                                                                                                                                |
@@ -96926,6 +97091,7 @@ pnpm plugins:inventory:gen
 | [web-readability](/plugins/reference/web-readability)               | Extract readable article content from local HTML web fetch responses.                                                                                                | `@openclaw/web-readability-plugin`<br />included in OpenClaw                                     | contracts: webContentExtractors                                                                                                                                                                                                                                  |
 | [webhooks](/plugins/reference/webhooks)                             | Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.                                                                                  | `@openclaw/webhooks`<br />included in OpenClaw                                                   | plugin                                                                                                                                                                                                                                                           |
 | [whatsapp](/plugins/reference/whatsapp)                             | OpenClaw WhatsApp channel plugin for WhatsApp Web chats.                                                                                                             | `@openclaw/whatsapp`<br />ClawHub: `clawhub:@openclaw/whatsapp`; npm                             | channels: whatsapp                                                                                                                                                                                                                                               |
+| [workboard](/plugins/reference/workboard)                           | Dashboard workboard for agent-owned issues and sessions.                                                                                                             | `@openclaw/workboard`<br />included in OpenClaw                                                  | contracts: tools                                                                                                                                                                                                                                                 |
 | [xai](/plugins/reference/xai)                                       | Adds xAI model provider support to OpenClaw.                                                                                                                         | `@openclaw/xai-plugin`<br />included in OpenClaw                                                 | providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders, tools, videoGenerationProviders, webSearchProviders                                                                           |
 | [xiaomi](/plugins/reference/xiaomi)                                 | Adds Xiaomi model provider support to OpenClaw.                                                                                                                      | `@openclaw/xiaomi-provider`<br />included in OpenClaw                                            | providers: xiaomi; contracts: speechProviders                                                                                                                                                                                                                    |
 | [zai](/plugins/reference/zai)                                       | Adds Z.AI model provider support to OpenClaw.                                                                                                                        | `@openclaw/zai-provider`<br />included in OpenClaw                                               | providers: zai; contracts: mediaUnderstandingProviders                                                                                                                                                                                                           |
@@ -97794,6 +97960,7 @@ Most channel plugins do not need approval-specific code.
 - If custom approval auth intentionally allows only same-chat fallback, return `markImplicitSameChatApprovalAuthorization({ authorized: true })` from `openclaw/plugin-sdk/approval-auth-runtime`; otherwise core treats the result as explicit approver authorization.
 - If a channel-owned native callback resolves approvals directly, use `isImplicitSameChatApprovalAuthorization(...)` before resolving so implicit fallback still goes through the channel's normal actor authorization.
 - If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
+- Use `createNativeApprovalChannelRouteGates` from `openclaw/plugin-sdk/approval-native-runtime` when a channel supports both session-origin native delivery and explicit approval forwarding targets. The helper centralizes approval config selection, `mode` handling, agent/session filters, account binding, session-target matching, and target-list matching while callers still own the channel id, default forwarding mode, account lookup, transport-enabled check, target normalization, and turn-source target resolution. Do not use it to create core-owned channel policy defaults; pass the channel's documented default mode explicitly.
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route matcher by default for `{ to, accountId, threadId }` targets. Pass `targetsMatch` only when a channel has provider-specific equivalence rules, such as Slack timestamp prefix matching.
 - Pass `normalizeTargetForMatch` to `createChannelNativeOriginTargetResolver` when the channel needs to canonicalize provider ids before the default route matcher or a custom `targetsMatch` callback runs, while preserving the original target for delivery. Use `normalizeTarget` only when the resolved delivery target itself should be canonicalized.
 - `availability` - whether the account is configured and whether a request should be handled
@@ -99339,6 +99506,7 @@ releases.
   | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
   | `plugin-sdk/file-access-runtime` | File access helpers | Safe local-file/media path helpers |
   | `plugin-sdk/transport-ready-runtime` | Transport readiness helpers | `waitForTransportReady` |
+  | `plugin-sdk/exec-approvals-runtime` | Exec approval policy helpers | `loadExecApprovals`, `resolveExecApprovalsFromFile`, `ExecApprovalsFile` |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers |
@@ -102501,10 +102669,11 @@ and pairing-path families.
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
+    | `plugin-sdk/provider-oauth-runtime` | Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
-    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, deprecated `resolveOpenClawAgentDir` compatibility export |
+    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
@@ -102536,7 +102705,7 @@ and pairing-path families.
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers and local native exec prompt suppression |
+    | `plugin-sdk/approval-native-runtime` | Native approval target, account-binding, route-gate, forwarding fallback, and local native exec prompt suppression helpers |
     | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
@@ -102549,6 +102718,7 @@ and pairing-path families.
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract collection helpers for channel/plugin secret surfaces |
     | `plugin-sdk/secret-ref-runtime` | Narrow `coerceSecretRef` and SecretRef typing helpers for secret-contract/config parsing |
+    | `plugin-sdk/secret-provider-integration` | Type-only SecretRef provider integration manifest and preset contracts for plugins that publish external secret provider presets |
     | `plugin-sdk/security-runtime` | Shared trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Narrow pinned-dispatcher helpers without the broad infra runtime surface |
@@ -102576,6 +102746,7 @@ and pairing-path families.
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, version, argument-invocation, and lazy command-group helpers |
+    | `plugin-sdk/qa-live-transport-scenarios` | Shared live transport QA scenario ids, baseline coverage helpers, and scenario-selection helper |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, and channel-status patch helpers |
     | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
@@ -102594,6 +102765,7 @@ and pairing-path families.
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -102638,12 +102810,14 @@ and pairing-path families.
     | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | System event queue helpers |
     | `plugin-sdk/transport-ready-runtime` | Transport readiness wait helper |
+    | `plugin-sdk/exec-approvals-runtime` | Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/inline-image-data-url-runtime` | Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/session-store-runtime` | Session-store helpers without broad config writes/maintenance imports |
@@ -105429,6 +105603,263 @@ The plugin intentionally scrubs owner/session metadata from webhook responses.
 
 
 
+# Section: plugins/workboard.md
+
+---
+summary: "Optional dashboard workboard for agent-owned cards and session handoff"
+read_when:
+  - You want a Kanban-style workboard in the Control UI
+  - You are enabling or disabling the bundled Workboard plugin
+  - You want to track planned agent work without an external project manager
+title: "Workboard plugin"
+---
+
+The Workboard plugin adds an optional Kanban-style board to the
+[Control UI](/web/control-ui). Use it to collect agent-sized work cards, assign
+them to agents, and jump from a card into the linked dashboard session.
+
+Workboard is intentionally small. It tracks local operating work for an
+OpenClaw Gateway; it is not a replacement for GitHub Issues, Linear, Jira, or
+other team project management systems.
+
+## Default state
+
+Workboard is a bundled plugin and is disabled by default unless you enable it
+in plugin config.
+
+Enable it with:
+
+```bash
+openclaw plugins enable workboard
+openclaw gateway restart
+```
+
+Then open the dashboard:
+
+```bash
+openclaw dashboard
+```
+
+The Workboard tab appears in the dashboard navigation. If the tab is visible
+but the plugin is disabled or blocked by `plugins.allow` / `plugins.deny`, the
+view shows a plugin-unavailable state instead of local card data.
+
+## What cards contain
+
+Each card stores:
+
+- title and notes
+- status: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`,
+  `review`, `blocked`, or `done`
+- priority: `low`, `normal`, `high`, or `urgent`
+- labels
+- optional agent id
+- optional linked session, run, task, or source URL
+- optional execution metadata for a Codex or Claude session started from the card
+- compact metadata for attempts, comments, links, proof, artifacts, automation,
+  claims, diagnostics, notifications, templates, archive state, and
+  stale-session detection
+- recent card events such as created, moved, linked, claimed, heartbeat,
+  attempt, proof, artifact, diagnostic, notification, dispatch, archive, stale,
+  or agent-updated changes
+
+Cards are stored in the plugin's Gateway state. They are local to the Gateway
+state directory and move with the rest of that Gateway's OpenClaw state.
+
+Workboard keeps compact per-card metadata so operators can see how a card moved
+through the board without opening the linked session. Events, attempt summaries,
+proof snippets, related links, comments, archive markers, and stale-session
+markers are intentionally local metadata; they do not replace session
+transcripts or GitHub issue history.
+
+## Card executions
+
+Unlinked cards can start work from the card. Start uses the Gateway's configured
+default agent and model. Codex and Claude actions are optional explicit model
+choices:
+
+- Run Codex or Run Claude creates a dashboard session, sends the card prompt,
+  and marks the card `running`.
+- Open Codex or Open Claude creates a linked dashboard session without sending
+  the card prompt or moving the card, so you can work manually while it stays
+  attached to the board.
+
+Execution metadata stores the selected engine, mode, model ref, session key,
+run id, and lifecycle status on the card. Codex executions use
+`openai/gpt-5.5`; Claude executions use `anthropic/claude-sonnet-4-6`.
+
+Each linked execution also records an attempt summary on the same card record.
+The attempt summary keeps the engine, mode, model, run id, timestamps, status,
+and rolling failure count so repeated failures remain visible on the board.
+
+## Agent coordination
+
+Workboard also exposes optional agent tools for board-aware workflows:
+
+- `workboard_list` lists compact cards with claim and diagnostic state, with an
+  optional board filter.
+- `workboard_read` returns one card plus bounded worker context built from notes,
+  attempts, comments, links, proof, artifacts, parent results, recent assignee
+  work, and active diagnostics.
+- `workboard_create` creates a card with optional parents, tenant, skills,
+  board, workspace metadata, idempotency key, runtime limit, and retry budget.
+- `workboard_link` links a parent card to a child card. Children stay in `todo`
+  until every parent reaches `done`; then dispatch promotion moves them to
+  `ready`.
+- `workboard_claim` claims a card for the calling agent and moves backlog, todo,
+  or ready cards into `running`.
+- `workboard_heartbeat` refreshes the claim heartbeat during longer runs.
+- `workboard_release` releases the claim after completion, pause, or handoff and
+  can move the card to a next status.
+- `workboard_complete` and `workboard_block` are structured lifecycle tools for
+  final summaries, proof, artifacts, created-card manifests, and blocker
+  reasons. Created-card manifests must reference cards linked back to the
+  completed card, which keeps phantom children out of summaries.
+- `workboard_boards`, `workboard_stats`, `workboard_promote`,
+  `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
+  `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
+  inspect board namespaces, view queue stats, recover stuck work, add handoff
+  notes, attach proof or artifact references, move blocked work back to `todo`,
+  and nudge dependency promotion or stale-claim cleanup.
+
+Claimed cards reject agent-tool mutations from other agents unless the caller
+has the claim token returned by `workboard_claim`. Dashboard operators still use
+the normal Gateway RPC surface and can recover or reassign cards.
+
+Workboard diagnostics are computed from local card metadata. The built-in checks
+flag assigned cards that wait too long, running cards without recent heartbeat,
+blocked cards that need attention, repeated failures, done cards without proof,
+and running cards that only have a loose session link.
+
+Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
+system processes; normal OpenClaw sessions still own execution. A dispatch nudge
+promotes dependency-ready cards, records dispatch metadata on ready cards, and
+blocks expired claims or timed-out runs so operators can recover them from the
+board.
+
+## Session lifecycle sync
+
+Cards can be linked to existing dashboard sessions or to the session created
+when you start work from a card. Linked cards show the session lifecycle inline:
+running, stale, linked idle, done, failed, or missing.
+
+If the linked session is missing, the card stays linked for context and still
+offers start controls so you can restart work into a fresh dashboard session.
+If an active linked session stops reporting recent activity, Workboard marks the
+card stale and stores the marker as card metadata until the lifecycle clears it.
+
+You can also capture an existing dashboard session from the Sessions tab with
+Add to Workboard. The card is linked to that session, uses the session label or
+recent user prompt as the title, and seeds notes from the recent user prompt plus
+the latest assistant response when chat history is available.
+
+Workboard follows the linked session while the card is still in an active work
+state:
+
+- active linked session -> `running`
+- completed linked session -> `review`
+- failed, killed, timed out, or aborted linked session -> `blocked`
+
+Manual review states win. If you move a card to `review`, `blocked`, or `done`,
+Workboard stops auto-moving that card until you move it back to `todo` or
+`running`.
+
+## Dashboard workflow
+
+1. Open the Workboard tab in the Control UI.
+2. Create a card with a title, notes, priority, labels, optional agent, and
+   optional linked session.
+3. Or open Sessions and choose Add to Workboard for an existing session.
+4. Drag the card between columns or use the column controls.
+5. Start work from the card to create or reuse a dashboard session.
+6. Open the linked session from the card while the agent works.
+7. Let lifecycle sync move running work into review or blocked, then manually
+   move the card to done when accepted.
+
+Starting a card uses normal Gateway sessions. The Workboard plugin only stores
+card metadata and links; the conversation transcript, model selection, and run
+lifecycle stay owned by the regular session system.
+
+Use Stop on a live linked card to abort the active session run. Workboard marks
+that card `blocked` so it remains visible for follow-up.
+
+New cards can start from Workboard templates for bugfixes, docs, releases, PR
+reviews, or plugin work. Templates prefill title, notes, labels, and priority,
+and the selected template id is stored as card metadata.
+
+## Permissions
+
+The plugin registers Gateway RPC methods under the `workboard.*` namespace:
+
+- `workboard.cards.list` requires `operator.read`
+- `workboard.cards.export` requires `operator.read`
+- `workboard.cards.diagnostics` requires `operator.read`
+- `workboard.cards.diagnostics.refresh` requires `operator.write`
+- create, update, move, delete, comment, link, dependency link, proof, artifact,
+  claim, heartbeat, release, complete, block, unblock, dispatch, bulk, and
+  archive methods require `operator.write`
+
+Browsers connected with read-only operator access can inspect the board but
+cannot mutate cards.
+
+## Configuration
+
+Workboard has no plugin-specific config today. Enable or disable it with the
+standard plugin entry:
+
+```json5
+{
+  plugins: {
+    entries: {
+      workboard: {
+        enabled: true,
+        config: {},
+      },
+    },
+  },
+}
+```
+
+Disable it again with:
+
+```bash
+openclaw plugins disable workboard
+openclaw gateway restart
+```
+
+## Troubleshooting
+
+### The tab says Workboard is unavailable
+
+Check plugin policy:
+
+```bash
+openclaw plugins inspect workboard --runtime --json
+```
+
+If `plugins.allow` is configured, add `workboard` to that allowlist. If
+`plugins.deny` contains `workboard`, remove it before enabling the plugin.
+
+### Cards do not save
+
+Confirm the browser connection has `operator.write` access. Read-only operator
+sessions can list cards but cannot create, edit, move, or delete them.
+
+### Starting a card does not open the expected session
+
+Workboard creates links to normal dashboard sessions. Check the card's agent id
+and linked session, then open the Sessions or Chat view to inspect the actual
+run state.
+
+## Related
+
+- [Control UI](/web/control-ui)
+- [Plugins](/tools/plugin)
+- [Manage plugins](/plugins/manage-plugins)
+- [Sessions](/concepts/session)
+
+
+
 # Section: plugins/zalouser.md
 
 ---
@@ -106030,6 +106461,14 @@ Supervise Codex app-server sessions from OpenClaw.
 
 contracts: tools
 
+<!-- openclaw-plugin-reference:manual-start -->
+
+## Session Listing
+
+`codex_sessions_list` defaults to loaded Codex sessions only. Set `include_stored` to include stored history; the plugin uses Codex app-server's state-DB-only listing path and caps stored results at 200 by default. Pass `max_stored_sessions` to lower or raise that cap, up to 1000.
+
+<!-- openclaw-plugin-reference:manual-end -->
+
 
 
 # Section: plugins/reference/codex.md
@@ -106128,7 +106567,7 @@ Registers the GitHub Copilot agent runtime.
 ## Distribution
 
 - Package: `@openclaw/copilot`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/copilot`
 
 ## Surface
 
@@ -106621,6 +107060,34 @@ providers: github-copilot; contracts: memoryEmbeddingProviders
 ## Related docs
 
 - [github-copilot](/providers/github-copilot)
+
+
+
+# Section: plugins/reference/gmi.md
+
+---
+summary: "Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw."
+read_when:
+  - You are installing, configuring, or auditing the gmi plugin
+title: "Gmi plugin"
+---
+
+# Gmi plugin
+
+Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw.
+
+## Distribution
+
+- Package: `@openclaw/gmi-provider`
+- Install route: included in OpenClaw
+
+## Surface
+
+providers: gmi, gmi-cloud, gmicloud
+
+## Related docs
+
+- [gmi](/providers/gmi)
 
 
 
@@ -107464,6 +107931,34 @@ channels: nostr
 
 
 
+# Section: plugins/reference/novita.md
+
+---
+summary: "Adds Novita, Novita AI, Novitaai model provider support to OpenClaw."
+read_when:
+  - You are installing, configuring, or auditing the novita plugin
+title: "Novita plugin"
+---
+
+# Novita plugin
+
+Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
+
+## Distribution
+
+- Package: `@openclaw/novita-provider`
+- Install route: included in OpenClaw
+
+## Surface
+
+providers: novita, novita-ai, novitaai
+
+## Related docs
+
+- [novita](/providers/novita)
+
+
+
 # Section: plugins/reference/nvidia.md
 
 ---
@@ -107523,7 +108018,7 @@ plugin
 # Section: plugins/reference/ollama.md
 
 ---
-summary: "Adds Ollama model provider support to OpenClaw."
+summary: "Adds Ollama, Ollama Cloud model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the ollama plugin
 title: "Ollama plugin"
@@ -107531,7 +108026,7 @@ title: "Ollama plugin"
 
 # Ollama plugin
 
-Adds Ollama model provider support to OpenClaw.
+Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
 ## Distribution
 
@@ -107540,7 +108035,7 @@ Adds Ollama model provider support to OpenClaw.
 
 ## Surface
 
-providers: ollama; contracts: memoryEmbeddingProviders, webSearchProviders
+providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders
 
 ## Related docs
 
@@ -107752,7 +108247,7 @@ OpenClaw PixVerse video generation provider plugin.
 ## Distribution
 
 - Package: `@openclaw/pixverse-provider`
-- Install route: npm; ClawHub
+- Install route: npm; ClawHub: `clawhub:@openclaw/pixverse-provider`
 
 ## Surface
 
@@ -107976,7 +108471,7 @@ channels: qqbot; contracts: tools; skills
 # Section: plugins/reference/qwen.md
 
 ---
-summary: "Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenClaw."
+summary: "Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the qwen plugin
 title: "Qwen plugin"
@@ -107984,7 +108479,7 @@ title: "Qwen plugin"
 
 # Qwen plugin
 
-Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenClaw.
+Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.
 
 ## Distribution
 
@@ -107993,7 +108488,7 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope model provider support to OpenCla
 
 ## Surface
 
-providers: qwen, qwencloud, modelstudio, dashscope; contracts: mediaUnderstandingProviders, videoGenerationProviders
+providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwen-cli; contracts: mediaUnderstandingProviders, videoGenerationProviders
 
 ## Related docs
 
@@ -108433,7 +108928,7 @@ Compacts exec and bash tool results with tokenjuice reducers.
 ## Distribution
 
 - Package: `@openclaw/tokenjuice`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tokenjuice`
 
 ## Surface
 
@@ -108766,6 +109261,34 @@ channels: whatsapp
 ## Related docs
 
 - [whatsapp](/channels/whatsapp)
+
+
+
+# Section: plugins/reference/workboard.md
+
+---
+summary: "Dashboard workboard for agent-owned issues and sessions."
+read_when:
+  - You are installing, configuring, or auditing the workboard plugin
+title: "Workboard plugin"
+---
+
+# Workboard plugin
+
+Dashboard workboard for agent-owned issues and sessions.
+
+## Distribution
+
+- Package: `@openclaw/workboard`
+- Install route: included in OpenClaw
+
+## Surface
+
+contracts: tools
+
+## Related docs
+
+- [workboard](/plugins/workboard)
 
 
 
@@ -112634,14 +113157,15 @@ summary: "Sign in to GitHub Copilot from OpenClaw using the device flow or non-i
 read_when:
   - You want to use GitHub Copilot as a model provider
   - You need the `openclaw models auth login-github-copilot` flow
+  - You are choosing between the built-in Copilot provider, Copilot SDK harness, and Copilot Proxy
 title: "GitHub Copilot"
 ---
 
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. OpenClaw can use Copilot as a model
-provider in two different ways.
+provider or agent runtime in three different ways.
 
-## Two ways to use Copilot in OpenClaw
+## Three ways to use Copilot in OpenClaw
 
 <Tabs>
   <Tab title="Built-in provider (github-copilot)">
@@ -112674,6 +113198,38 @@ provider in two different ways.
         ```
       </Step>
     </Steps>
+
+  </Tab>
+
+  <Tab title="Copilot SDK harness plugin (copilot)">
+    Install the external `@openclaw/copilot` plugin when you want GitHub's
+    Copilot CLI and SDK to own the low-level agent loop for selected
+    `github-copilot/*` models.
+
+    ```bash
+    openclaw plugins install clawhub:@openclaw/copilot
+    ```
+
+    Then opt a model or provider into the runtime:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: "github-copilot/gpt-5.5",
+          models: {
+            "github-copilot/gpt-5.5": {
+              agentRuntime: { id: "copilot" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Choose this when you want native Copilot CLI sessions, SDK-managed thread
+    state, and Copilot-owned compaction for those agent turns. See
+    [Copilot SDK harness](/plugins/copilot) for the full runtime contract.
 
   </Tab>
 
@@ -112853,6 +113409,103 @@ available, OpenClaw skips Copilot and tries the next provider.
     Auth details and credential reuse rules.
   </Card>
 </CardGroup>
+
+
+
+# Section: providers/gmi.md
+
+---
+summary: "Use GMI Cloud's OpenAI-compatible API with OpenClaw"
+read_when:
+  - You want to run OpenClaw with GMI Cloud models
+  - You need the GMI provider id, key, or endpoint
+title: "GMI Cloud"
+---
+
+GMI Cloud is a hosted inference platform for frontier and open-weight models
+behind an OpenAI-compatible API. In OpenClaw it is a bundled model provider,
+which means you can select it with the provider id `gmi`, store credentials
+through normal model auth, and use model refs like
+`gmi/google/gemini-3.1-flash-lite`.
+
+Use GMI when you want one API key for several hosted model families, including
+Google, Anthropic, OpenAI, DeepSeek, Moonshot, and Z.AI routes exposed by GMI's
+catalog. It is useful as a secondary provider for model fallback, for comparing
+hosted routes across vendors, or when GMI has a model available before your
+primary provider does.
+
+This provider uses OpenAI-compatible chat semantics. OpenClaw owns the provider
+id, auth profile, aliases, model catalog seed, and base URL; GMI owns the live
+model availability, billing, rate limits, and any provider-side routing policy.
+
+## Setup
+
+Create an API key in GMI Cloud, then run:
+
+```bash
+openclaw onboard --auth-choice gmi-api-key
+```
+
+Or set:
+
+```bash
+export GMI_API_KEY="<your-gmi-api-key>" # pragma: allowlist secret
+```
+
+## Defaults
+
+- Provider: `gmi`
+- Aliases: `gmi-cloud`, `gmicloud`
+- Base URL: `https://api.gmi-serving.com/v1`
+- Env var: `GMI_API_KEY`
+- Default model: `gmi/google/gemini-3.1-flash-lite`
+
+## When to choose GMI
+
+- You want a hosted OpenAI-compatible endpoint rather than a local model server.
+- You want to try several commercial and open-weight model families through one
+  provider account.
+- You want a fallback provider with different upstream routing from OpenRouter,
+  DeepInfra, Together, or the direct vendor APIs.
+- You need GMI-specific model ids, pricing, or account controls.
+
+Choose the direct vendor provider instead when you need vendor-native features
+that GMI does not expose through its OpenAI-compatible route. Choose a local
+provider such as Ollama, LM Studio, vLLM, or SGLang when data locality or local
+GPU control matters more than hosted convenience.
+
+## Models
+
+The bundled catalog seeds commonly available GMI Cloud route ids, including:
+
+- `gmi/zai-org/GLM-5.1-FP8`
+- `gmi/deepseek-ai/DeepSeek-V3.2`
+- `gmi/moonshotai/Kimi-K2.5`
+- `gmi/google/gemini-3.1-flash-lite`
+- `gmi/anthropic/claude-sonnet-4.6`
+- `gmi/openai/gpt-5.4`
+
+The catalog is a seed, not a promise that every account can call every model at
+all times. Use OpenClaw's model listing command to see what the configured
+provider reports in your environment:
+
+```bash
+openclaw models list --provider gmi
+```
+
+## Troubleshooting
+
+- `401` or `403`: check that `GMI_API_KEY` is set for the process running
+  OpenClaw, or re-run onboarding to store the key in the provider auth profile.
+- Unknown model errors: confirm the model exists in your GMI account and use the
+  full `gmi/<route-id>` ref shown by `openclaw models list --provider gmi`.
+- Intermittent provider errors: try a different GMI route or configure GMI as a
+  fallback rather than the only primary model provider.
+
+## Related
+
+- [Model providers](/concepts/model-providers)
+- [All providers](/providers/index)
 
 
 
@@ -113922,6 +114575,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
+- [GMI Cloud](/providers/gmi)
 - [Google (Gemini)](/providers/google)
 - [Gradium](/providers/gradium)
 - [Groq (LPU inference)](/providers/groq)
@@ -113934,7 +114588,9 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
+- [NovitaAI](/providers/novita)
 - [Ollama (cloud + local models)](/providers/ollama)
+- [Ollama Cloud](/providers/ollama-cloud)
 - [OpenAI (API + Codex)](/providers/openai)
 - [OpenCode](/providers/opencode)
 - [OpenCode Go](/providers/opencode-go)
@@ -113942,6 +114598,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
+- [Qwen OAuth / Portal](/providers/qwen-oauth)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
@@ -116230,6 +116887,103 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 
 
+# Section: providers/novita.md
+
+---
+summary: "Use NovitaAI's OpenAI-compatible API with OpenClaw"
+read_when:
+  - You want to run OpenClaw with NovitaAI models
+  - You need the Novita provider id, key, or endpoint
+title: "NovitaAI"
+---
+
+NovitaAI is a hosted AI infrastructure provider with an OpenAI-compatible model
+API. In OpenClaw it is a bundled model provider, so the provider id is
+`novita`, credentials go through the normal model auth flow, and model refs look
+like `novita/deepseek/deepseek-v3-0324`.
+
+Use Novita when you want hosted access to open-weight and third-party model
+routes without running your own inference server. The bundled catalog focuses on
+chat models that are practical for agent turns, including DeepSeek, Moonshot,
+MiniMax, GLM, and Qwen routes exposed by Novita.
+
+This provider uses Novita's OpenAI-compatible endpoint. OpenClaw handles
+provider registration, auth, aliases, model ref normalization, and base URL
+selection; Novita controls live model availability, account permissions,
+pricing, and rate limits.
+
+## Setup
+
+Create an API key at [novita.ai/settings/key-management](https://novita.ai/settings/key-management), then run:
+
+```bash
+openclaw onboard --auth-choice novita-api-key
+```
+
+Or set:
+
+```bash
+export NOVITA_API_KEY="<your-novita-api-key>" # pragma: allowlist secret
+```
+
+## Defaults
+
+- Provider: `novita`
+- Aliases: `novita-ai`, `novitaai`
+- Base URL: `https://api.novita.ai/openai/v1`
+- Env var: `NOVITA_API_KEY`
+- Default model: `novita/deepseek/deepseek-v3-0324`
+
+## When to choose Novita
+
+- You want hosted open-weight model access with an OpenAI-compatible API.
+- You want DeepSeek, Kimi, MiniMax, GLM, or Qwen-family routes through a single
+  provider account.
+- You want another hosted fallback path beside OpenRouter, GMI, DeepInfra, or
+  direct vendor APIs.
+- You prefer provider-side model hosting over maintaining vLLM, SGLang, LM
+  Studio, or Ollama infrastructure.
+
+Choose a direct vendor provider when you need vendor-native request parameters
+or support contracts. Choose a local provider when the model must run on your
+own hardware or behind your own network boundary.
+
+## Models
+
+The bundled catalog seeds commonly available NovitaAI route ids, including:
+
+- `novita/moonshotai/kimi-k2.5`
+- `novita/minimax/minimax-m2.7`
+- `novita/zai-org/glm-5`
+- `novita/deepseek/deepseek-v3-0324`
+- `novita/deepseek/deepseek-r1-0528`
+- `novita/qwen/qwen3-235b-a22b-fp8`
+
+The catalog is a starting point for OpenClaw model selection. Your account,
+region, or Novita's current catalog may add, remove, or restrict routes. Check
+the provider from the CLI before setting a long-lived default:
+
+```bash
+openclaw models list --provider novita
+```
+
+## Troubleshooting
+
+- `401` or `403`: verify the key in Novita's key management page and re-run
+  `openclaw onboard --auth-choice novita-api-key` if the stored profile is
+  stale.
+- Unknown model errors: use the exact `novita/<route-id>` returned by
+  `openclaw models list --provider novita`.
+- Slow or failed routes: try another Novita model route or set Novita as a
+  fallback provider for workloads that can tolerate provider-specific variance.
+
+## Related
+
+- [Model providers](/concepts/model-providers)
+- [All providers](/providers/index)
+
+
+
 # Section: providers/nvidia.md
 
 ---
@@ -116393,6 +117147,126 @@ rate-limit details.
 
 
 
+# Section: providers/ollama-cloud.md
+
+---
+summary: "Use Ollama Cloud directly with OpenClaw"
+read_when:
+  - You want to use hosted Ollama models without a local Ollama server
+  - You need the ollama-cloud provider id, key, or endpoint
+title: "Ollama Cloud"
+---
+
+Ollama Cloud is Ollama's hosted model API. It lets OpenClaw call Ollama-hosted
+models directly, without installing a local Ollama server or signing a local
+Ollama app into cloud mode. Use provider id `ollama-cloud` and model refs like
+`ollama-cloud/kimi-k2.6`.
+
+This page is for direct cloud-only routing. The provider uses Ollama's native
+`/api/chat` style, not the OpenAI-compatible `/v1` route. OpenClaw registers it
+as a separate provider id so cloud-only credentials, live catalog discovery, and
+model selection do not get mixed with a local `ollama` host.
+
+Use this page when you want cloud-only routing. For local Ollama, hybrid
+cloud-plus-local routing, embeddings, and custom host details, see
+[Ollama](/providers/ollama).
+
+## Setup
+
+Create an Ollama Cloud API key at [ollama.com/settings/keys](https://ollama.com/settings/keys), then run:
+
+```bash
+openclaw onboard --auth-choice ollama-cloud
+```
+
+Or set:
+
+```bash
+export OLLAMA_API_KEY="<your-ollama-cloud-api-key>" # pragma: allowlist secret
+```
+
+## Defaults
+
+- Provider: `ollama-cloud`
+- Base URL: `https://ollama.com`
+- Env var: `OLLAMA_API_KEY`
+- API style: Ollama native `/api/chat`
+- Example model: `ollama-cloud/kimi-k2.6`
+
+## When to choose Ollama Cloud
+
+- You want hosted Ollama models without running `ollama serve` locally.
+- You want the same native Ollama chat API shape OpenClaw uses for local
+  Ollama, but pointed at `https://ollama.com`.
+- You want a simple cloud path for models that are already in Ollama's hosted
+  catalog.
+- You do not need local model pulls, local GPU control, or LAN-only inference.
+
+Use [Ollama](/providers/ollama) instead when you want local-only or
+cloud-plus-local routing through a signed-in Ollama host. Use an
+OpenAI-compatible provider instead when you need `/v1/chat/completions`
+semantics or provider-specific OpenAI-style features.
+
+## Models
+
+OpenClaw discovers Ollama Cloud models from the live hosted catalog. Commonly
+available hosted ids include:
+
+- `ollama-cloud/gpt-oss:20b`
+- `ollama-cloud/kimi-k2.6`
+- `ollama-cloud/deepseek-v4-flash`
+- `ollama-cloud/minimax-m2.7`
+- `ollama-cloud/glm-5`
+
+Use a model id from your current hosted catalog:
+
+```bash
+openclaw models list --provider ollama-cloud
+openclaw models set ollama-cloud/kimi-k2.6
+```
+
+Model ids are cloud catalog ids, not local pull names. If a model name works in
+a local Ollama host but is absent from the hosted catalog, use the `ollama`
+provider with that local host instead.
+
+## Live test
+
+For Ollama Cloud API-key smoke tests, point the Ollama live test at the hosted
+endpoint and choose a model from your current catalog:
+
+```bash
+export OLLAMA_API_KEY="<your-ollama-cloud-api-key>" # pragma: allowlist secret
+
+OPENCLAW_LIVE_TEST=1 \
+OPENCLAW_LIVE_OLLAMA=1 \
+OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com \
+OPENCLAW_LIVE_OLLAMA_MODEL=kimi-k2.6 \
+OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=1 \
+pnpm test:live -- extensions/ollama/ollama.live.test.ts
+```
+
+The cloud smoke runs text, native stream, and web search. It skips embeddings by
+default for `https://ollama.com` because Ollama Cloud API keys may not authorize
+`/api/embed`.
+
+## Troubleshooting
+
+- `Set OLLAMA_API_KEY` errors: provide a real cloud API key. The local
+  `ollama-local` marker is only for local or private Ollama hosts.
+- Unknown model errors: run `openclaw models list --provider ollama-cloud` and
+  copy the hosted model id exactly.
+- Tool-call or raw JSON issues on custom Ollama hosts: check whether you are
+  accidentally using an OpenAI-compatible `/v1` URL. Ollama routes should use
+  the native base URL with no `/v1` suffix.
+
+## Related
+
+- [Ollama](/providers/ollama)
+- [Model providers](/concepts/model-providers)
+- [All providers](/providers/index)
+
+
+
 # Section: providers/ollama.md
 
 ---
@@ -116405,6 +117279,12 @@ title: "Ollama"
 ---
 
 OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud models and local/self-hosted Ollama servers. You can use Ollama in three modes: `Cloud + Local` through a reachable Ollama host, `Cloud only` against `https://ollama.com`, or `Local only` against a reachable Ollama host.
+
+OpenClaw also registers `ollama-cloud` as a first-class hosted provider id for
+direct Ollama Cloud use. Use refs like `ollama-cloud/kimi-k2.5:cloud` when you
+want cloud-only routing without sharing the local `ollama` provider id.
+
+For the dedicated cloud-only setup page, see [Ollama Cloud](/providers/ollama-cloud).
 
 <Warning>
 **Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
@@ -116419,7 +117299,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     Local and LAN Ollama hosts do not need a real bearer token. OpenClaw uses the local `ollama-local` marker only for loopback, private-network, `.local`, and bare-hostname Ollama base URLs.
   </Accordion>
   <Accordion title="Remote and Ollama Cloud hosts">
-    Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
+    Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`. For direct hosted use, prefer provider `ollama-cloud`.
   </Accordion>
   <Accordion title="Custom provider ids">
     Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
@@ -116563,6 +117443,13 @@ Choose your preferred setup method and mode.
     Use **Cloud only** during setup. OpenClaw prompts for `OLLAMA_API_KEY`, sets `baseUrl: "https://ollama.com"`, and seeds the hosted cloud model list. This path does **not** require a local Ollama server or `ollama signin`.
 
     The cloud model list shown during `openclaw onboard` is populated live from `https://ollama.com/api/tags`, capped at 500 entries, so the picker reflects the current hosted catalog rather than a static seed. If `ollama.com` is unreachable or returns no models at setup time, OpenClaw falls back to the previous hardcoded suggestions so onboarding still completes.
+
+    You can also configure the first-class cloud provider directly:
+
+    ```bash
+    openclaw onboard --auth-choice ollama-cloud
+    openclaw models set ollama-cloud/kimi-k2.5:cloud
+    ```
 
   </Tab>
 
@@ -119501,7 +120388,7 @@ OpenClaw provides `pixverse` as an official external plugin for hosted PixVerse 
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install @openclaw/pixverse-provider
+    openclaw plugins install clawhub:@openclaw/pixverse-provider
     openclaw gateway restart
     ```
   </Step>
@@ -119779,6 +120666,126 @@ The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to overr
 
 
 
+# Section: providers/qwen-oauth.md
+
+---
+summary: "Use the Qwen Portal provider id with OpenClaw"
+read_when:
+  - You want to configure the qwen-oauth provider id
+  - You previously used Qwen Portal OAuth credentials
+  - You need the Qwen Portal endpoint or migration guidance
+title: "Qwen OAuth / Portal"
+---
+
+`qwen-oauth` is the Qwen Portal provider id. It targets the Qwen Portal endpoint
+and keeps older Qwen OAuth / portal setups addressable through a distinct
+provider id.
+
+Use this provider when you specifically have a current Qwen Portal token for
+`https://portal.qwen.ai/v1`, or when you are migrating an older Qwen Portal /
+Qwen CLI setup and want to keep those credentials separate from the canonical
+Qwen Cloud provider. It is not the recommended first choice for new Qwen users.
+
+For new Qwen Cloud setups, prefer [Qwen](/providers/qwen) with the Standard
+ModelStudio endpoint unless you specifically have a current Qwen Portal token.
+
+## Setup
+
+Provide your portal token through onboarding:
+
+```bash
+openclaw onboard --auth-choice qwen-oauth
+```
+
+Or set:
+
+```bash
+export QWEN_API_KEY="<your-qwen-portal-token>" # pragma: allowlist secret
+```
+
+## Defaults
+
+- Provider: `qwen-oauth`
+- Aliases: `qwen-portal`, `qwen-cli`
+- Base URL: `https://portal.qwen.ai/v1`
+- Env var: `QWEN_API_KEY`
+- API style: OpenAI-compatible
+- Default model: `qwen-oauth/qwen3.5-plus`
+
+## How this differs from Qwen
+
+OpenClaw has two Qwen-facing provider ids:
+
+| Provider     | Endpoint family                                          | Best for                                                                               |
+| ------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `qwen`       | Qwen Cloud / Alibaba DashScope and Coding Plan endpoints | New API-key setups, Standard pay-as-you-go, Coding Plan, multimodal DashScope features |
+| `qwen-oauth` | Qwen Portal endpoint at `portal.qwen.ai/v1`              | Existing Qwen Portal tokens and legacy Qwen OAuth / CLI setups                         |
+
+Both providers use OpenAI-compatible request shapes, but they are separate auth
+surfaces. A token stored for `qwen-oauth` should not be treated as a DashScope
+or ModelStudio key, and a new DashScope key should use the canonical `qwen`
+provider instead.
+
+## When to choose Qwen OAuth / Portal
+
+- You already have a working Qwen Portal token.
+- You are preserving a legacy Qwen OAuth or Qwen CLI workflow while moving to
+  OpenClaw's provider model.
+- You need to test compatibility with the Qwen Portal endpoint specifically.
+
+Choose [Qwen](/providers/qwen) for new setup, broader endpoint choices, Standard
+ModelStudio, Coding Plan, and the full bundled Qwen catalog.
+
+## Models
+
+The bundled catalog seeds the Qwen Portal default:
+
+- `qwen-oauth/qwen3.5-plus`
+
+Availability depends on the current Qwen Portal account and token. If your
+account uses ModelStudio / DashScope API keys instead, configure the canonical
+`qwen` provider:
+
+```bash
+openclaw onboard --auth-choice qwen-standard-api-key
+openclaw models set qwen/qwen3-coder-plus
+```
+
+## Migration
+
+Legacy Qwen Portal OAuth profiles may not be refreshable. If a portal profile
+stops working, re-authenticate with a current token or switch to the Standard
+Qwen provider:
+
+```bash
+openclaw onboard --auth-choice qwen-standard-api-key
+```
+
+Standard global ModelStudio uses:
+
+```text
+https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+```
+
+## Troubleshooting
+
+- Portal OAuth refresh failures: legacy Qwen Portal OAuth profiles may not be
+  refreshable. Re-run onboarding with a current token.
+- Wrong endpoint errors: confirm the model ref starts with `qwen-oauth/` when
+  using a portal token. Use `qwen/` refs only for the canonical Qwen provider.
+- `QWEN_API_KEY` confusion: both Qwen pages mention this env var, but onboarding
+  stores credentials under the selected provider id. Prefer onboarding when you
+  keep both `qwen` and `qwen-oauth` available on the same machine.
+
+## Related
+
+- [Qwen](/providers/qwen)
+- [Alibaba Model Studio](/providers/alibaba)
+- [Model providers](/concepts/model-providers)
+- [All providers](/providers/index)
+
+
+
 # Section: providers/qwen.md
 
 ---
@@ -119789,21 +120796,13 @@ read_when:
 title: "Qwen"
 ---
 
-<Warning>
-
-**Qwen OAuth has been removed.** The free-tier OAuth integration
-(`qwen-portal`) that used `portal.qwen.ai` endpoints is no longer available.
-See [Issue #49557](https://github.com/openclaw/openclaw/issues/49557) for
-background.
-
-</Warning>
-
 OpenClaw now treats Qwen as a first-class bundled provider with canonical id
 `qwen`. The bundled provider targets the Qwen Cloud / Alibaba DashScope and
-Coding Plan endpoints and keeps legacy `modelstudio` ids working as a
-compatibility alias.
+Coding Plan endpoints, keeps legacy `modelstudio` ids working as a compatibility
+alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 
 - Provider: `qwen`
+- Portal provider: [`qwen-oauth`](/providers/qwen-oauth)
 - Preferred env var: `QWEN_API_KEY`
 - Also accepted for compatibility: `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY`
 - API style: OpenAI-compatible
@@ -119915,6 +120914,44 @@ Choose your plan type and follow the setup steps.
     </Note>
 
   </Tab>
+
+  <Tab title="Qwen OAuth / Portal">
+    **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
+
+    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
+    page and migration notes.
+
+    <Steps>
+      <Step title="Provide your portal token">
+        ```bash
+        openclaw onboard --auth-choice qwen-oauth
+        ```
+      </Step>
+      <Step title="Set a default model">
+        ```json5
+        {
+          agents: {
+            defaults: {
+              model: { primary: "qwen-oauth/qwen3.5-plus" },
+            },
+          },
+        }
+        ```
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider qwen-oauth
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+    `qwen-oauth` uses the same `QWEN_API_KEY` env var name as the DashScope
+    provider, but stores auth under the `qwen-oauth` provider id when configured
+    through OpenClaw onboarding.
+    </Note>
+
+  </Tab>
 </Tabs>
 
 ## Plan types and endpoints
@@ -119925,6 +120962,7 @@ Choose your plan type and follow the setup steps.
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
+| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                              |
 
 The provider auto-selects the endpoint based on your auth choice. Canonical
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
@@ -119952,6 +120990,7 @@ the Standard endpoint.
 | `qwen/glm-5`                | text        | 202,752   | GLM                                                |
 | `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
 | `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+| `qwen-oauth/qwen3.5-plus`   | text, image | 1,000,000 | Qwen Portal default                                |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
@@ -123838,6 +124877,2267 @@ Run `pnpm build` before push if runtime barrel, lazy import, packaging, or publi
 
 
 
+# Section: refactor/database-first.md
+
+---
+summary: "Migration plan for making SQLite the primary durable state and cache layer while keeping config file-backed"
+title: "Database-first state refactor"
+read_when:
+  - Moving OpenClaw runtime data, cache, transcripts, task state, or scratch files into SQLite
+  - Designing doctor migrations from legacy JSON or JSONL files
+  - Changing backup, restore, VFS, or worker storage behavior
+  - Removing session locks, pruning, truncation, or JSON compatibility paths
+---
+
+# Database-First State Refactor
+
+## Decision
+
+Use a two-level SQLite layout:
+
+- Global database: `~/.openclaw/state/openclaw.sqlite`
+- Agent database: one SQLite database per agent for agent-owned workspace,
+  transcript, VFS, artifact, and large per-agent runtime state
+- Configuration stays file-backed: `openclaw.json` remains outside the
+  database. Runtime auth profiles move to SQLite; external provider or CLI
+  credential files remain owner-managed outside OpenClaw's database.
+
+The global database is the control-plane database. It owns agent discovery,
+shared gateway state, pairing, device/node state, task and flow ledgers, plugin
+state, scheduler runtime state, backup metadata, and migration state.
+
+The agent database is the data-plane database. It owns the agent's session
+metadata, transcript event stream, VFS workspace or scratch namespace, tool
+artifacts, run artifacts, and searchable/indexable agent-local cache data.
+
+This gives one durable global view without forcing large agent workspaces,
+transcripts, and binary scratch data into the shared gateway write lane.
+
+## Hard Contract
+
+This migration has one canonical runtime shape:
+
+- Session rows persist session metadata only. They must not persist
+  `transcriptLocator`, transcript file paths, sibling JSONL paths, lock paths,
+  pruning metadata, or file-era compatibility pointers.
+- Transcript identity is always SQLite identity: `{agentId, sessionId}` plus
+  optional topic metadata where the protocol needs it.
+- `sqlite-transcript://...` is not a runtime or protocol identity. New code must
+  not derive, persist, pass, parse, or migrate transcript locators. Runtime and
+  tests should not contain pseudo-locators at all; docs may mention the string
+  only to ban it.
+- Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
+  and old session-path logic belong only to the doctor migration/import path.
+- Legacy session config aliases belong only to doctor migration. Runtime does
+  not interpret `session.idleMinutes`, `session.resetByType.dm`, or
+  cross-agent `agent:main:*` main-session aliases for another configured agent.
+- Session routing identity is typed relational state. Hot runtime and UI paths
+  should read `sessions.session_scope`, `sessions.account_id`,
+  `sessions.primary_conversation_id`, `conversations`, and
+  `session_conversations`; they must not parse `session_key` or mine
+  `session_entries.entry_json` for provider identity except as a compatibility
+  shadow while old call sites are being deleted.
+- Channel-level direct-message markers such as `dm` versus `direct` are routing
+  vocabulary, not transcript locators or file-store compatibility handles.
+- Legacy hook handler config belongs only to doctor warning/migration surfaces.
+  Runtime must not load `hooks.internal.handlers`; hooks run through discovered
+  hook directories and `HOOK.md` metadata only.
+- Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
+  TTS, memory hooks, subagents, plugin command routing, protocol boundaries, and
+  hooks must pass `{agentId, sessionId}` through the runtime.
+- Tests should seed and assert SQLite transcript rows through
+  `{agentId, sessionId}`. Tests that only prove JSONL path forwarding,
+  caller-supplied locator preservation, or transcript-file compatibility should
+  be deleted unless they cover doctor import, non-session support/debug
+  materialization, or protocol shape.
+- `runEmbeddedPiAgent(...)`, prepared worker runs, and the inner embedded
+  attempt must not accept transcript locators. They open the SQLite transcript
+  manager by `{agentId, sessionId}` and pass that manager to the internalized
+  PI-compatible agent session, so stale callers cannot make the runner write
+  JSON/JSONL transcripts.
+- Runner diagnostics must store runtime/cache/payload trace records in SQLite.
+  Runtime diagnostics must not expose JSONL file override knobs or generic
+  transcript JSONL export helpers; user-facing exports can materialize explicit
+  artifacts from database rows without feeding file names back into runtime.
+- Raw stream logging uses `OPENCLAW_RAW_STREAM=1` plus SQLite diagnostics rows.
+  The old pi-mono `PI_RAW_STREAM`, `PI_RAW_STREAM_PATH`, and
+  `raw-openai-completions.jsonl` file logger contract is not part of OpenClaw
+  runtime or tests.
+- QMD memory indexing must not export SQLite transcripts to markdown files.
+  QMD indexes configured memory files only; session transcript search stays
+  SQLite-backed.
+- The QMD SDK subpath is QMD-only for new code. SQLite session transcript
+  indexing helpers live on `memory-core-host-engine-session-transcripts`; any
+  QMD re-export is compatibility only and must not be used by runtime code.
+- Built-in memory indexes live in the owning agent database. Runtime config and
+  resolved runtime contracts must not expose `memorySearch.store.path`; doctor
+  deletes that legacy config key and current code passes the agent
+  `databasePath` internally.
+
+Implementation work should keep deleting code until these statements are true
+without exceptions outside doctor/import/export/debug boundaries.
+
+## Goal state and progress
+
+### Hard goal
+
+- One global SQLite database owns control-plane state:
+  `state/openclaw.sqlite`.
+- One per-agent SQLite database owns data-plane state:
+  `agents/<agentId>/agent/openclaw-agent.sqlite`.
+- Config remains file-backed. `openclaw.json` is not part of this database
+  refactor.
+- Legacy files are doctor migration inputs only.
+- Runtime never writes or reads session or transcript JSONL as active state.
+
+### Goal states
+
+- `not-started`: file-era runtime code still writes active state.
+- `migrating`: doctor/import code can move file data into SQLite.
+- `dual-read`: temporary bridge reads both SQLite and legacy files. This state
+  is forbidden for this refactor unless it is explicitly documented as
+  doctor-only.
+- `sqlite-runtime`: runtime reads and writes SQLite only.
+- `clean`: legacy runtime APIs and tests are removed, and the guard prevents
+  regressions.
+- `done`: docs, tests, backup, doctor migration, and changed checks prove the
+  clean state.
+
+### Current state
+
+- Sessions: `clean` for runtime. Session rows live in the per-agent database,
+  runtime APIs use `{agentId, sessionId}` or `{agentId, sessionKey}`, and
+  `sessions.json` is doctor-only legacy input.
+- Transcripts: `clean` for runtime. Transcript events, identities, snapshots,
+  and trajectory runtime events live in the per-agent database. Runtime no
+  longer accepts transcript locators or JSONL transcript paths.
+- PI embedded runner: `clean`. Embedded PI runs, prepared workers, compaction,
+  and retry loops use SQLite session scope and reject stale transcript handles.
+- Cron: `clean` for runtime. Runtime uses `cron_jobs` and `cron_run_logs`;
+  runtime tests use SQLite `storeKey` naming, and file-era cron paths remain in
+  doctor legacy migration tests only.
+- Task registry: `clean`. Task and Task Flow runtime rows live in
+  `state/openclaw.sqlite`; unshipped sidecar SQLite importers are deleted.
+- Plugin state: `clean`. Plugin state/blob rows live in the shared global
+  database; old plugin-state sidecar SQLite helpers are guarded against.
+- Memory: `sqlite-runtime` for built-in memory and session transcript indexing.
+  Memory index tables live in the per-agent database, plugin memory state uses
+  shared plugin-state rows, and legacy memory files are doctor migration inputs
+  or user workspace content.
+- Backup: `sqlite-runtime`. Backup stages compact SQLite snapshots, omits live
+  WAL/SHM sidecars, verifies SQLite integrity, and records backup runs in the
+  global database.
+- Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
+  JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
+  and removes successful sources.
+- E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
+  rows. The runtime-context Docker script creates legacy JSONL only inside the
+  doctor migration seed and names the legacy session index path explicitly.
+
+### Remaining work
+
+- [x] Rename cron runtime-test store variables away from `storePath` unless
+      they are doctor legacy inputs.
+      Files: `src/cron/service.test-harness.ts`,
+      `src/cron/service.runs-one-shot-main-job-disables-it.test.ts`,
+      `src/cron/service/timer.regression.test.ts`,
+      `src/cron/service/ops.test.ts`, `src/cron/service/store.test.ts`,
+      `src/cron/service.heartbeat-ok-summary-suppressed.test.ts`,
+      `src/cron/service.main-job-passes-heartbeat-target-last.test.ts`,
+      `src/cron/store.test.ts`.
+      Proof: `pnpm check:database-first-legacy-stores`; `rg -n 'storePath' src/cron --glob '!**/commands/doctor/**'`.
+- [x] Remove or rename obsolete file-era export test mocks.
+      File: `src/auto-reply/reply/commands-export-test-mocks.ts`.
+      Proof: `rg -n 'resolveSessionFilePath|sessionFile|storePath|transcriptLocator' src/auto-reply/reply`.
+- [x] Make the Docker runtime-context legacy JSONL seed obviously doctor-only.
+      File: `scripts/e2e/session-runtime-context-docker-client.ts`.
+      Proof: `rg -n 'sessions\\.json|sessionFile|\\.jsonl' scripts/e2e/session-runtime-context-docker-client.ts` shows only
+      `seedBrokenLegacySessionForDoctorMigration`.
+- [x] Keep Kysely generated types aligned after any schema change.
+      Files: `src/state/openclaw-state-schema.sql`,
+      `src/state/openclaw-agent-schema.sql`,
+      `src/state/*generated*`.
+      Proof: no schema change in this pass; `pnpm db:kysely:check`;
+      `pnpm lint:kysely`.
+- [x] Re-run focused tests for touched stores, commands, and scripts.
+      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-trajectory.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
+- [x] Before declaring `done`, run the changed gate or remote broad proof.
+      Proof: `pnpm check:changed --timed -- <changed extension paths>` passed on
+      Hetzner Crabbox run `run_3f1cabf6b25c` after temporary Node 24/pnpm setup and
+      explicit path routing for the synced no-`.git` workspace.
+
+### Do not regress
+
+- No transcript locators.
+- No active session files.
+- No fake JSONL test fixtures except doctor legacy migration tests.
+- No raw SQLite access where Kysely is expected.
+- No new legacy DB migrations. This layout has not shipped; keep schema version
+  at `1` unless there is a strong reason.
+
+## Code-Read Assumptions
+
+No follow-up product decisions are blocking this plan. The implementation should
+proceed with these assumptions:
+
+- Use `node:sqlite` directly and require the Node 22+ runtime for this storage
+  path.
+- Keep exactly one normal configuration file. Do not move config, plugin
+  manifests, or Git workspaces into SQLite in this refactor.
+- Runtime compatibility files are not required. Legacy JSON and JSONL files are
+  migration inputs only. The branch-local SQLite sidecars never shipped and are
+  deleted instead of imported.
+- `openclaw doctor --fix` owns the legacy file-to-database migration step.
+  Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
+  database-upgrade paths.
+- Credential compatibility follows the same rule: runtime credentials live in
+  SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
+  `credentials/oauth.json` files are doctor migration inputs, then removed
+  after import.
+- Generated model catalog state is database-backed. Runtime code must not write
+  `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
+  doctor inputs and are removed after import into `agent_model_catalogs`.
+- Runtime must not migrate, normalize, or bridge transcript locators. Active
+  transcript identity is `{agentId, sessionId}` in SQLite. File paths are
+  legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
+  runtime, protocol, hook, and plugin surfaces instead of being treated as a
+  boundary handle.
+- Runtime SQLite transcript reads do not run old JSONL entry-shape migrations or
+  rewrite whole transcripts for compatibility. Legacy entry normalization stays in
+  explicit doctor/import utilities. Doctor normalizes legacy JSONL transcript
+  files before inserting SQLite rows; current runtime rows are
+  already written in the current transcript schema. Trajectory/session export
+  reads those rows as-is and must not perform export-time legacy migrations.
+- Legacy transcript JSONL parse/migration helpers are doctor-only. Runtime
+  transcript format code builds current SQLite transcript context only; doctor
+  owns old JSONL entry upgrades before inserting rows.
+- The old runtime-owned JSONL transcript streaming helper was deleted. Doctor
+  import code owns explicit legacy file reads; runtime session history reads
+  SQLite rows.
+- Codex app-server bindings use the OpenClaw `sessionId` as the canonical
+  key in the Codex plugin-state namespace. `sessionKey` is metadata for
+  routing/display and must not replace the durable session id or resurrect
+  transcript-file identity.
+- Context engines receive the current runtime contract directly. The registry
+  must not wrap engines with retry shims that delete `sessionKey`,
+  `transcriptScope`, or `prompt`; engines that cannot accept the current
+  database-first params should fail loudly instead of being bridged.
+- Backup output should remain one archive file. Database contents should enter
+  that archive as compact SQLite snapshots, not raw live WAL sidecars.
+- Transcript search is useful but not required for the first database-first
+  cut. Design the schema so FTS can be added later.
+- Worker execution should stay experimental behind settings while the database
+  boundary settles.
+
+## Code-Read Findings
+
+The current branch is already past the proof-of-concept stage. The shared
+database exists, Node `node:sqlite` is wired through a small runtime helper, and
+former stores now write to `state/openclaw.sqlite` or the owning
+`openclaw-agent.sqlite` database.
+
+The remaining work is not choosing SQLite; it is keeping the new boundary clean
+and deleting any compatibility-shaped interfaces that still look like the old
+file world:
+
+- Session `storePath` is no longer a runtime identity, test fixture shape, or
+  status payload field. Runtime and bridge tests no longer contain the
+  `storePath` contract name; doctor/migration code owns that legacy vocabulary.
+- Session writes no longer pass through the old in-process `store-writer.ts`
+  queue. SQLite patch writes use conflict detection and bounded retry instead.
+- Legacy path discovery still has valid migration uses, but runtime code should
+  stop treating `sessions.json` and transcript JSONL files as possible write
+  targets.
+- Agent-owned tables live in per-agent SQLite databases. The global DB keeps
+  registry/control-plane rows; transcript identity is `{agentId, sessionId}` in
+  the per-agent transcript rows. Runtime code must not persist transcript file
+  paths or migrate transcript locators.
+- Doctor already imports several legacy files. The cleanup is to make that a
+  single explicit migration implementation that doctor calls, with a durable
+  migration report.
+
+No additional product questions are blocking implementation.
+
+## Current Code Shape
+
+The branch already has a real shared SQLite base:
+
+- The runtime floor is now Node 22+: `package.json`, the CLI runtime guard,
+  installer defaults, macOS runtime locator, CI, and public install docs all
+  agree. The old Node 22 compatibility lane is removed.
+- `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
+  `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
+  the generated schema module derived from
+  `src/state/openclaw-state-schema.sql`.
+- Kysely table types and runtime schema modules are generated from disposable
+  SQLite databases created from the committed `.sql` files; runtime code no
+  longer keeps copy-pasted schema strings for global, per-agent, or proxy
+  capture databases.
+- Runtime stores derive selected and inserted row types from those generated
+  Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
+  remains limited to schema application, pragmas, and migration-only DDL.
+- The SQLite schemas are collapsed to `user_version = 1` because this database
+  layout has not shipped yet. Runtime openers create the current schema only;
+  file-to-database import remains in doctor code, and branch-local
+  database upgrade helpers have been deleted.
+- Relational ownership is enforced where the ownership boundary is canonical:
+  source migration rows cascade from `migration_runs`, task delivery state
+  cascades from `task_runs`, and transcript identity rows cascade from
+  transcript events.
+- Current shared tables include `agent_databases`,
+  `auth_profile_stores`, `auth_profile_state`,
+  `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
+  `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
+  `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
+  `delivery_queue_entries`, `model_capability_cache`,
+  `workspace_setup_state`, `native_hook_relay_bridges`,
+  `current_conversation_bindings`, `plugin_binding_approvals`,
+  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
+  `subagent_runs`, `migration_runs`, and `backup_runs`.
+- Arbitrary plugin-owned state does not get host-owned typed tables. Installed
+  plugins use `plugin_state_entries` for versioned JSON payloads and
+  `plugin_blob_entries` for bytes, with namespace/key ownership, TTL cleanup,
+  backup, and plugin migration records. Host-owned plugin orchestration state can
+  still have typed tables when the host owns the query contract, such as
+  `plugin_binding_approvals`.
+- Plugin migrations are data migrations over plugin-owned namespaces, not host
+  schema migrations. A plugin can migrate its own versioned state/blob entries
+  through a migration provider, and the host records source/run status in the
+  normal migration ledger. New plugin installs do not require changing
+  `openclaw-state-schema.sql` unless the host itself is taking ownership of a
+  new cross-plugin contract.
+- `src/state/openclaw-agent-db.ts` opens
+  `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
+  global DB, and owns agent-local session, transcript, VFS, artifact, cache,
+  and memory-index tables. Shared runtime discovery now reads the generated-typed
+  `agent_databases` registry instead of reimplementing that query at each call
+  site.
+- Global and per-agent databases record a `schema_meta` row with database role,
+  schema version, timestamps, and agent id for agent databases. The layout still
+  stays at `user_version = 1` because this SQLite schema has not shipped yet.
+- Per-agent session identity now has a canonical `sessions` root table keyed by
+  `session_id`, with `session_key`, `session_scope`, `account_id`,
+  `primary_conversation_id`, timestamps, display fields, model metadata,
+  harness id, and parent/spawn linkage as queryable columns. `session_routes`
+  is the unique active route index from `session_key` to the current
+  `session_id`, so a route key can move to a fresh durable session without
+  making hot reads pick between duplicate `sessions.session_key` rows. The old
+  `session_entries.entry_json` compatibility-shaped payload hangs off the
+  durable `session_id` root by foreign key; it is no longer the only
+  schema-level representation of a session.
+- Per-agent external conversation identity is relational too:
+  `conversations` stores normalized provider/account/conversation identity, and
+  `session_conversations` links one OpenClaw session to one or more external
+  conversations. This covers shared-main DM sessions where multiple peers can
+  intentionally map to one session without lying in `session_key`. SQLite also
+  enforces uniqueness for the natural provider identity so the same
+  channel/account/kind/peer/thread tuple cannot fork across conversation ids.
+  Shared-main direct peers are linked with a `participant` role, so one
+  OpenClaw session can represent multiple external DM peers without demoting
+  older peers into vague related rows. `sessions.primary_conversation_id` still
+  points at the current typed delivery target. Closed routing/status columns
+  are enforced with SQLite `CHECK` constraints instead of relying only on
+  TypeScript unions.
+  Runtime session projection clears compatibility routing shadows from
+  `session_entries.entry_json` before applying typed session/conversation
+  columns, so stale JSON payloads cannot resurrect delivery targets.
+  Subagent announce routing likewise requires the typed SQLite delivery context;
+  it no longer falls back to compatibility `SessionEntry` route fields.
+  Gateway `chat.send` explicit delivery inheritance reads the typed SQLite
+  delivery context instead of `origin`/`last*` compatibility fields.
+  `tools.effective` likewise derives provider/account/thread context from typed
+  SQLite delivery/routing rows, not stale `last*` session-entry shadows.
+  System-event prompt context rebuilds channel/to/account/thread fields from
+  typed delivery fields instead of `origin` shadows.
+  The shared `deliveryContextFromSession` helper and session-to-conversation
+  mapper now ignore `SessionEntry.origin` entirely; only typed delivery fields
+  and relational conversation rows can create hot route identity.
+  Runtime session entry normalization strips `origin` before persisting or
+  projecting `entry_json`, and inbound metadata writes typed channel/chat
+  fields plus relational conversation rows instead of creating new origin
+  shadows.
+- Transcript events, transcript snapshots, and trajectory runtime events now
+  reference the canonical per-agent `sessions` root and cascade on session
+  deletion. Transcript identity/idempotency rows continue to cascade from the
+  exact transcript event row.
+- Memory-core indexes now use explicit agent-database tables
+  `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, and
+  `memory_embedding_cache`; optional FTS/vector side indexes use the same
+  `memory_index_*` prefix instead of generic `meta`, `files`, `chunks`, or
+  `chunks_vec` tables. `memory_index_sources` is keyed by
+  `(source_kind, source_key)` and carries optional `session_id` ownership, so
+  session-derived sources and chunks cascade when a session is deleted. Cached
+  chunk embeddings are stored as Float32 SQLite BLOBs, not JSON text arrays.
+  These tables are derived/search cache, not canonical transcript storage; they
+  can be deleted and rebuilt from `sessions`, `transcript_events`, and memory
+  workspace files.
+- Subagent run recovery state now lives in typed shared `subagent_runs` rows
+  with indexed child, requester, and controller session keys. The old
+  `subagents/runs.json` file is doctor migration input only.
+- Current conversation bindings now live in typed shared
+  `current_conversation_bindings` rows keyed by normalized conversation id, with
+  target agent/session columns, conversation kind, status, expiry, and metadata
+  stored as relational columns instead of a duplicated opaque binding record.
+  The durable binding key includes the normalized conversation kind so
+  direct/group/channel refs cannot collide, and SQLite rejects invalid binding
+  kind/status values. The old
+  `bindings/current-conversations.json` file is doctor migration input only.
+- Delivery queue recovery now overlays typed queue columns for channel, target,
+  account, session, retry, error, platform-send, and recovery state onto the
+  replay JSON. `entry_json` keeps the replay payloads, hooks, and formatting
+  payload, but typed columns are authoritative for hot queue routing/state.
+- TUI last-session restore pointers now live in typed shared
+  `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
+  The old TUI JSON file is doctor migration input only.
+- Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
+  `speech-core` plugin. The old `settings/tts.json` file is doctor migration
+  input only; runtime no longer reads or writes TTS prefs JSON files, and the
+  legacy path resolver lives in the doctor migration module.
+- Secret target metadata now talks about stores instead of pretending every
+  credential target is a config file. `openclaw.json` remains the config store;
+  auth-profile targets use typed SQLite `auth_profile_stores` rows with
+  provider-shaped credentials kept as JSON payloads.
+- Secret audit no longer scans retired per-agent `auth.json` files. Doctor owns
+  warning about, importing, and removing that legacy file.
+- Legacy auth profile path helpers now live in doctor legacy code. Core auth
+  profile path helpers expose SQLite auth-store identity and display locations,
+  not `auth-profiles.json` or `auth-state.json` runtime paths.
+- Subagent run recovery and OpenRouter model capability cache runtime modules
+  now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
+  import helpers. OpenRouter capabilities use the typed generic
+  `model_capability_cache` rows under `provider_id = "openrouter"` instead of
+  one opaque cache blob or a provider-specific host table. Subagent run
+  `taskName` is stored in the typed `subagent_runs.task_name` column; the
+  `payload_json` copy is replay/debug data, not the source for hot display or
+  lookup fields.
+- `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
+  over the agent database `vfs_entries` table. Directory reads, recursive
+  exports, deletes, and renames use indexed `(namespace, path)` prefix ranges
+  instead of scanning a whole namespace or relying on `LIKE` path matching.
+- `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
+  run artifact, and scoped cache stores for workers.
+- Workspace bootstrap completion markers now live in typed shared
+  `workspace_setup_state` rows keyed by resolved workspace path instead of
+  `.openclaw/workspace-state.json`; runtime no longer reads or rewrites the
+  legacy workspace marker, and helper APIs no longer pass around a fake
+  `.openclaw/setup-state` path just to derive storage identity.
+- Exec approvals now live in the typed shared SQLite `exec_approvals_config`
+  singleton row. Doctor imports legacy `~/.openclaw/exec-approvals.json`;
+  runtime writes no longer create, rewrite, or report that file as its active
+  store location. The macOS companion reads and writes the same
+  `state/openclaw.sqlite` table row; it keeps only the Unix prompt socket on disk
+  because that is IPC, not durable runtime state.
+- Device identity, device auth, and bootstrap runtime modules now keep their
+  SQLite snapshot readers/writers separate from doctor-only legacy JSON import
+  helpers. Device identity uses typed `device_identities` rows and device auth
+  tokens use typed `device_auth_tokens` rows. Device auth writes reconcile rows
+  by device/role instead of truncating the token table, and runtime no longer
+  routes single-token updates through the old whole-store adapter. The legacy
+  version-1 JSON payloads exist only as doctor import/export shapes.
+- GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
+  under `github-copilot/token-cache/default`. It is provider-owned cache state,
+  so it intentionally does not add a host schema table.
+- The shared Swift runtime (`OpenClawKit`) uses the same
+  `state/openclaw.sqlite` rows for device identity and device auth. macOS app
+  helpers import the shared SQLite helpers instead of owning a second JSON or
+  SQLite path. A leftover legacy `identity/device.json` blocks identity creation
+  until doctor imports it into SQLite, matching the TypeScript and Android
+  startup gate.
+- Android device identity uses the same TypeScript-compatible key material
+  stored in typed `state/openclaw.sqlite#table/device_identities` rows. It never
+  reads or writes `openclaw/identity/device.json`; a leftover legacy file blocks
+  startup until doctor imports it into SQLite.
+- Android cached device auth tokens also use typed
+  `state/openclaw.sqlite#table/device_auth_tokens` rows and share the same
+  version-1 token semantics as TypeScript and Swift. Runtime no longer reads `SecurePrefs`
+  `gateway.deviceToken*` compatibility keys; those belong to migration/doctor
+  logic only.
+- Android notification recent-package history uses typed
+  `android_notification_recent_packages` rows. Runtime no longer migrates or
+  reads the old SharedPreferences CSV keys.
+- Device identity creation fails closed when legacy `identity/device.json`
+  exists, when the SQLite identity row is invalid, or when the SQLite identity
+  store cannot be opened. Doctor imports and removes that file first, so runtime
+  startup cannot silently rotate pairing identity before migration.
+- Device identity selection is a SQLite row key, not a JSON file locator. Tests
+  and gateway helpers pass explicit identity keys; only doctor migration and the
+  fail-closed startup gate know the retired `identity/device.json` filename.
+- Session reset compatibility now lives in doctor config migration:
+  `session.idleMinutes` is moved into `session.reset.idleMinutes`,
+  `session.resetByType.dm` is moved into `session.resetByType.direct`, and the
+  runtime reset policy only reads canonical reset keys.
+- Legacy config compatibility now lives under `src/commands/doctor/`. Normal
+  `readConfigFileSnapshot()` validation does not import doctor legacy detectors
+  or annotate legacy issues; `runDoctorConfigPreflight()` adds those issues for
+  doctor repair/reporting. The doctor config flow imports
+  `src/commands/doctor/legacy-config.ts`, and old OAuth profile-id repair lives
+  under
+  `src/commands/doctor/legacy/oauth-profile-ids.ts`.
+- Non-doctor commands do not auto-run legacy config repair. For example,
+  `openclaw update --channel` now fails on invalid legacy config and asks the
+  user to run doctor, rather than silently importing doctor migration code.
+- Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
+  tables for subscriptions, VAPID keys, node registrations, trigger rows,
+  routing rows, update-notification state, and config health entries instead of
+  whole opaque JSON blobs. Web push and APNs snapshot writes now reconcile
+  subscriptions/registrations by primary key instead of clearing their tables;
+  config health does the same by config path.
+  Their runtime modules keep SQLite snapshot readers/writers separate from
+  doctor-only legacy JSON import helpers.
+- Node-host config now uses a typed singleton row in the shared SQLite database;
+  doctor imports the old `node.json` file before normal runtime use.
+- Device/node pairing, channel pairing, channel allowlists, and bootstrap state
+  now use typed SQLite rows instead of whole opaque JSON blobs. Plugin binding
+  approvals and cron job state follow the same split: runtime modules expose
+  SQLite-backed operations and neutral snapshot helpers, and pairing/bootstrap
+  plus plugin binding approval snapshot writes reconcile rows by primary key
+  instead of truncating tables, while doctor imports/removes the old JSON files through
+  `src/commands/doctor/legacy/*` modules.
+- Installed plugin records now live in the SQLite installed-plugin index.
+  Runtime config read/write no longer migrates or preserves old
+  `plugins.installs` authored-config data; doctor imports that legacy config
+  shape into SQLite before normal runtime use.
+- QQBot credential recovery snapshots now live in SQLite plugin state under
+  `qqbot/credential-backups`. Runtime no longer writes
+  `qqbot/data/credential-backup*.json`; doctor imports and removes those
+  legacy backup files with the other QQBot state inputs.
+- Gateway reload planning compares SQLite installed-plugin index snapshots under
+  an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
+  reload decisions no longer wrap those rows in fake `plugins.installs` config
+  objects.
+- Matrix named-account credential upgrade no longer happens during runtime
+  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
+  rename when a single/default Matrix account can be resolved.
+- Core pairing and cron runtime modules no longer export legacy JSON path
+  builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
+  `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
+  migration only. Legacy cron job-shape normalization and cron run-log import
+  live under `src/commands/doctor/legacy/cron*.ts`.
+- `src/commands/doctor/legacy/runtime-state.ts` imports legacy JSON state
+  files, including node host config, into SQLite from doctor. New legacy file
+  importers stay under `src/commands/doctor/legacy/`.
+- `src/commands/doctor/state-migrations.ts` imports legacy `sessions.json` and
+  `*.jsonl` transcripts directly into SQLite and removes successful sources. It
+  no longer stages root legacy transcripts through
+  `agents/<agentId>/sessions/*.jsonl` or creates a canonical JSONL target before
+  import.
+- State integrity doctor checks no longer scan legacy session directories or
+  offer orphan JSONL deletion. Legacy transcript files are migration inputs
+  only, and the migration step owns import plus source removal.
+- Legacy sandbox registry import lives under
+  `src/commands/doctor/legacy/sandbox-registry.ts`; active sandbox registry
+  reads and writes remain SQLite-only.
+- The legacy session transcript health/import repair lives under
+  `src/commands/doctor/legacy/session-transcript-health.ts`; runtime command
+  modules no longer carry JSONL transcript parsing or active-branch repair code.
+
+Completed consolidation/deletion highlights:
+
+- Plugin state now uses the shared `state/openclaw.sqlite` database. The old
+  branch-local `plugin-state/state.sqlite` sidecar importer is removed because
+  that SQLite layout never shipped. Probe/test helpers report the shared
+  `databasePath` instead of exposing a plugin-state-specific SQLite path.
+- Task and Task Flow runtime tables now live in the shared
+  `state/openclaw.sqlite` database instead of `tasks/runs.sqlite` and
+  `tasks/flows/registry.sqlite`; the old sidecar importers are removed for the
+  same unshipped-layout reason.
+- `src/config/sessions/store.ts` no longer needs `storePath` for inbound
+  metadata, route updates, or updated-at reads. Command persistence, CLI
+  session cleanup, subagent depth, auth overrides, and transcript session
+  identity use agent/session row APIs. Writes are applied as SQLite row patches
+  with optimistic conflict retry.
+- Session target resolution now exposes per-agent database targets, not legacy
+  `sessions.json` paths. Shared gateway, ACP metadata, doctor route repair, and
+  `openclaw sessions` enumerate `agent_databases` plus configured agents.
+- Gateway session routing now uses `resolveGatewaySessionDatabaseTarget`; the
+  returned target carries `databasePath` and candidate SQLite row keys instead
+  of a legacy session-store file path.
+- Channel session runtime types now expose `{agentId, sessionKey}` for
+  updated-at reads, inbound metadata, and last-route updates. The old
+  `saveSessionStore(storePath, store)` compatibility type is gone.
+- Plugin runtime, extension API, and `config/sessions` barrel surfaces now steer
+  plugin code to SQLite-backed session row helpers. Root library compatibility
+  exports (`loadSessionStore`, `saveSessionStore`, `resolveStorePath`) remain as
+  deprecated shims for existing consumers. The old
+  `resolveLegacySessionStorePath` helper is gone; legacy `sessions.json` path
+  construction is now local to migration and test fixtures.
+- `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
+  entries in the per-agent database and has row-level read/upsert/delete patch
+  support. Runtime upsert/patch/delete no longer scans for case variants or
+  prunes legacy alias keys; doctor owns canonicalization. The
+  standalone JSON import helper is gone, and migration merges upsert newer rows
+  instead of replacing the whole session table. Public read/list/load helpers
+  project hot session metadata from typed `sessions` and `conversations` rows;
+  `entry_json` is a compatibility/debug shadow and can be stale or invalid
+  without losing typed session identity or delivery context.
+- `src/config/sessions/delivery-info.ts` now resolves delivery context from the
+  typed per-agent `sessions` + `conversations` + `session_conversations` rows.
+  It no longer reconstructs runtime delivery identity from
+  `session_entries.entry_json`; a missing typed conversation row is a doctor
+  migration/repair problem, not a runtime fallback.
+- Stored-session reset decisions now prefer typed `sessions.session_scope`,
+  `sessions.chat_type`, and `sessions.channel` metadata. `sessionKey` parsing
+  remains only for explicit thread/topic suffixes on command targets; group vs
+  direct reset classification no longer comes from key shape.
+- Session list/status display classification now uses typed chat metadata and
+  gateway session kind. It no longer treats `:group:` or `:channel:` substrings
+  inside `session_key` as durable group/direct truth.
+- Silent-reply policy selection now uses explicit conversation type or surface
+  metadata only. It no longer guesses direct/group policy from
+  `session_key` substrings.
+- Session display model resolution now receives the agent id from the SQLite
+  session database target instead of splitting it out of `session_key`.
+- Agent-to-agent announce target hydration now uses typed `sessions.list`
+  `deliveryContext` only. It no longer recovers channel/account/thread routing
+  from legacy `origin`, mirrored `last*` fields, or `session_key` shape.
+- `sessions_send` thread-target rejection now reads typed SQLite routing
+  metadata. It no longer rejects or accepts targets by parsing thread suffixes
+  out of the target key.
+- Group-scoped tool policy validation now reads typed SQLite conversation
+  routing for the current or spawned session. It no longer trusts group/channel
+  identity by decoding `sessionKey`; caller-provided group ids are dropped when
+  no typed session row vouches for them.
+- Channel model override matching now uses explicit group and parent
+  conversation metadata. It no longer decodes parent conversation ids from
+  `parentSessionKey`.
+- Stored model override inheritance now requires an explicit parent session key
+  from typed session context. It no longer derives parent overrides from
+  `:thread:` or `:topic:` suffixes in `sessionKey`.
+- The old session thread-info wrapper and loaded-plugin thread parser are gone;
+  no runtime code imports `config/sessions/thread-info`.
+- The channel conversation helper no longer exposes full-session-key parsing
+  bridges. Core still normalizes provider-owned raw conversation ids through
+  `resolveSessionConversation(...)`, but it does not reconstruct route facts
+  from `sessionKey`.
+- Completion delivery, send policy, and task maintenance no longer derive chat
+  type from `session_key` shape. The old chat-type key parser has been deleted;
+  these paths require typed session metadata, typed delivery context, or
+  explicit delivery target vocabulary.
+- Session list/status, diagnostics, approval account binding, TUI heartbeat
+  filtering, and usage summaries no longer mine `SessionEntry.origin` for
+  provider/account/thread/display routing. The only remaining runtime
+  `origin` reads are non-session concepts or current-turn delivery objects.
+- Approval-request native conversation lookup now reads typed per-agent session
+  routing rows. It no longer parses channel/group/thread conversation identity
+  from `sessionKey`; missing typed metadata is a migration/repair issue.
+- Gateway session changed/chat/session event payloads no longer echo
+  `SessionEntry.origin` or `last*` route shadows; clients receive typed
+  `channel`, `chatType`, and `deliveryContext`.
+- Heartbeat delivery resolution can now receive the typed SQLite
+  `deliveryContext` directly, and heartbeat runtime passes the per-agent
+  session delivery row instead of relying on compatibility `session_entries`
+  shadows for current routing.
+- Cron isolated-agent delivery target resolution also hydrates its current
+  route from the typed per-agent session delivery row before falling back to the
+  compatibility entry payload.
+- Subagent announce origin resolution now threads the typed requester-session
+  delivery context through `loadRequesterSessionEntry` and prefers that row over
+  compatibility `last*`/`deliveryContext` shadows.
+- Inbound session metadata updates now merge against the typed per-agent
+  delivery row first; old `SessionEntry` delivery fields are only the fallback
+  when no typed conversation row exists.
+- Restart/update delivery extraction now lets the typed SQLite delivery
+  `threadId` win over topic/thread fragments parsed from `sessionKey`; parsing
+  is only a fallback for legacy thread-shaped keys.
+- Hook agent context channel ids now prefer typed SQLite conversation identity,
+  then explicit message metadata. They no longer parse provider/group/channel
+  fragments from `sessionKey`.
+- Gateway `chat.send` external-route inheritance now reads typed SQLite session
+  routing metadata instead of inferring channel/direct/group scope from
+  `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
+  session channel and chat type match the stored delivery context; shared-main
+  sessions keep their stricter CLI/no-client-metadata rule.
+- Restart-sentinel wake and continuation routing now reads typed SQLite
+  delivery/routing rows before queueing heartbeat wakes or routed agent-turn
+  continuations. It no longer reconstructs delivery context from the
+  session-entry JSON shadow.
+- Gateway `tools.effective` context resolution now reads typed SQLite
+  delivery/routing rows for provider, account, target, thread, and reply-mode
+  inputs. It no longer recovers those hot routing fields from stale
+  `session_entries.entry_json` origin shadows.
+- Realtime voice consult routing now resolves parent/call delivery from typed
+  per-agent SQLite session rows. It no longer falls back to compatibility
+  `SessionEntry.deliveryContext` shadows when choosing the embedded agent
+  message route.
+- ACP spawn heartbeat relay and parent-stream routing now read parent delivery
+  from typed SQLite session rows. They no longer reconstruct parent delivery
+  context from compatibility session-entry shadows.
+- Session delivery route preservation now follows typed chat metadata and
+  persisted delivery columns. It no longer extracts channel hints, direct/main
+  markers, or thread shape from `sessionKey`; internal webchat routes only
+  inherit an external target when SQLite already has typed/persisted delivery
+  identity for the session.
+- Generic session delivery extraction now reads only the exact typed SQLite
+  session delivery row. It no longer parses thread/topic suffixes or falls back
+  from a thread-shaped key to a base session key.
+- Reply dispatch, restart sentinel recovery, and realtime voice consult routing
+  now use exact typed SQLite session/conversation rows for thread routing. They
+  no longer recover thread ids or base-session delivery context by parsing
+  thread-shaped session keys.
+- Embedded PI history limiting now uses the typed SQLite session routing
+  projection (`sessions` + primary `conversations`) for provider, chat type,
+  and peer identity. It no longer parses provider, DM, group, or thread shape
+  out of `sessionKey`.
+- Cron tool delivery inference now uses explicit delivery or the current typed
+  delivery context only. It no longer decodes channel, peer, account, or thread
+  targets from `agentSessionKey`.
+- Runtime session rows no longer carry the old `lastProvider` route alias.
+  Helpers and tests use typed `lastChannel` and `deliveryContext` fields;
+  doctor migration is the only place that should translate older route aliases
+  or persisted `origin` shadows.
+- Transcript events, VFS rows, and tool artifact rows now write to the per-agent
+  database. The unshipped global transcript-file mapping table is gone; doctor
+  records legacy source paths in durable migration rows instead.
+- Runtime transcript lookup no longer scans JSONL byte offsets or probes legacy
+  transcript files. Gateway chat/media/history paths read transcript rows from
+  SQLite; session JSONL is now only a legacy doctor input, not a runtime state
+  or export format.
+- Transcript parent and branch relationships use structured
+  `parentTranscriptScope: {agentId, sessionId}` metadata in SQLite transcript
+  headers, not path-like `agent-db:...transcript_events...` locator strings.
+- The transcript manager contract no longer exposes implicit persisted
+  `create(cwd)` or `continueRecent(cwd)` constructors. Persisted transcript
+  managers are opened with an explicit `{agentId, sessionId}` scope; only
+  in-memory managers remain scope-free for tests and pure transcript transforms.
+- Runtime transcript store APIs resolve SQLite scope, not filesystem paths. The
+  old `resolve...ForPath` helper and unused `transcriptPath` write options are
+  gone from runtime callers.
+- Runtime session resolution now uses `{agentId, sessionId}` and must not derive
+  `sqlite-transcript://<agent>/<session>` strings for external boundaries.
+  Legacy absolute JSONL paths are doctor migration inputs only.
+- Native hook relay direct-bridge records now live in typed shared
+  `native_hook_relay_bridges` rows keyed by relay id. Runtime no longer writes a
+  `/tmp` JSON registry or opaque generic records for those short-lived bridge
+  records.
+- `runEmbeddedPiAgent(...)` no longer has a transcript-locator parameter.
+  Prepared worker descriptors also omit transcript locators. Runtime session
+  state and queued follow-up runs carry `{agentId, sessionId}` instead of
+  derived transcript handles.
+- Embedded compaction now takes SQLite scope from `agentId` and `sessionId`.
+  Compaction hooks, context-engine calls, CLI delegation, and protocol replies
+  must not receive derived `sqlite-transcript://...` handles. Export/debug code
+  can materialize explicit user artifacts from rows, but it does not provide a
+  generic session JSONL export path or feed file names back into runtime
+  identity.
+- `/export-session` reads transcript rows from SQLite and writes the requested
+  standalone HTML view only. The embedded viewer no longer reconstructs or
+  downloads session JSONL from those rows.
+- Context-engine delegation no longer parses a transcript locator to recover
+  agent identity. The prepared runtime context carries the resolved `agentId`
+  into the built-in compaction adapter.
+- Transcript rewrite and live tool-result truncation now read and persist
+  transcript state by `{agentId, sessionId}` and do not derive temporary
+  locators for transcript-update event payloads.
+- The transcript-state helper surface no longer has locator-based
+  `readTranscriptState`, `replaceTranscriptStateEvents`, or
+  `persistTranscriptStateMutation` variants. Runtime callers must use the
+  `{agentId, sessionId}` APIs. Doctor import reads legacy files by explicit file
+  path and writes SQLite rows; it does not migrate locator strings.
+- The runtime session-manager contract no longer exposes `open(locator)`,
+  `forkFrom(locator)`, or `setTranscriptLocator(...)`. Persisted session
+  managers open by `{agentId, sessionId}` only; list/fork helpers live on
+  row-oriented session and checkpoint APIs instead of the transcript manager
+  facade.
+- Gateway transcript reader APIs are scope-first. They take
+  `{agentId, sessionId}` and do not accept a positional transcript locator that
+  could accidentally become runtime identity. Active transcript locator parsing
+  is gone; legacy source paths are read only by doctor import code.
+- Transcript update events are also scope-first. `emitSessionTranscriptUpdate`
+  no longer accepts a bare locator string, and listeners route by
+  `{agentId, sessionId}` without parsing a handle.
+- Gateway session-message broadcast resolves session keys from agent/session
+  scope, not from a transcript locator. The old transcript-locator-to-session
+  key resolver/cache is gone.
+- Gateway session-history SSE filters live updates by agent/session scope. It no
+  longer canonicalizes transcript locator candidates, realpaths, or file-shaped
+  transcript identities to decide whether a stream should receive an update.
+- Session lifecycle hooks no longer derive or expose transcript locators on
+  `session_end`. Hook consumers get `sessionId`, `sessionKey`, next-session
+  ids, and agent context; transcript files are not part of the lifecycle
+  contract.
+- Reset hooks no longer derive or expose transcript locators either. The
+  `before_reset` payload carries recovered SQLite messages plus the reset
+  reason, while session identity stays in hook context.
+- Agent harness reset no longer accepts a transcript locator. Reset dispatch is
+  scoped by `sessionId`/`sessionKey` plus reason.
+- Agent extension session types no longer expose `transcriptLocator`; extensions
+  should use session context and runtime APIs rather than reaching for a
+  file-shaped transcript identity.
+- Plugin compaction hooks no longer expose transcript locators. Hook context
+  already carries session identity, and transcript reads must go through SQLite
+  scope-aware APIs instead of file-shaped handles.
+- `before_agent_finalize` hooks no longer expose `transcriptPath`, including
+  native hook relay payloads. Finalization hooks use session context only.
+- Gateway reset responses no longer synthesize a transcript locator on the
+  returned entry. The reset creates SQLite transcript rows, returns the clean
+  session entry, and leaves transcript access to scope-aware readers.
+- Embedded run and compaction results no longer surface transcript locators for
+  session accounting. Automatic compaction updates only the active `sessionId`,
+  compaction counters, and token metadata.
+- Embedded attempt results no longer return `transcriptLocatorUsed`, and
+  context-engine `compact()` results no longer return transcript locators.
+  Runtime retry loops only accept a successor `sessionId`.
+- Delivery-mirror transcript append results no longer return transcript
+  locators. Callers get the appended `messageId`; transcript update signals use
+  SQLite scope.
+- Parent-session fork helpers return only the forked `sessionId`. Subagent
+  preparation passes the child agent/session scope to engines.
+- CLI runner params and history reseeding no longer accept transcript locators.
+  CLI history reads resolve the SQLite transcript scope from `{agentId,
+sessionId}` and session key context.
+- CLI and embedded-runner test fixtures now seed and read SQLite transcript rows
+  by session id instead of pretending active sessions are `*.jsonl` files or
+  passing a `sqlite-transcript://...` string through runtime params.
+- Session tool-result guard events emit from known session scope even when an
+  in-memory manager has no derived locator. Its tests no longer fake active
+  `/tmp/*.jsonl` transcript files.
+- BTW and compaction-checkpoint helpers now read and fork transcript rows by
+  SQLite scope. Checkpoint metadata now stores session ids and leaf/entry ids
+  only; derived locators are no longer written into checkpoint payloads.
+- Gateway transcript-key lookup uses SQLite transcript scope at protocol
+  boundaries and no longer realpaths or stats transcript filenames.
+- Automatic compaction transcript rotation writes successor transcript rows
+  directly through the SQLite transcript store. Session rows keep only the
+  successor session identity, not a durable JSONL path or persisted locator.
+- Embedded context-engine compaction uses SQLite-named transcript rotation
+  helpers. The rotation tests no longer construct JSONL successor paths or
+  model active sessions as files.
+- Managed outgoing image retention keys its transcript-message cache from
+  SQLite transcript stats instead of filesystem stat calls.
+- Runtime session locks and the standalone legacy `.jsonl.lock` doctor
+  lane have been removed.
+- The Microsoft Teams runtime barrel and public plugin SDK no longer re-export
+  the old file-lock helper; durable plugin state paths are SQLite-backed.
+- Session age/count pruning and explicit session cleanup have been removed.
+  Doctor owns legacy import; stale sessions are reset or deleted explicitly.
+- Doctor integrity checks no longer count a legacy JSONL file as a valid active
+  transcript for a SQLite session row. Active transcript health is SQLite-only;
+  legacy JSONL files are reported as migration/orphan-cleanup inputs.
+- Doctor no longer treats `agents/<agent>/sessions/` as required runtime
+  state. It only scans that directory when it already exists, as legacy import
+  or orphan-cleanup input.
+- Gateway `sessions.resolve`, session patch/reset/compact paths, subagent
+  spawning, fast abort, ACP metadata, heartbeat-isolated sessions, and TUI
+  patching no longer migrate or prune legacy session keys as a side effect of
+  normal runtime work.
+- CLI command session resolution now returns the owning `agentId` instead of a
+  `storePath`, and it no longer copies legacy main-session rows during normal
+  `--to` or `--session-id` resolution. Legacy main-row canonicalization belongs
+  to doctor only.
+- Runtime subagent depth resolution no longer reads `sessions.json` or JSON5
+  session stores. It reads SQLite `session_entries` by agent id, and legacy
+  depth/session metadata can only enter through the doctor import path.
+- Auth profile session overrides persist through direct `{agentId, sessionKey}`
+  row upserts instead of lazy-loading a file-shaped session-store runtime.
+- Auto-reply verbose gating and session update helpers now read/upsert SQLite
+  session rows by session identity and no longer require a legacy store path
+  before touching persisted row state.
+- Command-run session metadata helpers now use entry-oriented names and module
+  paths; the old `session-store` command helper surface has been removed.
+- Bootstrap header seeding and manual compaction boundary hardening now mutate
+  SQLite transcript rows directly. Runtime callers pass session identity, not
+  writable `.jsonl` paths.
+- Silent session-rotation replay copies recent user/assistant turns by
+  `{agentId, sessionId}` from SQLite transcript rows. It no longer accepts
+  source or target transcript locators.
+- Fresh runtime session rows no longer store transcript locators. Callers use
+  `{agentId, sessionId}` directly; export/debug commands can choose output file
+  names when they materialize rows.
+- Starting a new persisted transcript session now always opens SQLite rows by
+  scope. The session manager no longer reuses a previous file-era transcript
+  path or locator as the identity for the new session.
+- Persisted transcript sessions use the explicit
+  `openTranscriptSessionManagerForSession({agentId, sessionId})` API. The old
+  static `SessionManager.create/openForSession/list/forkFromSession` facades are
+  gone so tests and runtime code cannot accidentally recreate file-era session
+  discovery.
+- Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
+  plugin code uses SQLite row helpers and scope values.
+- The public `session-store-runtime` SDK surface now only exports session row
+  and transcript row helpers. Raw SQLite database open/path and close/reset
+  helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
+  longer pull the deprecated broad testing barrel for database cleanup.
+- Legacy `.jsonl` trajectory/checkpoint filename classifiers now live in the
+  doctor legacy session-file module. Core session validation no longer imports
+  file-artifact helpers to decide normal SQLite session ids.
+- Active-memory blocking subagent runs use SQLite transcript rows instead of
+  creating temporary or persisted `session.jsonl` files under plugin state. The
+  old `transcriptDir` option is removed.
+- One-off slug generation and Crestodian planner runs use SQLite transcript rows
+  instead of creating temporary `session.jsonl` files.
+- `llm-task` helper runs and hidden commitment extraction also use SQLite
+  transcript rows, so these model-only helper sessions no longer create
+  temporary JSON/JSONL transcript files.
+- `TranscriptSessionManager` is only an opened SQLite transcript scope now.
+  Runtime code opens it with `openTranscriptSessionManagerForSession({agentId,
+sessionId})`; create, branch, continue, list, and fork flows live in their
+  owning SQLite row helpers rather than static manager facades.
+  Doctor/import/debug code handles explicit legacy source files outside the
+  runtime session manager.
+- The stale `SessionManager.newSession()` and
+  `SessionManager.createBranchedSession()` facade methods were removed. New
+  sessions and transcript descendants are created by their owning SQLite
+  workflow instead of mutating an already-open manager into a different
+  persisted session.
+- Parent transcript fork decisions and fork creation no longer accept
+  `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
+  transcript scope instead of retained filesystem path metadata.
+- Memory-host no longer exports no-op session-directory transcript
+  classification helpers; transcript filtering now derives from SQLite row
+  metadata during entry construction.
+- Memory-host and QMD session-export tests use SQLite transcript scopes. Old
+  `agents/<agentId>/sessions/*.jsonl` paths stay covered only where a test is
+  intentionally proving doctor/import/export compatibility.
+- QA-lab raw session inspection now uses `sessions.list` through the gateway
+  instead of reading `agents/qa/sessions/sessions.json`; MSteams feedback
+  appends directly to SQLite transcripts without fabricating a JSONL path.
+- Shared inbound channel turns now carry `{agentId, sessionKey}` rather than a
+  legacy `storePath`. LINE, WhatsApp, Slack, Discord, Telegram, Matrix, Signal,
+  iMessage, BlueBubbles, Feishu, Google Chat, IRC, Nextcloud Talk, Zalo,
+  Zalo Personal, QA Channel, Microsoft Teams, Mattermost, Synology Chat, Tlon,
+  Twitch, and QQBot recording paths now read updated-at metadata and record
+  inbound session rows through SQLite identity.
+- Transcript locator persistence is removed from active session rows.
+  `resolveSessionTranscriptTarget` returns `agentId`, `sessionId`, and optional
+  topic metadata; doctor is the only code that imports legacy transcript file
+  names.
+- Runtime transcript headers start at SQLite version `1`. Old JSONL V1/V2/V3
+  shape upgrades live only in doctor import and normalize imported headers to
+  the current SQLite transcript version before rows are stored.
+- The database-first guard now bans `SessionManager.listAll` and
+  `SessionManager.forkFromSession`; session listing and fork/restore workflows
+  must stay on row/scoped SQLite APIs.
+- The guard also bans legacy transcript JSONL parse/active-branch repair helper
+  names outside doctor/import code, so runtime cannot grow a second legacy
+  transcript migration path.
+- Embedded PI runs reject incoming transcript handles. They use the SQLite
+  `{agentId, sessionId}` identity before worker launch and again before the
+  attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
+  runtime write target.
+- Cache trace, Anthropic payload, raw stream, and diagnostics timeline records
+  now write to typed SQLite `diagnostic_events` rows. Gateway stability bundles
+  now write to typed SQLite `diagnostic_stability_bundles` rows. The old
+  `diagnostics.cacheTrace.filePath`, `OPENCLAW_CACHE_TRACE_FILE`,
+  `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
+  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed, and
+  normal stability capture no longer writes `logs/stability/*.json` files.
+- Cron persistence now reconciles SQLite `cron_jobs` rows instead of
+  deleting/reinserting the whole job table on each save. Plugin target
+  writebacks update matching cron rows directly and keep runtime cron state in
+  the same state-database transaction.
+- Cron runtime callers now use a stable SQLite cron store key. Legacy
+  `cron.store` paths are doctor import inputs only; production gateway, task
+  maintenance, status, run-log, and Telegram target writeback paths use
+  `resolveCronStoreKey` and no longer path-normalize the key. Cron status now
+  reports `storeKey` rather than the old file-shaped `storePath` field.
+- Cron runtime load and scheduling no longer normalize legacy persisted job
+  shapes such as `jobId`, `schedule.cron`, numeric `atMs`, string booleans, or
+  missing `sessionTarget`. Doctor legacy import owns those repairs before rows
+  are inserted into SQLite.
+- ACP spawn no longer resolves or persists transcript JSONL file paths. Spawn
+  and thread-bind setup persist the SQLite session row directly and keep the
+  session id as the retained transcript identity.
+- ACP session metadata APIs now read/list/upsert SQLite rows by `agentId` and
+  no longer expose `storePath` as part of the ACP session entry contract.
+- Session usage accounting and gateway usage aggregation now resolve transcripts
+  by `{agentId, sessionId}` only. The cost/usage cache and discovered-session
+  summaries no longer synthesize or return transcript locator strings.
+- Gateway chat append, abort-partial persistence, `/sessions.send`, and
+  webchat media transcript writes append directly through SQLite transcript
+  scope. The gateway transcript-injection helper no longer accepts a
+  `transcriptLocator` parameter.
+- SQLite transcript discovery now lists transcript scopes and stats only:
+  `{agentId, sessionId, updatedAt, eventCount}`. The dead
+  `listSqliteSessionTranscriptLocators` compatibility helper and per-row
+  `locator` field are gone.
+- Transcript repair runtime now exposes only
+  `repairTranscriptSessionStateIfNeeded({agentId, sessionId})`. The old
+  locator-based repair helper is deleted; doctor/debug code reads explicit
+  source file paths and never migrates locator strings.
+- ACP replay ledger runtime now stores per-session replay rows in the shared
+  SQLite state database instead of `acp/event-ledger.json`; doctor imports and
+  removes the legacy file.
+- Gateway transcript reader helpers now live in
+  `src/gateway/session-transcript-readers.ts` instead of the old
+  `session-utils.fs` module name. The fallback retry history check is named for
+  SQLite transcript content instead of the old file-helper surface.
+- Gateway injected-chat and compaction helpers now pass SQLite transcript scope
+  through internal helper APIs instead of naming values transcript paths or
+  source files.
+- Bootstrap continuation detection now checks SQLite transcript rows through
+  `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
+  helper name.
+- Embedded-runner tests now use SQLite transcript identity, and opening a new
+  transcript manager always requires an explicit `sessionId`.
+- Memory indexing helpers now use SQLite transcript terminology end to end:
+  host exports `listSessionTranscriptScopesForAgent` and
+  `sessionTranscriptKeyForScope`, targeted sync queues `sessionTranscripts`,
+  public session-search hits expose opaque `transcript:<agent>:<session>` paths,
+  and the internal DB source key is `session:<session>` under
+  `source_kind='sessions'` instead of a fake file path.
+- The generic plugin SDK persistent-dedupe helper no longer exposes file-shaped
+  options. Callers provide SQLite scope keys and durable dedupe rows live in
+  shared plugin state.
+- Microsoft Teams SSO and delegated OAuth tokens moved from locked JSON files
+  to SQLite plugin state. Doctor imports `msteams-sso-tokens.json` and
+  `msteams-delegated.json`, rebuilds canonical SSO token keys from payloads,
+  and removes the source files.
+- Matrix sync cache state moved from `bot-storage.json` to SQLite plugin
+  state. Doctor imports legacy raw or wrapped sync payloads and removes the
+  source file. Active Matrix and QA Matrix clients pass a SQLite sync-store root
+  directory, not a fake `sync-store.json` or `bot-storage.json` path.
+- Matrix legacy crypto migration status moved from
+  `legacy-crypto-migration.json` to SQLite plugin state. Doctor imports the
+  old status file; Matrix SDK IndexedDB snapshots moved from
+  `crypto-idb-snapshot.json` to SQLite plugin blobs. Matrix recovery keys and
+  credentials are SQLite plugin-state rows; their old JSON files are doctor
+  migration inputs only.
+- Memory Wiki activity logs now use SQLite plugin state instead of
+  `.openclaw-wiki/log.jsonl`. The Memory Wiki migration provider imports old
+  JSONL logs; wiki markdown and user vault content stay file-backed as
+  workspace content.
+- Memory Wiki no longer creates `.openclaw-wiki/state.json` or the unused
+  `.openclaw-wiki/locks` directory. The migration provider removes those retired
+  plugin metadata files if an older vault still has them.
+- Crestodian audit entries now use core SQLite plugin state instead of
+  `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
+  removes it after successful import.
+- Config write/observe audit entries now use core SQLite plugin state instead
+  of `logs/config-audit.jsonl`. Doctor imports the legacy JSONL audit log and
+  removes it after successful import.
+- The macOS companion no longer writes app-local `logs/config-audit.jsonl` or
+  `logs/config-health.json` sidecars while editing `openclaw.json`. The config
+  file remains file-backed, recovery snapshots stay next to the config file,
+  and durable config audit/health state belongs to the Gateway SQLite store.
+- Crestodian rescue pending approvals now use core SQLite plugin state instead
+  of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
+  files and removes them after successful import.
+- Phone Control temporary arm state now uses SQLite plugin state instead of
+  `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
+  file into the `phone-control/arm-state` namespace and removes the file.
+- Doctor no longer repairs JSONL transcripts in place or creates backup JSONL
+  files. It imports the active branch into SQLite and removes the legacy source.
+- Session-memory hook transcript lookup uses `{agentId, sessionId}` scope-only
+  SQLite reads. Its helper no longer accepts or derives transcript locators,
+  legacy file reads, or file-rewrite options.
+- Codex app-server conversation bindings now key SQLite plugin state by
+  OpenClaw session key or explicit `{agentId, sessionId}` scope. They must not
+  preserve transcript-path fallback bindings.
+- Codex app-server mirrored-history reads use the SQLite transcript scope only;
+  they must not recover identity from transcript file paths.
+- Role-ordering and compaction reset paths no longer unlink old transcript
+  files; reset only rotates the SQLite session row and transcript identity.
+- Gateway reset and checkpoint responses return clean session rows plus session
+  ids. They no longer synthesize SQLite transcript locators for clients.
+- Memory-core dreaming no longer prunes session rows by probing for missing
+  JSONL files. Subagent cleanup goes through the session runtime API instead of
+  filesystem existence checks. Its transcript-ingestion tests seed SQLite rows
+  directly instead of creating `agents/<id>/sessions` fixtures or locator
+  placeholders.
+- Memory transcript indexing may expose `transcript:<agentId>:<sessionId>` as a
+  virtual search-hit path for citation/read helpers. The durable index source is
+  relational (`source_kind='sessions'`, `source_key='session:<sessionId>'`,
+  `session_id=<sessionId>`), so the value is not a runtime transcript locator,
+  not a filesystem path, and must never be passed back into session runtime APIs.
+- Gateway doctor memory status reads short-term recall and phase-signal counts
+  from SQLite plugin-state rows instead of `memory/.dreams/*.json`; CLI and
+  doctor output now label that storage as a SQLite store, not a path.
+- Memory-core runtime, CLI status, Gateway doctor methods, and plugin SDK
+  facades no longer audit or archive legacy `.dreams/session-corpus` files.
+  Those files are migration inputs only; doctor imports them into SQLite and
+  deletes the source after verification. Active session-ingestion evidence rows
+  now use the virtual SQLite path `memory/session-ingestion/<day>.txt`; runtime
+  never writes or derives state from `.dreams/session-corpus`.
+- Memory-core public artifacts expose SQLite host events as the virtual JSON
+  artifact `memory/events/memory-host-events.json`; they no longer reuse the
+  legacy `.dreams/events.jsonl` source path.
+- Sandbox container/browser registries now use the shared
+  `sandbox_registry_entries` SQLite table with typed session, image, timestamp,
+  backend/config, and browser port columns. Doctor imports legacy monolithic and
+  sharded JSON registry files and removes successful sources. Runtime reads use
+  the typed row columns as source of truth; `entry_json` is only a replay/debug
+  copy.
+- Commitments now use a typed shared `commitments` table instead of a
+  whole-store JSON blob. Snapshot saves upsert by commitment id and delete only
+  missing rows instead of clearing and reinserting the table. Runtime loads
+  commitments from typed scope, delivery-window, status, attempt, and text
+  columns; `record_json` is only a replay/debug copy. Doctor imports legacy
+  `commitments.json` and removes it after a successful import.
+- Cron job definitions, schedule state, and run history no longer have runtime
+  JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
+  payload, delivery, failure-alert, session, status, and runtime-state columns plus typed
+  `cron_run_logs` metadata for status, diagnostics summary, delivery status/error,
+  session/run, model, and token totals. `job_json` is only a replay/debug copy; `state_json` keeps nested
+  runtime diagnostics that do not yet have hot query fields, while runtime
+  rehydrates hot state fields from typed columns. Doctor imports
+  legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files and removes
+  the imported sources. Plugin target writebacks update matching `cron_jobs`
+  rows instead of loading and replacing the whole cron store.
+- If doctor cannot safely translate legacy `notify: true` webhook fallback
+  without replacing an explicit delivery target, it records a warning and leaves
+  the legacy source in place instead of publishing a lossy SQLite row.
+- Outbound and session delivery queues now store queue status, entry kind,
+  session key, channel, target, account id, retry count, last attempt/error,
+  recovery state, and platform-send markers as typed columns in the shared
+  `delivery_queue_entries` table. Runtime recovery reads those hot fields from
+  the typed columns, and retry/recovery mutations update those columns directly
+  without rewriting replay JSON. The full JSON payload remains only as the
+  replay/debug blob for message bodies and other cold replay data.
+- Managed outgoing image records now use typed shared
+  `managed_outgoing_image_records` rows with media bytes still stored in
+  `media_blobs`. The JSON record remains only as a replay/debug copy.
+- Discord model-picker preferences, command-deploy hashes, and thread bindings
+  now use shared SQLite plugin state. Their legacy JSON import plans live in the
+  Discord plugin setup/doctor migration surface, not in core migration code.
+- Plugin legacy import detectors use doctor-named modules such as
+  `doctor-legacy-state.ts` or `doctor-state-imports.ts`; normal channel runtime
+  modules must not import legacy JSON detectors.
+- BlueBubbles catchup cursors and inbound dedupe markers now use shared SQLite
+  plugin state. Their legacy JSON import plans live in the BlueBubbles plugin
+  setup/doctor migration surface, not in core migration code.
+- Telegram update offsets, sticker cache rows, sent-message cache rows,
+  topic-name cache rows, and thread bindings now use shared SQLite plugin
+  state. Their legacy JSON import plans live in the Telegram plugin
+  setup/doctor migration surface, not in core migration code.
+- iMessage catchup cursors, reply short-id mappings, and sent-echo dedupe rows
+  now use shared SQLite plugin state. The old `imessage/catchup/*.json`,
+  `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl` files are
+  doctor inputs only.
+- Feishu message dedupe rows now use shared SQLite plugin state instead of
+  `feishu/dedup/*.json` files. Its legacy JSON import plan lives in the Feishu
+  plugin setup/doctor migration surface, not in core migration code.
+- Microsoft Teams conversations, polls, pending upload buffers, and feedback
+  learnings now use shared SQLite plugin state/blob tables. The pending upload
+  path uses `plugin_blob_entries` so media buffers are stored as SQLite BLOBs
+  instead of base64 JSON. The runtime helper names now use SQLite/state naming
+  rather than `*-fs` file-store naming, and the old `storePath` shim is gone
+  from these stores. Its legacy JSON import plan lives in the Microsoft Teams
+  plugin setup/doctor migration surface.
+- Zalo hosted outbound media now uses shared SQLite `plugin_blob_entries`
+  instead of `openclaw-zalo-outbound-media` JSON/bin temp sidecars.
+- Diffs viewer HTML and metadata now use shared SQLite `plugin_blob_entries`
+  instead of `meta.json`/`viewer.html` temp files. Rendered PNG/PDF outputs stay
+  temp materializations because channel delivery still needs a file path.
+- Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
+  of a default `state/canvas/documents` directory. The Canvas host serves those
+  blobs directly; local files are created only for explicit `host.root`
+  operator content or temporary materialization when a downstream media reader
+  requires a path.
+- File Transfer audit decisions now use shared SQLite `plugin_state_entries`
+  instead of the unbounded `audit/file-transfer.jsonl` runtime log. Doctor
+  imports the legacy JSONL audit file into plugin state and removes the source
+  after a clean import.
+- ACPX process leases and gateway instance identity now use shared SQLite plugin
+  state. Doctor imports the legacy `gateway-instance-id` file into plugin state
+  and removes the source.
+- ACPX generated wrapper scripts and the isolated Codex home are temporary
+  materialization under the OpenClaw temp root, not durable OpenClaw state. The
+  durable ACPX runtime records are the SQLite lease and gateway-instance rows;
+  the old ACPX `stateDir` config surface is removed because no runtime state is
+  written there anymore.
+- Gateway media attachments now use the shared `media_blobs` SQLite table as
+  the canonical byte store. Local paths returned to channel and sandbox
+  compatibility surfaces are temp materializations of the database row, not the
+  durable media store. Runtime media allowlists no longer include legacy
+  `$OPENCLAW_STATE_DIR/media` or config-dir `media` roots; those directories are
+  doctor import sources only.
+- Shell completion no longer writes `$OPENCLAW_STATE_DIR/completions/*` cache
+  files. Install, doctor, update, and release smoke paths use generated
+  completion output or profile sourcing instead of durable completion cache
+  files.
+- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
+  metadata, idempotency keys, and archive bytes live in SQLite; the installer
+  only receives a temporary materialized archive path while an install is
+  running.
+- Subagent inline attachments no longer materialize under workspace
+  `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
+  inline runs seed those entries into the per-agent runtime scratch namespace,
+  and disk-backed tools overlay that SQLite scratch for attachment paths. The
+  old subagent-run attachment-dir registry columns and cleanup hooks are gone.
+- CLI image hydration no longer maintains stable `openclaw-cli-images` cache
+  files. External CLI backends still receive file paths, but those paths are
+  per-run temp materializations with cleanup.
+- Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
+  diagnostics, diagnostics timeline events, and Gateway stability bundles now
+  write SQLite rows instead of `logs/*.jsonl` or
+  `logs/stability/*.json` files.
+  Runtime path override flags and env vars have been removed; export/debug
+  commands can materialize files explicitly from database rows.
+- The macOS companion no longer has a rolling `diagnostics.jsonl` writer. App
+  logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
+- The macOS port-guardian record list now uses typed shared SQLite
+  `macos_port_guardian_records` rows instead of an Application Support JSON file
+  or opaque singleton blob.
+- Gateway singleton locks now use typed shared SQLite `state_leases` rows under
+  the `gateway_locks` scope instead of temp-dir lock files. Fly and OAuth
+  troubleshooting docs now point at the SQLite lease/auth refresh lock instead
+  of stale file-lock cleanup.
+- Gateway restart sentinel state now uses typed shared SQLite
+  `gateway_restart_sentinel` rows instead of `restart-sentinel.json`; runtime
+  reads sentinel kind, status, routing, message, continuation, and stats from
+  typed columns. `payload_json` is only a replay/debug copy. Runtime code clears
+  the SQLite row directly and no longer carries file cleanup plumbing.
+- Gateway restart intent and supervisor handoff state now use typed shared
+  SQLite `gateway_restart_intent` and `gateway_restart_handoff` rows instead of
+  `gateway-restart-intent.json` and
+  `gateway-supervisor-restart-handoff.json` sidecars.
+- Gateway singleton coordination now uses typed `state_leases` rows under
+  `gateway_locks` instead of writing `gateway.<hash>.lock` files. The lease row
+  owns the lock owner, expiry, heartbeat, and debug payload; SQLite owns the
+  atomic acquire/release boundary. The retired file-lock directory option is
+  gone; tests use the SQLite row identity directly.
+- The old unreferenced cron usage-report helper that scanned `cron/runs/*.jsonl`
+  files was deleted. Cron run history reports should read the typed
+  `cron_run_logs` SQLite rows.
+- Main-session restart recovery now discovers candidate agents through the
+  SQLite `agent_databases` registry instead of scanning `agents/*/sessions`
+  directories.
+- Gemini session-corruption recovery now deletes only the SQLite session row;
+  it no longer needs a legacy `storePath` gate or tries to unlink a derived
+  transcript JSONL path.
+- Path override handling now treats literal `undefined`/`null` environment
+  values as unset, preventing accidental repo-root `undefined/state/*.sqlite`
+  databases during tests or shell handoffs.
+- Config health fingerprints now use typed shared SQLite `config_health_entries`
+  rows instead of `logs/config-health.json`, keeping the normal config file as
+  the only non-credential configuration document. The macOS companion keeps only
+  process-local health state and does not recreate the old JSON sidecar.
+- Auth profile runtime no longer imports or writes credential JSON files. The
+  canonical credential store is SQLite; `auth-profiles.json`, per-agent
+  `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs
+  that are removed after import.
+- Auth profile save/state tests now assert typed SQLite auth tables directly
+  and only use legacy auth-profile filenames for doctor migration inputs.
+- `openclaw secrets apply` scrubs the config file, env file, and SQLite
+  auth-profile store only. It no longer carries compatibility logic that edits
+  retired per-agent `auth.json`; doctor owns importing and deleting that file.
+- Hermes secret migration plans and applies imported API-key profiles directly
+  into the SQLite auth-profile store. It no longer writes or verifies
+  `auth-profiles.json` as an intermediate target.
+- User-facing auth docs now describe
+  `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` instead of
+  telling users to inspect or copy `auth-profiles.json`; legacy OAuth/auth JSON
+  names remain documented only as doctor-import inputs.
+- Core state-path helpers no longer expose the retired `credentials/oauth.json`
+  file. The legacy filename is local to the doctor auth import path.
+- Install, security, onboarding, model-auth, and SecretRef docs now describe
+  SQLite auth-profile rows and whole-state backup/migration instead of
+  per-agent auth-profile JSON files.
+- PI model discovery now passes canonical credentials into in-memory
+  `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
+  per-agent `auth.json` during discovery.
+- Voice Wake trigger and routing settings now use typed shared SQLite tables
+  instead of `settings/voicewake.json`, `settings/voicewake-routing.json`, or
+  opaque generic rows; doctor imports the legacy JSON files and removes them after a
+  successful migration.
+- Update-check state now uses a typed shared `update_check_state` row instead of
+  `update-check.json` or an opaque generic blob; doctor imports
+  the legacy JSON file and removes it after a successful migration.
+- Config health state now uses typed shared `config_health_entries` rows instead
+  of `logs/config-health.json` or an opaque generic blob; doctor
+  imports the legacy JSON file and removes it after a successful migration.
+- Plugin conversation binding approvals now use typed
+  `plugin_binding_approvals` rows instead of opaque shared SQLite state or
+  `plugin-binding-approvals.json`; the legacy file is a doctor migration input.
+- Generic current-conversation bindings now store typed
+  `current_conversation_bindings` rows instead of rewriting
+  `bindings/current-conversations.json`; doctor imports the legacy JSON file and
+  removes it after a successful migration.
+- Memory Wiki imported-source sync ledgers now store one SQLite plugin-state row
+  per vault/source key instead of rewriting `.openclaw-wiki/source-sync.json`;
+  the migration provider imports and removes the legacy JSON ledger.
+- Memory Wiki ChatGPT import-run records now store one SQLite plugin-state row
+  per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
+  Rollback snapshots remain explicit vault files until import-run snapshot
+  archival is moved into blob storage.
+- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
+  writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
+  files and removes the cache directory when it becomes empty.
+- ClawHub skill install tracking now stores one SQLite plugin-state row per
+  workspace/skill instead of writing or reading `.clawhub/lock.json` and
+  `.clawhub/origin.json` sidecars at runtime. Runtime code uses tracked-install
+  state objects rather than file-shaped lockfile/origin abstractions. Doctor
+  imports the legacy sidecars from configured agent workspaces and removes them
+  after a clean import.
+- The installed plugin index now reads and writes the typed shared SQLite
+  `installed_plugin_index` singleton row instead of `plugins/installs.json`; the
+  legacy JSON file is only a doctor migration input and is removed after import.
+- The legacy `plugins/installs.json` path helper now lives in doctor legacy
+  code. Runtime plugin-index modules expose only SQLite-backed persistence
+  options, not a JSON file path.
+- Gateway restart sentinel, restart intent, and supervisor handoff state now use
+  typed shared SQLite rows (`gateway_restart_sentinel`,
+  `gateway_restart_intent`, and `gateway_restart_handoff`) instead of generic
+  opaque blobs. Runtime restart code has no file-shaped sentinel/intent/handoff
+  contract.
+- Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
+  startup verification cooldown state, SDK IndexedDB crypto snapshots,
+  credentials, and recovery keys now use shared SQLite plugin state/blob
+  tables. Runtime path structs no longer expose a `storage-meta.json` metadata
+  path; that filename is a legacy migration input only. Their legacy JSON import
+  plan lives in the Matrix plugin setup/doctor migration surface.
+- Matrix startup no longer scans, reports, or completes legacy Matrix file
+  state. Matrix file detection, legacy crypto snapshot creation, room-key
+  restore migration state, import, and source removal are all doctor-owned.
+- Matrix runtime migration barrels were removed. Legacy state/crypto detection
+  and mutation helpers are imported by Matrix doctor directly instead of being
+  part of runtime API surface.
+- Matrix migration snapshot reuse markers now live in SQLite plugin state
+  instead of `matrix/migration-snapshot.json`; doctor can still reuse the same
+  verified pre-migration archive without writing a sidecar state file.
+- Nostr bus cursors and profile publish state now use shared SQLite plugin
+  state. Their legacy JSON import plan lives in the Nostr plugin setup/doctor
+  migration surface.
+- Active Memory session toggles now use shared SQLite plugin state instead of
+  `session-toggles.json`; toggling memory back on deletes the row instead of
+  rewriting a JSON object.
+- Skill Workshop proposals and review counters now use shared SQLite plugin
+  state instead of per-workspace `skill-workshop/<workspace>.json` stores. Each
+  proposal is a separate row under `skill-workshop/proposals`, and the review
+  counter is a separate row under `skill-workshop/reviews`.
+- Skill Workshop reviewer subagent runs now use the runtime session transcript
+  resolver instead of creating `skill-workshop/<sessionId>.json` sidecar session
+  paths.
+- ACPX process leases now use shared SQLite plugin state under
+  `acpx/process-leases` instead of a whole-file `process-leases.json` registry.
+  Each lease is stored as its own row, preserving startup stale-process reaping
+  without a runtime JSON rewrite path.
+- ACPX wrapper scripts and the isolated Codex home are generated in the
+  OpenClaw temp root. They are recreated as needed and are not backup or
+  migration inputs.
+- Subagent run registry persistence uses typed shared `subagent_runs` rows. The
+  old `subagents/runs.json` path is now only a doctor migration input, and
+  runtime helper names no longer describe the state layer as disk-backed.
+  Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
+  registry behavior; they seed/read SQLite rows directly.
+- Backup stages the state directory before archiving, copies non-database files,
+  snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
+  sidecars, records snapshot metadata in the archive manifest, and records
+  completed backup runs in SQLite with the archive manifest. `openclaw backup
+create` validates the written archive by default; `--no-verify` is the
+  explicit fast path.
+- `openclaw backup restore` validates the archive before extraction, reuses the
+  verifier's normalized manifest, and restores verified manifest assets to their
+  recorded source paths. It requires `--yes` for writes and supports `--dry-run`
+  for a restore plan.
+- The old backup volatile-path filter is deleted. Backup no longer needs a
+  live-tar skip list for legacy session or cron JSON/JSONL files because SQLite
+  snapshots are staged before archive creation.
+- Plain setup and onboarding workspace preparation no longer create
+  `agents/<agentId>/sessions/` directories. They create config/workspace only;
+  SQLite session rows and transcript rows are created on demand in the
+  per-agent database.
+- Security permission repair now targets the global and per-agent SQLite
+  databases plus WAL/SHM sidecars instead of `sessions.json` and transcript
+  JSONL files.
+- Sandbox registry runtime names now describe SQLite registry kinds directly
+  instead of carrying legacy JSON registry terminology through the active store.
+- `openclaw reset --scope config+creds+sessions` removes per-agent
+  `openclaw-agent.sqlite` databases plus WAL/SHM sidecars, not only legacy
+  `sessions/` directories.
+- Gateway aggregate session helpers now use entry-oriented names:
+  `loadCombinedSessionEntriesForGateway` returns `{ databasePath, entries }`.
+  The old combined-store naming has been removed from runtime callers.
+- Docker MCP channel seeding now writes the main session row and transcript
+  events into the per-agent SQLite database instead of creating
+  `sessions.json` and a JSONL transcript.
+- The bundled session-memory hook now resolves previous-session context from
+  SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
+  transcript paths or `workspace/sessions` directories.
+- The bundled command-logger hook now writes command audit rows to the shared
+  SQLite `command_log_entries` table instead of appending
+  `logs/commands.log`.
+- Channel pairing allowlists now expose only SQLite-backed read/write helpers at
+  runtime and in the plugin SDK. The old `*-allowFrom.json` path resolver and
+  file reader live only under doctor legacy import code.
+- `migration_runs` records legacy-state migration executions with status,
+  timestamps, and JSON reports.
+- `migration_sources` records each imported legacy file source with hash, size,
+  record count, target table, run id, status, and source-removal state.
+- `backup_runs` records backup archive paths, status, and JSON manifests.
+- The global schema does not keep an unused `agents` registry table. Agent
+  database discovery is the canonical `agent_databases` registry until runtime
+  has a real agent-record owner.
+- Generated model catalog config is stored in typed global SQLite
+  `agent_model_catalogs` rows keyed by agent directory. Runtime callers use
+  `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
+  runtime code. The implementation writes SQLite and the embedded PI registry is
+  hydrated from that stored payload without creating a `models.json` file.
+- QMD session transcript markdown export and `memory.qmd.sessions` config were
+  removed. There is no QMD transcript collection, no `qmd/sessions*` runtime
+  path, and no file-backed session memory bridge.
+- Memory-core runtime imports SQLite transcript indexing helpers from
+  `openclaw/plugin-sdk/memory-core-host-engine-session-transcripts`, not the
+  QMD SDK subpath. The QMD subpath keeps a compatibility re-export only for
+  external callers until a major SDK cleanup can remove it.
+- QMD's own `index.sqlite` is now a temp runtime materialization backed by the
+  main SQLite `plugin_blob_entries` table. Runtime no longer creates a durable
+  `~/.openclaw/agents/<agentId>/qmd` sidecar.
+- The optional `memory-lancedb` plugin no longer creates
+  `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
+  external LanceDB backend and stays disabled until the operator configures an
+  explicit `dbPath`.
+- `check:database-first-legacy-stores` fails new runtime source that pairs
+  legacy store names with write-style filesystem APIs. It also fails runtime
+  source that reintroduces transcript bridge contracts such as
+  `transcriptLocator`, `sqlite-transcript://...`, `sessionFile`, or
+  `storePath`, and scans tests for those bridge-contract names too. It also
+  bans `SessionManager.open(...)` and the old static SessionManager facades so
+  runtime and tests cannot silently re-create a file-backed session opener or
+  file-era session discovery. It also bans the old session JSONL downloader
+  hook/class from export UI. It also bans sidecar-shaped plugin-state/task
+  SQLite helper names; tests should assert `databasePath` and the shared
+  `state/openclaw.sqlite` location instead of pretending those features own
+  separate SQLite files. It also bans the old generic memory index SQL table
+  names (`meta`, `files`, `chunks`, `chunks_vec`,
+  `chunks_fts`, `embedding_cache`) in runtime source so the agent database keeps
+  its explicit `memory_index_*` schema. It also bans embedding TEXT schemas and
+  embedding JSON-array writes so vectors stay compact SQLite BLOBs. Migration,
+  doctor, import, and explicit non-session export code remain allowed. The
+  guard now also covers runtime `cache/*.json` stores, generic
+  `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
+  restart and lock sidecars, Voice Wake settings, plugin binding approvals,
+  installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity
+  logs, the old bundled `command-logger` text log, and pi-mono raw-stream JSONL
+  diagnostics knobs. It also bans old root-level doctor legacy module names so
+  compatibility code stays under `src/commands/doctor/`. Android debug handlers
+  also use logcat/in-memory output instead of staging `camera_debug.log` or
+  `debug_logs.txt` cache files.
+
+## Target Schema Shape
+
+Keep schemas explicit. Host-owned runtime state uses typed tables. Plugin-owned
+opaque state uses `plugin_state_entries` / `plugin_blob_entries`; there is no
+generic host `kv` table.
+
+Global database:
+
+```text
+state_leases(scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+exec_approvals_config(config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms)
+schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+agent_databases(agent_id, path, schema_version, last_seen_at, size_bytes)
+task_runs(...)
+task_delivery_state(...)
+flow_runs(...)
+subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
+current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, updated_at)
+plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
+tui_last_sessions(scope_key, session_key, updated_at)
+plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
+plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
+media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
+skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
+web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
+web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
+apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, updated_at_ms)
+device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
+device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
+macos_port_guardian_records(pid, port, command, mode, timestamp)
+workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
+model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
+agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
+managed_outgoing_image_records(attachment_id, session_key, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json)
+gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
+channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
+channel_pairing_allow_entries(channel_key, account_id, entry, sort_order, updated_at)
+voicewake_triggers(config_key, position, trigger, updated_at_ms)
+voicewake_routing_config(config_key, version, default_target_mode, default_target_agent_id, default_target_session_key, updated_at_ms)
+voicewake_routing_routes(config_key, position, trigger, target_mode, target_agent_id, target_session_key, updated_at_ms)
+update_check_state(state_key, last_checked_at, last_notified_version, last_notified_tag, last_available_version, last_available_tag, auto_install_id, auto_first_seen_version, auto_first_seen_tag, auto_first_seen_at, auto_last_attempt_version, auto_last_attempt_at, auto_last_success_version, auto_last_success_at, updated_at_ms)
+config_health_entries(config_path, last_known_good_json, last_promoted_good_json, last_observed_suspicious_signature, updated_at_ms)
+sandbox_registry_entries(registry_kind, container_name, session_key, backend_id, runtime_label, image, created_at_ms, last_used_at_ms, config_label_kind, config_hash, cdp_port, no_vnc_port, entry_json, updated_at)
+cron_run_logs(store_key, job_id, seq, ts, status, error, summary, diagnostics_summary, delivery_status, delivery_error, delivered, session_id, session_key, run_id, run_at_ms, duration_ms, next_run_at_ms, model, provider, total_tokens, entry_json, created_at)
+cron_jobs(store_key, job_id, name, description, enabled, delete_after_run, created_at_ms, agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind, payload_message, payload_model, payload_fallbacks_json, payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content, payload_external_content_source_json, payload_light_context, payload_tools_allow_json, delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id, delivery_best_effort, failure_delivery_mode, failure_delivery_channel, failure_delivery_to, failure_delivery_account_id, failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error, last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
+delivery_queue_entries(queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at)
+commitments(id, agent_id, session_key, channel, account_id, recipient_id, thread_id, sender_id, kind, sensitivity, source, status, reason, suggested_text, dedupe_key, confidence, due_earliest_ms, due_latest_ms, due_timezone, source_message_id, source_run_id, created_at_ms, updated_at_ms, attempts, last_attempt_at_ms, sent_at_ms, dismissed_at_ms, snoozed_until_ms, expired_at_ms, record_json)
+migration_runs(id, started_at, finished_at, status, report_json)
+migration_sources(source_key, migration_kind, source_path, target_table, source_sha256, source_size_bytes, source_record_count, last_run_id, status, imported_at, removed_source, report_json)
+backup_runs(id, created_at, archive_path, status, manifest_json)
+```
+
+Agent database:
+
+```text
+schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+sessions(session_id, session_key, session_scope, created_at, updated_at, started_at, ended_at, status, chat_type, channel, account_id, primary_conversation_id, model_provider, model, agent_harness_id, parent_session_key, spawned_by, display_name)
+conversations(conversation_id, channel, account_id, kind, peer_id, parent_conversation_id, thread_id, native_channel_id, native_direct_user_id, label, metadata_json, created_at, updated_at)
+session_conversations(session_id, conversation_id, role, first_seen_at, last_seen_at)
+session_routes(session_key, session_id, updated_at)
+session_entries(session_id, session_key, entry_json, updated_at)
+transcript_events(session_id, seq, event_json, created_at)
+transcript_event_identities(session_id, event_id, seq, event_type, has_parent, parent_id, message_idempotency_key, created_at)
+transcript_snapshots(session_id, snapshot_id, reason, event_count, created_at, metadata_json)
+vfs_entries(namespace, path, kind, content_blob, metadata_json, updated_at)
+tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
+run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
+trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
+memory_index_meta(meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
+memory_index_sources(source_kind, source_key, path, session_id, hash, mtime, size)
+memory_index_chunks(id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
+memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
+cache_entries(scope, key, value_json, blob, expires_at, updated_at)
+```
+
+Future search can add FTS tables without changing the canonical event tables:
+
+```text
+transcript_events_fts(session_id, seq, text)
+vfs_entries_fts(namespace, path, text)
+```
+
+Large values should use `blob` columns, not JSON string encoding. Keep
+`value_json` for small structured data that must remain inspectable with plain
+SQLite tooling.
+
+`agent_databases` is the canonical registry for this branch. Do not add an
+`agents` table until a real agent-record owner exists; agent config remains in
+`openclaw.json`.
+
+## Doctor Migration Shape
+
+Doctor should call one explicit migration step that is reportable and safe to
+rerun:
+
+```bash
+openclaw doctor --fix
+```
+
+`openclaw doctor --fix` invokes the state migration implementation after
+ordinary config preflight and creates a verified backup before import. Runtime
+startup and `openclaw migrate` must not import legacy OpenClaw state files.
+
+Migration properties:
+
+- One migration pass discovers all legacy file sources and produces a plan
+  before mutating anything.
+- Doctor creates a verified pre-migration backup archive before importing
+  legacy files.
+- Imports are idempotent and keyed by source path, mtime, size, hash, and target
+  table.
+- Successful source files are removed or archived after the target database has
+  committed.
+- Failed imports leave the source untouched and record a warning in
+  `migration_runs`.
+- Runtime code reads SQLite only after the migration exists.
+- No downgrade/export-to-runtime-files path is required.
+
+## Migration Inventory
+
+Move these into the global database:
+
+- Task registry runtime writes now use the shared database; the unshipped
+  `tasks/runs.sqlite` sidecar importer is deleted. Snapshot saves upsert by task
+  id and delete only missing task/delivery rows.
+- Task Flow runtime writes now use the shared database; the unshipped
+  `tasks/flows/registry.sqlite` sidecar importer is deleted. Snapshot saves
+  upsert by flow id and delete only missing flow rows.
+- Plugin state runtime writes now use the shared database; the unshipped
+  `plugin-state/state.sqlite` sidecar importer is deleted.
+- Builtin memory search no longer defaults to `memory/<agentId>.sqlite`; its
+  index tables live in the owning agent database, and the explicit
+  `memorySearch.store.path` sidecar opt-in has been retired to doctor config
+  migration.
+- Builtin memory reindex resets only memory-owned tables in the agent database.
+  It must not replace the whole SQLite file, because the same database owns
+  sessions, transcripts, VFS rows, artifacts, and runtime caches.
+- Sandbox container/browser registries from monolithic and sharded JSON. Runtime
+  writes now use the shared database; legacy JSON import remains.
+- Cron job definitions, schedule state, and run history now use shared SQLite;
+  doctor imports/removes legacy `jobs.json`, `jobs-state.json`, and
+  `cron/runs/*.jsonl` files
+- Device identity/auth, push, update check, commitments, OpenRouter model
+  cache, installed plugin index, and app-server bindings
+- Device/node pairing and bootstrap records now use typed SQLite tables
+- Device-pair notification subscribers and delivered-request markers now use the
+  shared SQLite plugin-state table instead of `device-pair-notify.json`.
+- Voice-call call records now use the shared SQLite plugin-state table under the
+  `voice-call` / `calls` namespace instead of `calls.jsonl`; the plugin CLI
+  tails and summarizes SQLite-backed call history.
+- QQBot gateway sessions, known-user records, and ref-index quote cache now use
+  SQLite plugin state under `qqbot` namespaces (`sessions`, `known-users`,
+  `ref-index`) instead of `session-*.json`, `known-users.json`, and
+  `ref-index.jsonl`; the QQBot doctor/setup migration imports and removes the
+  legacy files.
+- Discord model-picker preferences, command-deploy hashes, and thread bindings
+  now use SQLite plugin state under `discord` namespaces
+  (`model-picker-preferences`, `command-deploy-hashes`, `thread-bindings`)
+  instead of `model-picker-preferences.json`, `command-deploy-cache.json`, and
+  `thread-bindings.json`; the Discord doctor/setup migration imports and
+  removes the legacy files.
+- BlueBubbles catchup cursors and inbound dedupe markers now use SQLite plugin
+  state under `bluebubbles` namespaces (`catchup-cursors`, `inbound-dedupe`)
+  instead of `bluebubbles/catchup/*.json` and
+  `bluebubbles/inbound-dedupe/*.json`; the BlueBubbles doctor/setup migration
+  imports and removes the legacy files.
+- Telegram update offsets, sticker cache entries, reply-chain message cache
+  entries, sent-message cache entries, topic-name cache entries, and thread
+  bindings now use SQLite plugin state under `telegram` namespaces
+  (`update-offsets`, `sticker-cache`, `message-cache`, `sent-messages`,
+  `topic-names`, `thread-bindings`) instead of `update-offset-*.json`,
+  `sticker-cache.json`, `*.telegram-messages.json`,
+  `*.telegram-sent-messages.json`, `*.telegram-topic-names.json`, and
+  `thread-bindings-*.json`; the Telegram doctor/setup migration imports and
+  removes the legacy files.
+- iMessage catchup cursors, reply short-id mappings, and sent-echo dedupe rows
+  now use SQLite plugin state under `imessage` namespaces (`catchup-cursors`,
+  `reply-cache`, `sent-echoes`) instead of `imessage/catchup/*.json`,
+  `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl`; the iMessage
+  doctor/setup migration imports and removes the legacy files.
+- Microsoft Teams conversations, polls, delegated tokens, pending uploads, and
+  feedback learnings now use SQLite plugin state/blob namespaces
+  (`conversations`, `polls`, `delegated-tokens`, `pending-uploads`,
+  `feedback-learnings`) instead of `msteams-conversations.json`,
+  `msteams-polls.json`, `msteams-delegated.json`,
+  `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
+  doctor/setup migration imports and removes the legacy files.
+- Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
+  startup verification cooldown state, credentials, recovery keys, and SDK
+  IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
+  `matrix` (`sync-store`, `storage-meta`, `thread-bindings`, `inbound-dedupe`,
+  `startup-verification`, `credentials`, `recovery-key`, `idb-snapshots`)
+  instead of `bot-storage.json`, `storage-meta.json`, `thread-bindings.json`,
+  `inbound-dedupe.json`, `startup-verification.json`, `credentials.json`,
+  `recovery-key.json`, and `crypto-idb-snapshot.json`; the Matrix doctor/setup
+  migration imports and removes those legacy files from account-scoped Matrix
+  storage roots.
+- Nostr bus cursors and profile publish state now use SQLite plugin state under
+  `nostr` namespaces (`bus-state`, `profile-state`) instead of
+  `bus-state-*.json` and `profile-state-*.json`; the Nostr doctor/setup
+  migration imports and removes the legacy files.
+- Active Memory session toggles now use SQLite plugin state under
+  `active-memory/session-toggles` instead of `session-toggles.json`.
+- Skill Workshop proposal queues and review counters now use SQLite plugin state
+  under `skill-workshop/proposals` and `skill-workshop/reviews` instead of
+  per-workspace `skill-workshop/<workspace>.json` files.
+- Outbound delivery and session delivery queues now share the global SQLite
+  `delivery_queue_entries` table under separate queue names
+  (`outbound-delivery`, `session-delivery`) instead of durable
+  `delivery-queue/*.json`, `delivery-queue/failed/*.json`, and
+  `session-delivery-queue/*.json` files. The doctor legacy-state step imports
+  pending and failed rows, removes stale delivered markers, and deletes the old
+  JSON files after import. Hot routing and retry fields are typed columns; the
+  JSON payload is retained only for replay/debug.
+- ACPX process leases now use SQLite plugin state under `acpx/process-leases`
+  instead of `process-leases.json`.
+- Backup and migration run metadata
+
+Move these into agent databases:
+
+- Agent session roots and compatibility-shaped session-entry payloads. Done for
+  runtime writes: hot session metadata is queryable in `sessions`, while the
+  legacy-shaped full `SessionEntry` payload remains in `session_entries`.
+- Agent transcript events. Done for runtime writes.
+- Compaction checkpoints and transcript snapshots. Done for runtime writes:
+  checkpoint transcript copies are SQLite transcript rows and checkpoint
+  metadata is recorded in `transcript_snapshots`. Gateway checkpoint helpers
+  now name these values as transcript snapshots rather than source files.
+- Agent VFS scratch/workspace namespaces. Done for runtime VFS writes.
+- Subagent attachment payloads. Done for runtime writes: they are SQLite VFS
+  seed entries and never durable workspace files.
+- Tool artifacts. Done for runtime writes.
+- Run artifacts. Done for worker runtime writes through the per-agent
+  `run_artifacts` table.
+- Agent-local runtime caches. Done for worker runtime scoped cache writes through
+  the per-agent `cache_entries` table. Gateway-wide model caches stay in the
+  global database unless they become agent-specific.
+- ACP parent stream logs. Done for runtime writes.
+- ACP replay ledger sessions. Done for runtime writes via
+  `acp_replay_sessions` and `acp_replay_events`; legacy `acp/event-ledger.json`
+  remains only as doctor input.
+- Trajectory sidecars when they are not explicit export files. Done for runtime
+  writes: trajectory capture writes agent-database `trajectory_runtime_events`
+  rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars are doctor
+  import inputs only; export can materialize fresh JSONL support-bundle outputs
+  but does not read or migrate old trajectory/transcript sidecars at runtime.
+  Runtime trajectory capture exposes SQLite scope; JSONL path helpers are
+  isolated to export/debug support and are not re-exported from the runtime module.
+  Embedded-runner trajectory metadata records `{agentId, sessionId, sessionKey}`
+  identity instead of persisting a transcript locator.
+
+Keep these file-backed for now:
+
+- `openclaw.json`
+- provider or CLI credential files
+- plugin/package manifests
+- user workspaces and Git repositories when disk mode is selected
+- logs intended for operator tailing, unless a specific log surface is moved
+
+## Migration Plan
+
+### Phase 0: Freeze The Boundary
+
+Make the durable-state boundary explicit before moving more rows:
+
+- Add a `migration_runs` table to the global database.
+  Done for legacy-state migration execution reports.
+- Add a single doctor-owned state migration service for file-to-database import.
+  Done: `openclaw doctor --fix` uses the legacy-state migration implementation.
+- Make `plan` read-only and make `apply` create a backup, import, verify, and
+  then delete or quarantine old files.
+  Done: doctor creates a verified pre-migration backup, passes the backup path
+  into `migration_runs`, and reuses the importer/removal paths.
+- Add static bans so new runtime code cannot write legacy state files while
+  migration code and tests can still seed/read them.
+  Done for the currently migrated legacy stores; the guard also scans nested
+  tests for forbidden runtime transcript locator contracts.
+
+### Phase 1: Finish The Global Control Plane
+
+Keep shared coordination state in `state/openclaw.sqlite`:
+
+- Agents and agent database registry
+- Task and Task Flow ledgers
+- Plugin state
+- Sandbox container/browser registry
+- Cron/scheduler run history
+- Pairing, device, push, update-check, TUI, OpenRouter/model caches, and other
+  small gateway-scoped runtime state
+- Backup and migration metadata
+- Gateway media attachment bytes. Done for runtime writes; direct file paths
+  are temp materializations for compatibility with channel senders and sandbox
+  staging. Runtime allowlists accept SQLite materialization paths, not legacy
+  state/config media roots. Doctor imports legacy media files into
+  `media_blobs` and removes the source files after successful row writes.
+- Debug proxy capture sessions, events, and payload blobs. Done: captures live
+  in the shared state DB and open through the shared state DB bootstrap, schema,
+  WAL, and busy-timeout settings. There is no debug proxy runtime sidecar DB
+  override, blob directory, or proxy-capture-only generated schema/codegen
+  target.
+
+This phase also deletes duplicate sidecar openers, permission helpers, WAL
+setup, filesystem pruning, and compatibility writers from those subsystems.
+
+### Phase 2: Introduce Per-Agent Databases
+
+Create one database per agent and register it from the global DB:
+
+```text
+~/.openclaw/state/openclaw.sqlite
+~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
+```
+
+The global `agent_databases` row stores the path, schema version, last-seen
+timestamp, and basic size/integrity metadata. Runtime code asks the registry for
+the agent DB instead of deriving file paths directly.
+
+The agent DB owns:
+
+- `sessions` as the canonical session root, with `session_entries` as the
+  compatibility-shaped payload table attached to that root, and
+  `session_routes` as the unique active `session_key` lookup
+- `conversations` and `session_conversations` as the normalized provider
+  routing identity attached to sessions
+- `transcript_events`
+- transcript snapshots and compaction checkpoints. Done for runtime writes.
+- `vfs_entries`
+- `tool_artifacts` and run artifacts
+- agent-local runtime/cache rows. Done for worker scoped caches.
+- ACP parent stream events
+- trajectory runtime events when they are not explicit export artifacts
+
+### Phase 3: Replace Session Store APIs
+
+Done for runtime. The file-shaped session store surface is not an active
+runtime contract:
+
+- Runtime no longer calls `loadSessionStore(storePath)` or treats `storePath` as
+  session identity.
+- Runtime row operations are `getSessionEntry`, `upsertSessionEntry`,
+  `patchSessionEntry`, `deleteSessionEntry`, and `listSessionEntries`.
+- Whole-store rewrite helpers, file writers, queue tests, alias pruning, and
+  legacy-key deletion parameters are gone from runtime.
+- Deprecated root-package compatibility exports still adapt canonical
+  `sessions.json` paths onto the SQLite row APIs.
+- `sessions.json` parsing remains only in doctor migration/import code and
+  doctor tests.
+- Runtime lifecycle fallback reads SQLite transcript headers, not JSONL first
+  lines.
+
+Keep deleting anything that reintroduces file-lock parameters,
+pruning/truncation-as-file-maintenance vocabulary, store-path identity, or tests
+whose only assertion is JSON persistence.
+
+### Phase 4: Move Transcripts, ACP Streams, Trajectories, And VFS
+
+Make every agent data stream database-native:
+
+- Transcript append writes go through one SQLite transaction that ensures the
+  session header, checks message idempotency, selects the parent tail, inserts
+  into `transcript_events`, and records queryable identity metadata in
+  `transcript_event_identities`. Done for direct transcript message appends and
+  normal persisted `TranscriptSessionManager` appends; explicit branch
+  operations keep their explicit parent choice and still write SQLite rows
+  without deriving any file locator.
+- ACP parent stream logs become rows, not `.acp-stream.jsonl` files. Done.
+- ACP spawn setup no longer persists transcript JSONL paths. Done.
+- Runtime trajectory capture writes event rows/artifacts directly. The explicit
+  support/export command can still produce support-bundle JSONL artifacts as an
+  export format, but session export does not recreate session JSONL. Done.
+- Disk workspaces stay on disk when configured as disk mode.
+- VFS scratch and experimental VFS-only workspace mode use the agent DB.
+
+The migration imports old JSONL files once, records counts/hashes in
+`migration_runs`, and removes imported files after integrity checks.
+
+### Phase 5: Backup, Restore, Vacuum, And Verify
+
+Backups remain one archive file:
+
+- Checkpoint every global and agent database.
+- Snapshot each DB with SQLite backup semantics or `VACUUM INTO`.
+- Archive compact DB snapshots, config, external credentials, and requested
+  workspace exports.
+- Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
+- Verify by opening every DB snapshot and running `PRAGMA integrity_check`.
+  `openclaw backup create` does this archive verification by default;
+  `--no-verify` skips only the post-write archive pass, not the snapshot
+  creation integrity check.
+- Restore copies snapshots back to their target paths. This branch resets the
+  unshipped SQLite layout to `user_version = 1`; future shipped schema changes
+  can add explicit migrations when they are needed.
+
+### Phase 6: Worker Runtime
+
+Keep worker mode experimental while the database split lands:
+
+- Workers receive agent id, run id, filesystem mode, and DB registry identity.
+- Each worker opens its own SQLite connection.
+- Parent keeps channel delivery, approvals, config, and cancellation authority.
+- Start with one worker per active run; add pooling only after lifecycle and DB
+  connection ownership are stable.
+
+### Phase 7: Delete The Old World
+
+Done for runtime session management. The old world is allowed only as explicit
+doctor input or support/export output:
+
+- No runtime `sessions.json`, transcript JSONL, sandbox registry JSON, task
+  sidecar SQLite, or plugin-state sidecar SQLite writes.
+- No JSON/session file pruning, file transcript truncation, session file locks,
+  or lock-shaped session tests.
+- No runtime compatibility exports whose purpose is keeping old session files
+  current.
+- Explicit support exports remain user-requested archive/materialization
+  formats and must not feed file names back into runtime identity.
+
+## Backup And Restore
+
+Backups should be one archive file, but database capture should be
+SQLite-native:
+
+1. Stop long-running write activity or enter a short backup barrier.
+2. For every global and agent database, run a checkpoint.
+3. Snapshot each database using SQLite backup semantics or `VACUUM INTO` into a
+   temporary backup directory.
+4. Archive the compacted database snapshots, config file, credentials directory,
+   selected workspaces, and a manifest.
+5. Verify the archive by opening every included SQLite snapshot and running
+   `PRAGMA integrity_check`.
+   `openclaw backup create` does this by default; `--no-verify` is only for
+   intentionally skipping the post-write archive pass.
+
+Do not rely on raw live `*.sqlite`, `*.sqlite-wal`, and `*.sqlite-shm` copies as
+the primary backup format. The archive manifest should record database role,
+agent id, schema version, source path, snapshot path, byte size, and integrity
+status.
+
+Restore should rebuild the global database and agent database files from the
+archive snapshots. Because the SQLite layout has not shipped yet, this refactor
+keeps only the version-1 schema plus doctor file-to-database import. The restore
+command validates the archive first, then replaces each manifest asset from the
+verified extracted payload.
+
+## Runtime Refactor Plan
+
+1. Add database registry APIs.
+   - Resolve global DB and per-agent DB paths.
+   - Keep the unshipped schemas at `user_version = 1`; do not add schema
+     migration runner code until a shipped schema needs it.
+   - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
+
+2. Collapse sidecar SQLite stores.
+   - Move plugin state tables into the global database. Done for runtime
+     writes; the unshipped legacy sidecar importer is deleted.
+   - Move task registry tables into the global database. Done for runtime
+     writes; the unshipped legacy sidecar importer is deleted.
+   - Move Task Flow tables into the global database. Done for runtime writes;
+     the unshipped legacy sidecar importer is deleted.
+   - Move builtin memory-search tables into each agent database. Done; explicit
+     custom `memorySearch.store.path` is now removed by doctor config migration.
+     Full reindex runs in place against memory tables only; the old whole-file
+     swap path and sidecar index swap helper are deleted.
+   - Delete duplicate database openers, WAL setup, permission helpers, and
+     close paths from those subsystems.
+
+3. Move agent-owned tables into per-agent databases.
+   - Create agent DB on demand through the global database registry. Done.
+   - Move runtime session entries, transcript events, VFS rows, and tool
+     artifacts to agent DBs. Done.
+   - Do not migrate branch-local shared-DB session entries, transcript events,
+     VFS rows, or tool artifacts; that layout never shipped. Keep only legacy
+     file-to-database import in doctor.
+
+4. Replace session store APIs.
+   - Remove `storePath` as the runtime identity. Done for runtime and guarded
+     by `check:database-first-legacy-stores`: session metadata, route updates,
+     command persistence, CLI session cleanup, Feishu reasoning previews,
+     transcript-state persistence, subagent depth, auth profile session
+     overrides, parent-fork logic, and QA-lab inspection now resolve the
+     database from canonical agent/session keys.
+     Gateway/TUI/UI/macOS session-list responses now expose `databasePath`
+     instead of legacy `path`; macOS debug surfaces show the per-agent database
+     as read-only state instead of writing `session.store` config.
+     `/status`, chat-driven trajectory export, and CLI dependency proxies no
+     longer propagate legacy store paths; transcript usage fallback reads
+     SQLite by agent/session identity. Runtime and bridge tests no longer expose
+     `storePath`; doctor/migration inputs own that legacy field name.
+     Gateway combined-session loading no longer has a special runtime branch for
+     non-templated `session.store` values; it aggregates per-agent SQLite rows.
+     The legacy session-lock doctor lane and its `.jsonl.lock` cleanup helper
+     were removed; SQLite is the session concurrency boundary now.
+     Hot runtime call sites use row-oriented helper names such as
+     `resolveSessionRowEntry`; the old `resolveSessionStoreEntry` compatibility
+     alias has been removed from runtime and plugin SDK exports.
+
+- Use `{ agentId, sessionKey }` row operations.
+  Done: `getSessionEntry`, `upsertSessionEntry`, `deleteSessionEntry`,
+  `patchSessionEntry`, and `listSessionEntries` are SQLite-first APIs that do
+  not require a session store path. Status summary, local agent status, health,
+  and the `openclaw sessions` listing command now read per-agent rows directly
+  and display per-agent SQLite database paths instead of `sessions.json` paths.
+- Replace whole-store delete/insert with `upsertSessionEntry`,
+  `deleteSessionEntry`, `listSessionEntries`, and SQL cleanup queries.
+  Done for runtime: hot paths now use row APIs and conflict-retried row patches;
+  remaining whole-store import/replace helpers are limited to migration import
+  code and SQLite backend tests.
+  - Delete `store-writer.ts` and writer-queue tests. Done.
+  - Delete runtime legacy-key pruning and alias-delete parameters from session
+    row upserts/patches. Done.
+
+5. Delete runtime JSON registry behavior.
+   - Make sandbox registry reads and writes SQLite-only. Done.
+   - Import monolithic and sharded JSON only from the migration step. Done.
+   - Remove sharded registry locks and JSON writes. Done.
+
+- Keep one typed registry table instead of storing registry rows as generic
+  opaque JSON if the shape remains hot-path operational state. Done.
+
+6. Delete file-lock-shaped session mutation.
+   - Done for runtime lock creation and runtime lock APIs.
+   - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
+   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
+     setting.
+   - State integrity no longer has a separate orphan transcript-file pruning
+     path; doctor migration imports/removes legacy JSONL sources in one place.
+   - Gateway singleton coordination uses typed SQLite `state_leases` rows under
+     `gateway_locks` and no longer exposes a file-lock directory seam.
+   - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
+     files; it writes shared SQLite plugin-state rows. Done.
+   - QMD embed coordination uses a SQLite state lease instead of
+     `qmd/embed.lock`. Done.
+
+7. Make workers database-aware.
+   - Workers open their own SQLite connections.
+   - Parent owns delivery, channel callbacks, and config.
+   - Worker receives agent id, run id, filesystem mode, and DB registry
+     identity, not live handles.
+   - `vfs-only` stays experimental and uses the agent database as its storage
+     root.
+   - Keep one worker per active run first. Pooling can wait until DB connection
+     lifetime and cancellation behavior are boring.
+
+8. Backup integration.
+   - Teach backup to snapshot global and agent databases via SQLite backup or
+     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset.
+   - Add backup verification for SQLite integrity and schema version. Done for
+     backup creation and default archive verification integrity checks.
+   - Record backup run metadata in SQLite. Done via the shared `backup_runs`
+     table with archive path, status, and manifest JSON.
+   - Add restore from verified archive snapshots. Done: `openclaw backup
+restore` validates before extraction, uses the verifier's normalized
+     manifest, supports `--dry-run`, and requires `--yes` before replacing
+     recorded source paths.
+   - Include VFS/workspace export only when requested; do not export session
+     internals as JSON or JSONL.
+
+9. Delete obsolete tests and code. Done for the known runtime session surfaces.
+
+- Remove tests that assert runtime creation of `sessions.json` or transcript
+  JSONL files. Done for core session store, chat, gateway transcript events,
+  preview, lifecycle, command session-entry updates, auto-reply reset/trace, and
+  memory-core dreaming fixtures, approval target routing, session transcript
+  repair, security permission repair, trajectory export, and session export.
+  Active-memory transcript tests now assert SQLite scopes and no temporary or
+  persisted JSONL file creation.
+  The old heartbeat transcript-pruning regression was removed because
+  runtime no longer truncates JSONL transcripts.
+  Agent session-list tool tests no longer model legacy `sessions.json` paths
+  as the gateway response shape; app/UI/macOS tests use `databasePath`.
+  `/status` transcript-usage tests now seed SQLite transcript rows directly
+  instead of writing JSONL files.
+  Gateway session lifecycle tests now use SQLite transcript seeding helpers
+  directly; the old single-line session-file fixture shape is gone from reset
+  and delete coverage.
+  `sessions.delete` no longer returns a file-era `archived: []` field; deletion
+  reports only the row mutation result. The old `deleteTranscript` option is
+  gone too: deleting a session removes the canonical `sessions` root and lets
+  SQLite cascade session-owned transcript, snapshot, and trajectory rows, so no
+  caller can leave transcript orphans behind or forget a cleanup branch.
+  Context-engine trajectory capture tests now read `trajectory_runtime_events`
+  rows from an isolated agent database instead of reading
+  `session.trajectory.jsonl`.
+  Docker MCP channel seed scripts now seed SQLite rows directly. Direct
+  `sessions.json` writes are limited to doctor fixtures.
+  Tool Search Gateway E2E reads tool-call evidence from SQLite transcript rows
+  instead of scanning `agents/<agentId>/sessions/*.jsonl` files.
+  Memory-core host events and session-corpus scratch rows now live in shared
+  SQLite plugin-state; `events.jsonl` and `session-corpus/*.txt` are legacy
+  doctor migration inputs only. Active rows use `memory/session-ingestion/`
+  virtual paths, not `.dreams/session-corpus`. The old memory-core dreaming
+  repair module and its CLI/Gateway tests were removed because runtime no
+  longer owns file archive repair for that corpus. Memory-core
+  bridge/public-artifact tests no longer surface `.dreams/events.jsonl`; they
+  use the SQLite-backed virtual JSON artifact name.
+  Public SDK/Codex testing docs now say SQLite session state instead of session
+  files, and the channel-turn example no longer exposes a `storePath` argument.
+  Matrix sync state now uses the SQLite plugin-state store directly. Active
+  client/runtime contracts pass an account storage root, not a `bot-storage.json`
+  path, and doctor imports legacy `bot-storage.json` into SQLite before deleting
+  the source. QA Matrix restart/destructive scenarios now mutate the SQLite sync
+  row directly instead of creating or deleting fake `bot-storage.json` files, and
+  the E2EE substrate passes a sync-store root instead of a fake
+  `sync-store.json` path.
+  Matrix storage-root selection no longer scores roots by legacy sync/thread JSON
+  files; it uses durable root metadata plus real crypto state.
+  The runtime SQLite session backend test suite no longer fabricates a
+  `sessions.json`; legacy source fixtures now live in the doctor
+  tests that import them.
+  Gateway session tests no longer expose a `createSessionStoreDir` helper or
+  unused temp session-store path setup; fixture dirs are explicit, and direct
+  row setup uses SQLite session-row naming.
+  Doctor-only JSON5 session-store parser coverage moved out of infra tests and
+  into doctor migration tests, so runtime test suites no longer own legacy
+  session-file parsing.
+  Microsoft Teams runtime SSO/pending-upload tests no longer carry JSON sidecar
+  fixtures or parsers; legacy SSO token parsing lives only in the plugin
+  migration module. Telegram tests no longer seed fake `/tmp/*.json` store
+  paths; they reset the SQLite-backed message cache directly. The generic
+  OpenClaw test-state helper no longer exposes a legacy `auth-profiles.json`
+  writer; doctor auth migration tests own that fixture locally.
+  Runtime tests for TUI last-session pointers, exec approvals, active-memory
+  toggles, Matrix dedupe/startup verification, Memory Wiki source sync,
+  current-conversation bindings, onboarding auth, and Hermes secret imports no
+  longer manufacture old sidecar files or assert old filenames are absent. They
+  prove behavior through SQLite rows and public store APIs; doctor/migration
+  tests are the only place legacy source filenames belong.
+  Runtime tests for device/node pairing, channel allowFrom, restart intents,
+  restart handoff, session delivery queue entries, config health, iMessage
+  caches, cron jobs, PI transcript headers, subagent registries, and managed
+  image attachments also no longer create retired JSON/JSONL files just to prove
+  they are ignored or absent.
+  PI overflow recovery no longer has a SessionManager rewrite/truncation
+  fallback: tool-result truncation and context-engine transcript rewrites mutate
+  SQLite transcript rows, then refresh active prompt state from the database.
+  Persisted SessionManager message appends delegate to the atomic SQLite
+  transcript append helper for parent selection and idempotency. Normal
+  metadata/custom entry appends also select the current parent inside SQLite, so
+  stale manager instances do not resurrect pre-SQLite parent-chain races.
+  Synthetic PI tail cleanup for mid-turn prechecks and `sessions_yield` now
+  trims SQLite transcript state directly; the old SessionManager tail-removal
+  bridge and its tests are deleted.
+  Compaction checkpoint capture also snapshots from SQLite only; callers no
+  longer pass a live SessionManager as an alternate transcript source.
+- Keep tests that seed legacy files only for migration.
+- JSON-file proof has been replaced with SQL row proof for active runtime
+  surfaces.
+
+- Add static bans for runtime writes to legacy session/cache JSON paths.
+  Done for the repo guard.
+
+10. Make the migration report auditable.
+    - Record migration runs in SQLite with started/finished timestamps, source
+      paths, source hashes, counts, warnings, and backup path.
+      Done: legacy-state migration executions now persist a `migration_runs`
+      report with source path/table inventory, source file SHA-256, sizes,
+      record counts, warnings, and backup path.
+      Done: legacy-state migration executions also persist `migration_sources`
+      rows for source-level audit and future skip/backfill decisions.
+    - Make apply idempotent. Re-running after a partial import should either
+      skip an already imported source or merge by stable key.
+      Done: session indexes, transcripts, delivery queues, plugin state, task
+      ledgers, and agent-owned global SQLite rows import through stable keys or
+      upsert/replace semantics, so reruns merge without duplicating durable
+      rows.
+    - Failed imports must keep the original source file in place.
+      Done: failed transcript imports now leave the original JSONL source at
+      its detected path, and `migration_sources` records the source as
+      `warning` with `removed_source=0` for the next doctor run.
+
+## Performance Rules
+
+- One connection per thread/process is fine; do not share handles across
+  workers.
+- Use WAL, `foreign_keys=ON`, a 30s busy timeout, and short `BEGIN IMMEDIATE`
+  write transactions.
+- Keep write transaction helpers synchronous unless/until an async transaction
+  API adds explicit mutex/backpressure semantics.
+- Keep parent delivery writes small and transactional.
+- Avoid whole-store rewrites; use row-level upsert/delete.
+- Add indexes for list-by-agent, list-by-session, updated-at, run id, and
+  expiration paths before moving hot code.
+- Store large artifacts, media, and vectors as BLOBs or chunked BLOB rows, not
+  base64 or numeric-array JSON.
+- Keep opaque plugin-state entries small and scoped.
+- Add SQL cleanup for TTL/expiration instead of filesystem pruning.
+  Done for database-owned runtime stores: media, plugin state, plugin blobs,
+  persistent dedupe, and agent cache all expire through SQLite rows. Remaining
+  filesystem cleanup is limited to temporary materializations or explicit
+  removal commands.
+
+## Static Bans
+
+Add a repo check that fails new runtime writes to legacy state paths:
+
+- `sessions.json`
+- `*.trajectory.jsonl` except materialized support-bundle outputs
+- `.acp-stream.jsonl`
+- `acp/event-ledger.json`
+- `cache/*.json` runtime cache files
+- `agents/<agentId>/agent/auth.json`
+- `agents/<agentId>/agent/models.json`
+- `credentials/oauth.json`
+- `github-copilot.token.json`
+- `openrouter-models.json`
+- `auth-profiles.json`
+- `auth-state.json`
+- `exec-approvals.json`
+- `workspace-state.json`
+- Matrix `credentials*.json` and `recovery-key.json`
+- `cron/runs/*.jsonl`
+- `cron/jobs.json`
+- `jobs-state.json`
+- `device-pair-notify.json`
+- `devices/pending.json`
+- `devices/paired.json`
+- `devices/bootstrap.json`
+- `nodes/pending.json`
+- `nodes/paired.json`
+- `identity/device.json`
+- `identity/device-auth.json`
+- `push/web-push-subscriptions.json`
+- `push/vapid-keys.json`
+- `push/apns-registrations.json`
+- `process-leases.json`
+- `gateway-instance-id`
+- `session-toggles.json`
+- Memory-core `.dreams/events.jsonl`
+- Memory-core `.dreams/session-corpus/`
+- Memory-core `.dreams/daily-ingestion.json`
+- Memory-core `.dreams/session-ingestion.json`
+- Memory-core `.dreams/short-term-recall.json`
+- Memory-core `.dreams/phase-signals.json`
+- Memory-core `.dreams/short-term-promotion.lock`
+- Skill Workshop `skill-workshop/<workspace>.json`
+- Skill Workshop `skill-workshop/skill-workshop-review-*.json`
+- Nostr `bus-state-*.json`
+- Nostr `profile-state-*.json`
+- `calls.jsonl`
+- `known-users.json`
+- `ref-index.jsonl`
+- QQBot `session-*.json`
+- BlueBubbles `bluebubbles/catchup/*.json`
+- BlueBubbles `bluebubbles/inbound-dedupe/*.json`
+- Telegram `update-offset-*.json`
+- Telegram `sticker-cache.json`
+- Telegram `*.telegram-messages.json`
+- Telegram `*.telegram-sent-messages.json`
+- Telegram `*.telegram-topic-names.json`
+- Telegram `thread-bindings-*.json`
+- iMessage `catchup/*.json`
+- iMessage `reply-cache.jsonl`
+- iMessage `sent-echoes.jsonl`
+- Microsoft Teams `msteams-conversations.json`
+- Microsoft Teams `msteams-polls.json`
+- Microsoft Teams `msteams-sso-tokens.json`
+- Microsoft Teams `msteams-delegated.json`
+- Microsoft Teams `msteams-pending-uploads.json`
+- Microsoft Teams `*.learnings.json`
+- Matrix `bot-storage.json`
+- Matrix `sync-store.json`
+- Matrix `thread-bindings.json`
+- Matrix `inbound-dedupe.json`
+- Matrix `startup-verification.json`
+- Matrix `storage-meta.json`
+- Matrix `crypto-idb-snapshot.json`
+- Discord `model-picker-preferences.json`
+- Discord `command-deploy-cache.json`
+- sandbox registry shard JSON files
+- native hook relay `/tmp` bridge JSON files
+- `plugin-state/state.sqlite`
+- ad-hoc `openclaw-state.sqlite` runtime sidecars
+- `tasks/runs.sqlite`
+- `tasks/flows/registry.sqlite`
+- `bindings/current-conversations.json`
+- `restart-sentinel.json`
+- `gateway-restart-intent.json`
+- `gateway-supervisor-restart-handoff.json`
+- `gateway.<hash>.lock`
+- `qmd/embed.lock`
+- `commands.log`
+- `config-health.json`
+- `port-guard.json`
+- `settings/voicewake.json`
+- `settings/voicewake-routing.json`
+- `plugin-binding-approvals.json`
+- `plugins/installs.json`
+- `audit/file-transfer.jsonl`
+- `audit/crestodian.jsonl`
+- `crestodian/rescue-pending/*.json`
+- `plugins/phone-control/armed.json`
+- Memory Wiki `.openclaw-wiki/log.jsonl`
+- Memory Wiki `.openclaw-wiki/state.json`
+- Memory Wiki `.openclaw-wiki/locks/`
+- Memory Wiki `.openclaw-wiki/source-sync.json`
+- Memory Wiki `.openclaw-wiki/import-runs/*.json`
+- Memory Wiki `.openclaw-wiki/cache/agent-digest.json`
+- Memory Wiki `.openclaw-wiki/cache/claims.jsonl`
+- ClawHub `.clawhub/lock.json`
+- ClawHub `.clawhub/origin.json`
+- Browser profile decoration `.openclaw-profile-decorated`
+- `SessionManager.open(...)` file-backed session openers
+- `SessionManager.listAll(...)` and `TranscriptSessionManager.listAll(...)`
+  transcript listing facades
+- `SessionManager.forkFromSession(...)` and
+  `TranscriptSessionManager.forkFromSession(...)` transcript fork facades
+- `SessionManager.newSession(...)` and `TranscriptSessionManager.newSession(...)`
+  mutable session replacement facades
+- `SessionManager.createBranchedSession(...)` and
+  `TranscriptSessionManager.createBranchedSession(...)` branch-session facades
+
+The ban should allow tests to create legacy fixtures and allow migration code to
+read/import/remove legacy file sources. Unshipped SQLite sidecars stay banned
+and do not get doctor import allowances.
+
+## Done Criteria
+
+- Runtime data and cache writes go to the global or agent SQLite database.
+- Runtime no longer writes session indexes, transcript JSONL, sandbox registry
+  JSON, task sidecar SQLite, or plugin-state sidecar SQLite. The unshipped task
+  and plugin-state sidecar SQLite importers are deleted.
+- Legacy file import is doctor-only.
+- Backup produces one archive with compact SQLite snapshots and integrity proof.
+- Agent workers can run with disk, VFS scratch, or experimental VFS-only
+  storage.
+- Config and explicit credential files remain the only expected persistent
+  non-database control files.
+- Repo checks prevent reintroducing legacy runtime file stores.
+
+
+
 # Section: refactor/ingress-core.md
 
 ---
@@ -125009,10 +128309,12 @@ gh workflow run openclaw-release-publish.yml \
 ```
 
 Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows
-only for focused repair or republish work. For a selected plugin repair, pass
-`plugin_publish_scope=selected` and `plugins=@openclaw/name` to
-`OpenClaw Release Publish`, or dispatch the child workflow directly when the
-OpenClaw package must not be published.
+only for focused repair or republish work. `OpenClaw Release Publish` rejects
+`plugin_publish_scope=selected` when `publish_openclaw_npm=true` so the core
+package cannot ship without every publishable official plugin, including
+`@openclaw/diffs-language-pack`. For a selected plugin repair, set
+`publish_openclaw_npm=false` with `plugin_publish_scope=selected` and
+`plugins=@openclaw/name`, or dispatch the child workflow directly.
 
 ## NPM workflow inputs
 
@@ -125034,7 +128336,7 @@ OpenClaw package must not be published.
   required when `publish_openclaw_npm=true`
 - `npm_dist_tag`: npm target tag for the OpenClaw package
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only
-  for focused repair work
+  for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when
   `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the
@@ -129464,11 +132766,12 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
 - Skills list (only metadata; instructions are loaded on demand with `read`).
-  The compact skills block is bounded by `skills.limits.maxSkillsPromptChars`,
-  with optional per-agent override at
-  `agents.list[].skillsLimits.maxSkillsPromptChars`.
+  Native Codex turns receive the compact skills block as turn-scoped
+  collaboration developer instructions; other harnesses receive it in the normal
+  prompt surface. It is bounded by `skills.limits.maxSkillsPromptChars`, with
+  optional per-agent override at `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Native Codex turns do not paste raw `MEMORY.md` from the configured agent workspace when memory tools are available for that workspace; they include a small memory pointer and use memory tools on demand. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` uses the normal bounded turn-context path. Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large injected files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Native Codex turns do not paste raw `MEMORY.md` from the configured agent workspace when memory tools are available for that workspace; they include a small memory pointer in turn-scoped collaboration developer instructions and use memory tools on demand. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` uses the normal bounded turn-context path. Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large injected files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -138431,6 +141734,42 @@ Notes:
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
+### Notte
+
+[Notte](https://www.notte.cc) is a cloud platform for running headless
+browsers with built-in stealth, residential proxies, and a CDP-native
+WebSocket gateway.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "notte",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      notte: {
+        cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
+        color: "#7C3AED",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://console.notte.cc) and copy your **API Key** from the
+  console settings page.
+- Replace `<NOTTE_API_KEY>` with your real Notte API key.
+- Notte auto-creates a browser session on WebSocket connect, so no manual
+  session creation step is needed. The session is destroyed when the
+  WebSocket disconnects.
+- The free tier allows five concurrent sessions and 100 lifetime browser
+  hours. See [pricing](https://www.notte.cc/#pricing) for paid plan limits.
+- See the [Notte docs](https://docs.notte.cc) for full API reference, SDK
+  guides, and integration examples.
+
 ## Security
 
 Key ideas:
@@ -139473,7 +142812,7 @@ Common aliases such as `js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb
 Install the Diff Viewer Language Pack plugin to highlight other languages:
 
 ```bash
-openclaw plugins install diffs-language-pack
+openclaw plugins install clawhub:@openclaw/diffs-language-pack
 ```
 
 With the language pack available, OpenClaw automatically uses it for languages outside the default list. Without it, those files stay readable as plain text.
@@ -140757,6 +144096,20 @@ Example schema:
 
 ## Policy knobs
 
+### `tools.exec.mode`
+
+`tools.exec.mode` is the preferred normalized policy surface for host exec.
+Values are:
+
+- `deny` - block host exec.
+- `allowlist` - run only allowlisted commands without asking.
+- `ask` - use allowlist policy and ask on misses.
+- `auto` - use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route.
+- `full` - run host exec without approval prompts.
+
+Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still win
+when set at the narrower session or agent scope.
+
 ### `exec.security`
 
 <ParamField path="security" type='"deny" | "allowlist" | "full"'>
@@ -140932,7 +144285,10 @@ EOF
 ### Session-only shortcut
 
 - `/exec security=full ask=off` changes only the current session.
-- `/elevated full` is a break-glass shortcut that also skips exec approvals for that session.
+- `/elevated full` is a break-glass shortcut that skips exec approvals only when
+  both the requested policy and the host approvals file resolve to
+  `security: "full"` and `ask: "off"`. A stricter host file, such as
+  `ask: "always"`, still prompts.
 
 If the host approvals file stays stricter than config, the stricter host
 policy still wins.
@@ -141193,6 +144549,7 @@ Notes:
 - `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
 - `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector; hostname-like values are rejected before the command runs.
 - `auto` is the default routing strategy, not a wildcard. Per-call `host=node` is allowed from `auto`; per-call `host=gateway` is only allowed when no sandbox runtime is active.
+- `tools.exec.mode` is the normalized policy knob. Values are `deny`, `allowlist`, `ask`, `auto`, and `full`. `auto` runs deterministic allowlist/safe-bin matches directly and routes every remaining exec approval case through OpenClaw's native auto reviewer before asking a human. `ask` / `ask=always` still asks a human every time.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
@@ -141233,7 +144590,7 @@ Notes:
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
 - In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)
-- `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
+- `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` require reviewer or explicit approval. In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a clearly low-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. If the reviewer asks, the request goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
 - `tools.exec.commandHighlighting` (default: false): when true, approval prompts can highlight parser-derived command spans in the command text. Set to `true` globally or per agent to enable command text highlighting without changing exec approval policy.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).
@@ -141334,7 +144691,7 @@ Use the two controls for different jobs:
 Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
 `openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries.
 `openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins`.
-If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require a fresh approval.
+If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require reviewer or explicit approval.
 
 For full policy details and examples, see [Exec approvals](/tools/exec-approvals-advanced#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals-advanced#safe-bins-versus-allowlist).
 
@@ -141689,6 +145046,228 @@ as provided after trimming trailing slashes.
 
 
 
+# Section: tools/goal.md
+
+---
+doc-schema-version: 1
+summary: "Session goals: durable per-session objectives, /goal controls, model goal tools, token budgets, and TUI status"
+read_when:
+  - You want OpenClaw to keep one objective visible across a long session
+  - You need to pause, resume, block, complete, or clear a session goal
+  - You want to understand the get_goal, create_goal, and update_goal tools
+  - You want to see how goals appear in the TUI
+title: "Goal"
+---
+
+# Goal
+
+A **goal** is one durable objective attached to the current OpenClaw session.
+It gives the agent and the operator a shared target for long-running work,
+without turning that target into a background task, reminder, cron job, or
+standing order.
+
+Goals are session state. They move with the session key, survive process
+restarts, show up in `/goal`, are available to the model through the goal
+tools, and appear in the TUI footer when the active session has one.
+
+## Quick start
+
+Set a goal:
+
+```text
+/goal start get CI green for PR 87469 and push the fix
+```
+
+Check it:
+
+```text
+/goal
+```
+
+Pause it when work is intentionally waiting:
+
+```text
+/goal pause waiting for CI
+```
+
+Resume it:
+
+```text
+/goal resume
+```
+
+Mark it complete:
+
+```text
+/goal complete pushed and verified
+```
+
+Clear it:
+
+```text
+/goal clear
+```
+
+## What goals are for
+
+Use a goal when a session has a concrete outcome that should remain visible
+across many turns:
+
+- A PR closeout: fix, verify, autoreview, push, and open or update the PR.
+- A debug run: reproduce the bug, identify the owning surface, patch, and prove
+  the fix.
+- A docs pass: read the relevant docs, write the new page, cross-link it, and
+  verify the docs build.
+- A maintenance task: inspect current state, make bounded changes, run the right
+  checks, and report what changed.
+
+A goal is not a task queue. Use [Task Flow](/automation/taskflow),
+[tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
+[standing orders](/automation/standing-orders) when work should run detached,
+repeat on a schedule, fan out into managed sub-work, or persist as a policy.
+
+## Command reference
+
+`/goal` without arguments prints the current goal summary:
+
+```text
+Goal
+Status: active
+Objective: get CI green for PR 87469 and push the fix
+Tokens used: 12k
+Token budget: 12k/50k
+
+Commands: /goal pause, /goal complete, /goal clear
+```
+
+Commands:
+
+- `/goal` or `/goal status` shows the current goal.
+- `/goal start <objective>` creates a new goal for the current session.
+- `/goal set <objective>` and `/goal create <objective>` are aliases for
+  `start`.
+- `/goal pause [note]` pauses an active goal.
+- `/goal resume [note]` resumes a paused, blocked, usage-limited, or
+  budget-limited goal.
+- `/goal complete [note]` marks the goal achieved.
+- `/goal done [note]` is an alias for `complete`.
+- `/goal block [note]` marks the goal blocked.
+- `/goal blocked [note]` is an alias for `block`.
+- `/goal clear` removes the goal from the session.
+
+Only one goal can exist on a session at a time. Starting a second goal fails
+until the current one is cleared.
+
+## Statuses
+
+Goals use a small status set:
+
+- `active`: the session is pursuing the goal.
+- `paused`: the operator paused the goal; `/goal resume` makes it active again.
+- `blocked`: the agent or operator reported a real blocker; `/goal resume`
+  makes it active again when new information or state is available.
+- `budget_limited`: the configured token budget was reached; `/goal resume`
+  restarts pursuit from the same objective.
+- `usage_limited`: reserved for usage-limit stop states; `/goal resume`
+  restarts pursuit when allowed.
+- `complete`: the goal was achieved. Complete goals are terminal; use
+  `/goal clear` before starting another goal.
+
+`/new` and `/reset` clear the current session goal because they intentionally
+start fresh session context.
+
+## Token budgets
+
+Goals can have an optional positive token budget. The budget is stored with the
+goal and measured from the session's fresh token count at creation time. If the
+current session only has stale or unknown token usage when the goal starts,
+OpenClaw waits for the next fresh session token snapshot and uses that as the
+baseline, so tokens spent before the goal existed are not charged to the goal.
+
+When token usage reaches the budget, the goal changes to `budget_limited`. This
+does not delete the goal or erase the objective. It tells the operator and the
+agent that the goal is no longer actively being pursued until it is resumed or
+cleared.
+
+Token budgets are a session-goal guardrail, not a billing cap. Provider quota,
+cost reporting, and context-window behavior still use the normal OpenClaw
+usage and model controls.
+
+## Model tools
+
+OpenClaw exposes three core goal tools to agent harnesses:
+
+- `get_goal`: read the current session goal, including status, objective, token
+  usage, and token budget.
+- `create_goal`: create a goal only when the user, system, or developer
+  instructions explicitly request one. It fails if the session already has a
+  goal.
+- `update_goal`: mark the goal `complete` or `blocked`.
+
+The model cannot silently pause, resume, clear, or replace a goal. Those are
+operator/session controls through `/goal` and reset commands. This keeps the
+agent from quietly moving the target while preserving a clean path for the
+agent to report achievement or a genuine blocker.
+
+The `update_goal` tool should mark a goal `complete` only when the objective is
+actually achieved. It should mark a goal `blocked` only when the same blocking
+condition has repeated and the agent cannot make meaningful progress without
+new user input or an external-state change.
+
+## TUI
+
+The TUI keeps the active session's goal visible in the footer next to the
+agent, session, model, run controls, and token counts.
+
+Footer examples:
+
+- `Pursuing goal (12k/50k)` for an active goal with a token budget.
+- `Goal paused (/goal resume)` for a paused goal.
+- `Goal blocked (/goal resume)` for a blocked goal.
+- `Goal hit usage limits (/goal resume)` for a usage-limited goal.
+- `Goal unmet (50k/50k)` for a budget-limited goal.
+- `Goal achieved (42k)` for a completed goal.
+
+The footer is intentionally compact. Use `/goal` for the full objective, note,
+token budget, and available commands.
+
+## Channel behavior
+
+The `/goal` command works in command-capable OpenClaw sessions, including the
+TUI and chat surfaces that permit text commands. Goal state is attached to the
+session key, not the transport. If two surfaces use the same session, they see
+the same goal.
+
+Goal state is not a delivery directive. It does not force replies through a
+channel, change queue behavior, approve tools, or schedule work.
+
+## Troubleshooting
+
+`Goal error: goal already exists` means the session already has a goal. Use
+`/goal` to inspect it, `/goal complete` if it is done, or `/goal clear` before
+starting a different objective.
+
+`Goal error: goal not found` means the session has no goal yet. Start one with
+`/goal start <objective>`.
+
+`Goal error: goal is already complete` means the goal is terminal. Clear it
+before starting or resuming another objective.
+
+If token usage looks like `0` or stale, the active session may not have a fresh
+token snapshot yet. Usage refreshes as OpenClaw records session usage and
+transcript-derived totals.
+
+## Related
+
+- [Slash commands](/tools/slash-commands)
+- [TUI](/web/tui)
+- [Session tool](/concepts/session-tool)
+- [Compaction](/concepts/compaction)
+- [Task Flow](/automation/taskflow)
+- [Standing orders](/automation/standing-orders)
+
+
+
 # Section: tools/grok-search.md
 
 ---
@@ -141838,11 +145417,12 @@ sidebarTitle: "Image generation"
 The `image_generate` tool lets the agent create and edit images using your
 configured providers. In chat sessions, image generation runs asynchronously:
 OpenClaw records a background task, returns the task id immediately, and wakes
-the agent when the provider finishes. The completion agent must send generated
-images through the `message` tool. If the requester session is inactive or
-its active wake fails, and some generated images are still missing from
-message-tool delivery, OpenClaw sends an idempotent direct fallback with only
-the missing images.
+the agent when the provider finishes. The completion agent follows the
+session's normal visible-reply mode: automatic final reply delivery when
+configured, or `message(action="send")` when the session requires the message
+tool. If the requester session is inactive or its active wake fails, and some
+generated images are still missing from the completion reply, OpenClaw sends an
+idempotent direct fallback with only the missing images.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -142402,18 +145982,18 @@ The table lists representative tools so you can recognize the surface. It is
 not the full policy reference. For exact groups, defaults, and allow/deny
 semantics, use [Tools and custom providers](/gateway/config-tools).
 
-| Category                | Use when the agent needs to...                                                | Representative tools                                                 | Read next                                                              |
-| ----------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `code_execution`                                  | [Exec](/tools/exec), [Code execution](/tools/code-execution)           |
-| Files                   | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                               | [Apply patch](/tools/apply-patch)                                      |
-| Web                     | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                 |
-| Browser                 | Operate a browser session                                                     | `browser`                                                            | [Browser](/tools/browser)                                              |
-| Messaging and channels  | Send replies or channel actions                                               | `message`                                                            | [Agent send](/tools/agent-send)                                        |
-| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`           | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
-| Automation              | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                          | [Automation](/automation)                                              |
-| Gateway and nodes       | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
-| Media                   | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                |
-| Large OpenClaw catalogs | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                   | [Tool Search](/tools/tool-search)                                      |
+| Category                | Use when the agent needs to...                                                | Representative tools                                                 | Read next                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `code_execution`                                  | [Exec](/tools/exec), [Code execution](/tools/code-execution)                                |
+| Files                   | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                               | [Apply patch](/tools/apply-patch)                                                           |
+| Web                     | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                      |
+| Browser                 | Operate a browser session                                                     | `browser`                                                            | [Browser](/tools/browser)                                                                   |
+| Messaging and channels  | Send replies or channel actions                                               | `message`                                                            | [Agent send](/tools/agent-send)                                                             |
+| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`, `goal`   | [Goal](/tools/goal), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
+| Automation              | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                          | [Automation](/automation)                                                                   |
+| Gateway and nodes       | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                            |
+| Media                   | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                                     |
+| Large OpenClaw catalogs | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                   | [Tool Search](/tools/tool-search)                                                           |
 
 <Note>
 Tool Search is an experimental OpenClaw agent surface. Codex harness runs use
@@ -143386,11 +146966,12 @@ For async tools, OpenClaw submits the request to the provider, returns a task
 id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
-user and relay the result through the message tool. If the requester session
-is inactive or its active wake fails, and some generated media is still
-missing from message-tool delivery, OpenClaw sends an idempotent direct
-fallback with only the missing media. Media already delivered through the
-message tool is not posted again.
+user through the session's normal visible-reply mode: automatic final reply
+delivery when configured, or `message(action="send")` when the session requires
+the message tool. If the requester session is inactive or its active wake
+fails, and some generated media is still missing from the completion reply,
+OpenClaw sends an idempotent direct fallback with only the missing media. Media
+already delivered by the completion reply is not posted again.
 
 ## Speech-to-text and Voice Call
 
@@ -143988,12 +147569,12 @@ fal, Google, MiniMax, and OpenRouter today.
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
 when the track is ready so the agent can tell the user and attach the
-finished audio. Generated-media completions are delivered by the agent through
-the message tool. If the requester session is inactive or its active wake
-fails, and some generated audio is still missing from message-tool delivery,
-OpenClaw sends an idempotent direct fallback with only the missing audio. The
-completion wake explicitly warns the agent that normal final replies are
-private for this route.
+finished audio. The completion agent follows the session's normal visible-reply
+mode: automatic final reply delivery when configured, or `message(action="send")`
+when the session requires the message tool. If the requester session is
+inactive or its active wake fails, and some generated audio is still missing
+from the completion reply, OpenClaw sends an idempotent direct fallback with
+only the missing audio.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
@@ -146497,6 +150078,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, Gateway and system uptime, plus provider usage/quota when available.
+    - `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear` manages the current session's durable [goal](/tools/goal).
     - `/diagnostics [note]` is the owner-only support-report flow for Gateway bugs and Codex harness runs. It asks for explicit exec approval every time before running `openclaw gateway diagnostics export --json`; do not approve diagnostics with an allow-all rule. After approval, it sends a pasteable report with the local bundle path, manifest summary, privacy notes, and relevant session ids. In group chats, the approval prompt and report go to the owner privately. When the active session uses the OpenAI Codex harness, the same approval also sends relevant Codex feedback to OpenAI servers and the completed reply lists the OpenClaw session ids, Codex thread ids, and `codex resume <thread-id>` commands. See [Diagnostics Export](/gateway/diagnostics).
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
@@ -147886,15 +151468,15 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 # Section: tools/tokenjuice.md
 
 ---
-summary: "Compact noisy exec and bash tool results with an optional bundled plugin"
+summary: "Compact noisy exec and bash tool results with the optional Tokenjuice plugin"
 title: "Tokenjuice"
 read_when:
   - You want shorter `exec` or `bash` tool results in OpenClaw
-  - You want to enable the bundled tokenjuice plugin
+  - You want to install or enable the Tokenjuice plugin
   - You need to understand what tokenjuice changes and what it leaves raw
 ---
 
-`tokenjuice` is an optional bundled plugin that compacts noisy `exec` and `bash`
+`tokenjuice` is an optional external plugin that compacts noisy `exec` and `bash`
 tool results after the command has already run.
 
 It changes the returned `tool_result`, not the command itself. Tokenjuice does
@@ -147906,7 +151488,13 @@ trims the output before it goes back into the active harness session.
 
 ## Enable the plugin
 
-Fast path:
+Install once:
+
+```bash
+openclaw plugins install clawhub:@openclaw/tokenjuice
+```
+
+Then enable it:
 
 ```bash
 openclaw config set plugins.entries.tokenjuice.enabled true
@@ -147917,9 +151505,6 @@ Equivalent:
 ```bash
 openclaw plugins enable tokenjuice
 ```
-
-OpenClaw already ships the plugin. There is no separate `plugins install`
-or `tokenjuice install openclaw` step.
 
 If you prefer editing config directly:
 
@@ -149557,10 +153142,12 @@ session:
 1. OpenClaw submits the request to the provider and immediately returns a task id.
 2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
-4. The agent tells the user and attaches the finished video through the
-   message tool. If the requester session is inactive or its active wake
-   fails, and some generated video is still missing from message-tool delivery,
-   OpenClaw sends an idempotent direct fallback with only the missing video.
+4. The agent tells the user through the session's normal visible-reply mode:
+   final reply delivery when automatic, or `message(action="send")` when the
+   session requires the message tool. If the requester session is inactive or
+   its active wake fails, and some generated video is still missing from the
+   completion reply, OpenClaw sends an idempotent direct fallback with only the
+   missing video.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another
@@ -150109,6 +153696,21 @@ Truncate output to this many characters.
     fetches of the same URL.
   </Step>
 </Steps>
+
+## Progress updates
+
+`web_fetch` emits a public progress line only when the fetch is still pending
+after five seconds:
+
+```text
+Fetching page content...
+```
+
+Fast cache hits and quick network responses finish before the timer fires, so
+they do not show a progress line. If the call is canceled, the timer is cleared.
+When the fetch eventually completes, the agent receives the normal tool result;
+the progress line is only channel UI state and never contains fetched page
+content.
 
 ## Config
 
@@ -151540,7 +155142,7 @@ Notes:
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + think/fast/verbose/trace/reasoning + token counts + deliver.
+- Footer: connection state + agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -151554,6 +155156,9 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- If the session has a [goal](/tools/goal), the footer shows its compact state
+  such as `Pursuing goal`, `Goal paused (/goal resume)`, or
+  `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 
 ## Sending + delivery
@@ -151602,6 +155207,7 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full>`
+- `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/deliver <on|off>`
