@@ -854,6 +854,13 @@ The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksm
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
+Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
+
+```bash
+version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
+  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
+```
+
 Changed gate:
 
 ```bash
@@ -2246,11 +2253,9 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
-- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
-- If `jobs.json` contains malformed rows, the Gateway keeps valid jobs running, removes the malformed rows from the active store, and saves the raw rows beside it in `jobs-quarantine.json` for later repair or review.
-- After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
-- When `jobs.json` is edited while the Gateway is running or stopped, OpenClaw compares the changed schedule fields with pending runtime slot metadata and clears stale `nextRunAtMs` values. Pure formatting or key-order-only rewrites preserve the pending slot.
+- Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database so restarts do not lose schedules.
+- On upgrade, legacy `~/.openclaw/cron/jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. Malformed job rows are skipped from runtime and copied to `jobs-quarantine.json` for later repair or review.
+- `cron.store` still names the logical cron store key and legacy import path. After import, editing that JSON file no longer changes active cron jobs; use `openclaw cron add|edit|remove` or the Gateway cron RPC methods instead.
 - All cron executions create [background task](/automation/tasks) records.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled out of the channel-connect window instead of replaying immediately, so Discord/Telegram startup and native-command setup stay responsive after restarts.
 - One-shot jobs (`--at`) auto-delete after success by default.
@@ -2668,9 +2673,7 @@ Model override note:
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
-The runtime state sidecar is derived from `cron.store`: a `.json` store such as `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path without a `.json` suffix appends `-state.json`.
-
-If you hand-edit `jobs.json`, leave `jobs-state.json` out of source control. OpenClaw uses that sidecar for pending slots, active markers, last-run metadata, and the schedule identity that tells the scheduler when an externally edited job needs a fresh `nextRunAtMs`.
+`cron.store` is a logical store key and legacy import path. Existing stores are imported into SQLite on first load and archived; future cron changes should go through the CLI or Gateway API.
 
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
@@ -2682,7 +2685,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune run-log files.
+    `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.keepLines` limits retained SQLite run-history rows per job; `maxBytes` is retained for config compatibility with older file-backed run logs.
   </Accordion>
 </AccordionGroup>
 
@@ -4087,7 +4090,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and cron">
-    A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
+    Cron job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
     See [Cron Jobs](/automation/cron-jobs).
 
@@ -5856,7 +5859,7 @@ To restrict who can click a button, set `allowedUsers` on that button (Discord u
 
 Component callbacks expire after 30 minutes by default. Set `channels.discord.agentComponents.ttlMs` to change that callback registry lifetime for the default Discord account, or `channels.discord.accounts.<accountId>.agentComponents.ttlMs` to override one account in a multi-account setup. The value is milliseconds, must be a positive integer, and is capped at `86400000` (24 hours). Longer TTLs are useful for review or approval workflows that need buttons to remain usable, but they also extend the window where an old Discord message can still trigger an action. Prefer the shortest TTL that fits the workflow, and keep the default when stale callbacks would be surprising.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai-codex` or `vllm`.
+The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai` or `vllm`.
 
 File attachments:
 
@@ -6699,7 +6702,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -6736,7 +6739,7 @@ Notes:
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice) for behavior rules and examples.
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
-- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai-codex/gpt-5.5"`.
+- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai/gpt-5.5"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. The supported realtime bootstrap files are limited to those profile files; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - In OpenAI `agent-proxy` realtime mode, set `voice.realtime.requireWakeName: true` to keep Discord realtime voice silent until a transcript starts or ends with a wake name. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. Wake-name gating disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
@@ -6827,7 +6830,7 @@ Default agent-proxy voice-channel session example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         followUsersEnabled: true,
         followUsers: ["123456789012345678"],
         realtime: {
@@ -6877,7 +6880,7 @@ Realtime bidi example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -6900,7 +6903,7 @@ Voice as an extension of an existing Discord channel session:
       voice: {
         enabled: true,
         mode: "agent-proxy",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         agentSession: {
           mode: "target",
           target: "channel:123456789012345678",
@@ -6935,7 +6938,7 @@ Echo-heavy OpenAI Realtime example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -9987,6 +9990,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (bundled plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused.
 - [Slack](/channels/slack) - Bolt SDK; workspace apps.
+- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (bundled plugin).
 - [Synology Chat](/channels/synology-chat) - Synology NAS Chat via outgoing+incoming webhooks (bundled plugin).
 - [Telegram](/channels/telegram) - Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) - Urbit-based messenger (bundled plugin).
@@ -13597,9 +13601,10 @@ Uploaded files are stored in a `/OpenClawShared/` folder in the configured Share
 OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API).
 
 - CLI: `openclaw message poll --channel msteams --target conversation:<id> ...`
-- Votes are recorded by the gateway in `~/.openclaw/msteams-polls.json`.
+- Votes are recorded by the gateway in OpenClaw plugin-state SQLite under `state/openclaw.sqlite`.
+- Existing `msteams-polls.json` files are imported once when the MSTeams plugin starts.
 - The gateway must stay online to record votes.
-- Polls do not auto-post result summaries yet (inspect the store file if needed).
+- Polls do not auto-post result summaries yet, and there is no supported poll-results CLI yet.
 
 ## Presentation cards
 
@@ -16906,6 +16911,331 @@ When a single Slack message contains multiple file attachments:
 
 
 
+# Section: channels/sms.md
+
+---
+summary: "Twilio SMS channel setup, access controls, and webhook configuration"
+read_when:
+  - You want to connect OpenClaw to SMS through Twilio
+  - You need SMS webhook or allowlist setup
+title: "SMS"
+---
+
+OpenClaw can receive and send SMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route, validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
+
+<CardGroup cols={3}>
+  <Card title="Pairing" icon="link" href="/channels/pairing">
+    Default DM policy for SMS is pairing.
+  </Card>
+  <Card title="Gateway security" icon="shield" href="/gateway/security">
+    Review webhook exposure and sender access controls.
+  </Card>
+  <Card title="Channel troubleshooting" icon="wrench" href="/channels/troubleshooting">
+    Cross-channel diagnostics and repair playbooks.
+  </Card>
+</CardGroup>
+
+## Before you begin
+
+You need:
+
+- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
+- The Twilio Account SID and Auth Token.
+- A public HTTPS URL that reaches your OpenClaw Gateway.
+- A sender policy choice: `pairing` for private use, `allowlist` for preapproved phone numbers, or `open` only for intentionally public SMS access.
+
+Use one Twilio number for both SMS and Voice Call if the number has both capabilities. Configure the SMS webhook and Voice webhook separately in Twilio; this page only covers the SMS webhook.
+
+## Quick Setup
+
+<Steps>
+  <Step title="Create or choose a Twilio sender">
+    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
+
+    - Account SID, for example `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+    - Auth Token
+    - Sender phone number, for example `+15551234567`
+
+    If you use a Messaging Service instead of a fixed sender number, save the Messaging Service SID, for example `MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`.
+
+  </Step>
+
+  <Step title="Configure the SMS channel">
+
+Save this as `sms.patch.json5` and change the placeholders:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Apply it:
+
+```bash
+openclaw config patch --file ./sms.patch.json5 --dry-run
+openclaw config patch --file ./sms.patch.json5
+```
+
+  </Step>
+
+  <Step title="Point Twilio at the Gateway webhook">
+    In the Twilio phone number settings, open **Messaging** and set **A message comes in** to:
+
+```text
+https://gateway.example.com/webhooks/sms
+```
+
+    Use HTTP `POST`. The default local path is `/webhooks/sms`; change `channels.sms.webhookPath` if you need a different route.
+
+  </Step>
+
+  <Step title="Start the Gateway and approve first sender">
+
+```bash
+openclaw gateway
+```
+
+Send a text message to the Twilio number. The first message creates a pairing request. Approve it:
+
+```bash
+openclaw pairing list sms
+openclaw pairing approve sms <CODE>
+```
+
+    Pairing codes expire after 1 hour.
+
+  </Step>
+</Steps>
+
+## Configuration Examples
+
+### Config file
+
+Use config-file setup when you want the channel definition to travel with the Gateway config:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+### Environment variables
+
+Use env setup for single-account deployments where secrets come from the host environment:
+
+```bash
+export TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+export TWILIO_AUTH_TOKEN="<twilio-auth-token>"
+export TWILIO_PHONE_NUMBER="+15551234567"
+export SMS_PUBLIC_WEBHOOK_URL="https://gateway.example.com/webhooks/sms"
+```
+
+Then enable the channel in config:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+`TWILIO_SMS_FROM` is accepted as an alias for `TWILIO_PHONE_NUMBER`. Use `TWILIO_MESSAGING_SERVICE_SID` instead of a phone-number sender when Twilio should choose the sender from a Messaging Service.
+
+### Allowlist-only private number
+
+Use `allowlist` when only known phone numbers should be able to talk to the agent:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "allowlist",
+      allowFrom: ["+15557654321"],
+    },
+  },
+}
+```
+
+### Messaging Service sender
+
+Use `messagingServiceSid` instead of `fromNumber` when Twilio should choose the sender through a Messaging Service:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+If both `fromNumber` and `messagingServiceSid` are present after config and env resolution, `fromNumber` is used.
+
+### Default outbound target
+
+Set `defaultTo` when automation or agent-initiated delivery should have a default destination if a send flow omits an explicit target:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      defaultTo: "+15557654321",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+    },
+  },
+}
+```
+
+## Access control
+
+`channels.sms.dmPolicy` controls direct SMS access:
+
+- `pairing` (default)
+- `allowlist` (requires at least one sender in `allowFrom`)
+- `open` (requires `allowFrom` to include `"*"`)
+- `disabled`
+
+`allowFrom` entries should be E.164 phone numbers such as `+15551234567`. `sms:` prefixes are accepted and normalized. For a private assistant, prefer `dmPolicy: "allowlist"` with explicit phone numbers.
+
+## Sending SMS
+
+Outbound SMS targets use the `sms:` service prefix with the SMS channel selected:
+
+```bash
+openclaw message send --channel sms --target sms:+15551234567 --message "hello"
+```
+
+When channel selection is implicit, `twilio-sms:+15551234567` selects this channel without taking over the existing channel-owned `sms:` service prefix used by iMessage.
+
+```bash
+openclaw message send --target twilio-sms:+15551234567 --message "hello"
+```
+
+The CLI requires an explicit `--target`. `defaultTo` is for automation and agent-initiated delivery paths where the target can be resolved from channel config.
+
+Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
+
+SMS output is plain text. OpenClaw strips markdown, flattens fenced code blocks, preserves readable links, and chunks long replies before sending them through Twilio.
+
+## Verify Setup
+
+After the Gateway starts:
+
+1. Confirm the Gateway log shows the SMS webhook route.
+2. Send an SMS to the Twilio number from your phone.
+3. Run `openclaw pairing list sms`.
+4. Approve the pairing code with `openclaw pairing approve sms <CODE>`.
+5. Send another SMS and confirm the agent replies.
+
+For outbound-only testing, use:
+
+```bash
+openclaw message send --channel sms --target sms:+15557654321 --message "OpenClaw SMS test"
+```
+
+## Webhook security
+
+By default, OpenClaw validates `X-Twilio-Signature` using `publicWebhookUrl` and `authToken`. Keep `publicWebhookUrl` byte-for-byte aligned with the URL configured in Twilio, including scheme, host, path, and query string.
+
+For local tunnel testing only, you can set:
+
+```json5
+{
+  channels: {
+    sms: {
+      dangerouslyDisableSignatureValidation: true,
+    },
+  },
+}
+```
+
+Do not use disabled signature validation on a public Gateway.
+
+## Multi-account config
+
+Use `accounts` when you operate more than one Twilio number:
+
+```json5
+{
+  channels: {
+    sms: {
+      accounts: {
+        support: {
+          enabled: true,
+          accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          authToken: "twilio-auth-token",
+          fromNumber: "+15551234567",
+          publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
+          webhookPath: "/webhooks/sms/support",
+          dmPolicy: "allowlist",
+          allowFrom: ["+15557654321"],
+        },
+      },
+    },
+  },
+}
+```
+
+Each account should use a distinct `webhookPath`.
+
+## Troubleshooting
+
+### Twilio returns 403 or OpenClaw rejects the webhook
+
+Check that `publicWebhookUrl` exactly matches the URL configured in Twilio, including scheme, host, path, and query string. Twilio signs the public URL string, so proxy rewrites and alternate hostnames can break signature validation.
+
+### No pairing request appears
+
+Check the Twilio number's **Messaging** webhook URL and method. It must point to the SMS webhook URL and use `POST`. Also confirm the Gateway is reachable from the public internet or through your tunnel.
+
+### Outbound sends fail
+
+Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. If you use a trial Twilio account, the destination number may need to be verified in Twilio before outbound SMS will send.
+
+### Messages arrive but the agent does not answer
+
+Check `dmPolicy` and `allowFrom`. With the default `pairing` policy, the sender must be approved before normal agent turns are processed.
+
+
+
 # Section: channels/synology-chat.md
 
 ---
@@ -17689,7 +18019,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
     - `react` (`chatId`, `messageId`, `emoji`)
     - `deleteMessage` (`chatId`, `messageId`)
-    - `editMessage` (`chatId`, `messageId`, `content`)
+    - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
     Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
@@ -22364,6 +22694,7 @@ File + dialog helpers:
 
 ```bash
 openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
+openclaw browser upload media://inbound/file.pdf --ref <ref>
 openclaw browser waitfordownload
 openclaw browser download <ref> report.pdf
 openclaw browser dialog --accept
@@ -22374,6 +22705,10 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp
 root). Use `waitfordownload` or `download` when the agent needs to wait for a
 specific file and return its path; those explicit waiters own the next download.
+Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed
+inbound media, including `media://inbound/<id>` and sandbox-relative
+`media/inbound/<id>` references. Nested media refs, traversal, and arbitrary
+local paths remain rejected.
 When an action opens a modal dialog, the action response returns
 `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to
 answer it directly. Dialogs handled outside OpenClaw appear under
@@ -23850,7 +24185,7 @@ Skipped runs are tracked separately from execution errors. They do not affect re
 
 For isolated jobs that target a local configured model provider, cron runs a lightweight provider preflight before starting the agent turn. Loopback, private-network, and `.local` `api: "ollama"` providers are probed at `/api/tags`; local OpenAI-compatible providers such as vLLM, SGLang, and LM Studio are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; matching dead endpoints are cached for 5 minutes to avoid many jobs hammering the same local server.
 
-Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot. Malformed job rows are removed from active `jobs.json` at load time after their raw contents are copied to `jobs-quarantine.json`.
+Note: cron jobs, pending runtime state, and run history live in the shared SQLite state database. Legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. After import, edit schedules with `openclaw cron add|edit|remove` instead of editing JSON files.
 
 ### Manual runs
 
@@ -23931,7 +24266,7 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 Retention and pruning are controlled in config:
 
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
-- `cron.runLog.maxBytes` and `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` remains accepted for compatibility with older file-backed run logs.
 
 ## Migrating older jobs
 
@@ -24798,7 +25133,7 @@ Notes:
 - Doctor reports cron jobs with explicit `payload.model` overrides, including provider namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
 - On Linux, doctor warns when the user's crontab still runs legacy `~/.openclaw/bin/ensure-whatsapp.sh`; that script is no longer maintained and can log false WhatsApp gateway outages when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
-- Doctor rewrites legacy `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale session route pins. `--fix` moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, preserves session auth-profile pins such as `openai-codex:...`, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
+- Doctor rewrites legacy `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale session route pins. `--fix` also migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
 - Doctor cleans legacy plugin dependency staging state created by older OpenClaw versions and relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins that are referenced by config, such as `plugins.entries`, configured channels, configured provider/search settings, or configured agent runtimes. During package updates, doctor skips package-manager plugin repair until the package swap is complete; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If the download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.deny`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides when plugin discovery is healthy.
 - Doctor quarantines invalid plugin config by disabling the affected `plugins.entries.<id>` entry and removing its invalid `config` payload. Gateway startup already skips only that bad plugin so other plugins and channels can keep running.
@@ -26407,7 +26742,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
 - For `image describe`, `--file` accepts local paths and HTTP(S) image URLs. Remote URLs use the normal media-fetch SSRF policy.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
+- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai/<model>` uses the OpenAI provider path with either API-key or ChatGPT/Codex OAuth auth.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -26450,7 +26785,7 @@ Notes:
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
 - Local `model run --model <provider/model>` can use exact bundled static catalog rows from `models list --all` before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
 - For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` plus `temperature: 0`; use `mistral/mistral-medium-3-5` with default temperature or a non-zero reasoning-mode value such as `0.7`.
-- `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
+- Codex Responses local probes are the narrow exception: OpenClaw adds a minimal system instruction so the transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
@@ -27068,7 +27403,8 @@ For broader testing context, see [Testing](/help/testing).
 
 ## OpenClaw as an MCP client registry
 
-This is the `openclaw mcp list`, `show`, `set`, and `unset` path.
+This is the `openclaw mcp list`, `show`, `status`, `probe`, `add`, `set`,
+`configure`, `tools`, `login`, `reload`, and `unset` path.
 
 These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP server definitions under `mcp.servers` in OpenClaw config.
 
@@ -27077,10 +27413,19 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 <AccordionGroup>
   <Accordion title="Important behavior">
     - these commands only read or write OpenClaw config
-    - they do not connect to the target MCP server
-    - they do not validate whether the command, URL, or remote transport is reachable right now
+    - `status`, `list`, `show`, `set`, `configure`, `tools`, `reload`, and `unset` do not connect to the target MCP server
+    - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
+    - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
+    - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
+    - `timeout` and `connectTimeout` set per-server request and connection timeouts in seconds
+    - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
+    - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
+    - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
+    - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
+    - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable) and one-shot embedded runs clean them up at run end
 
   </Accordion>
@@ -27107,14 +27452,28 @@ Commands:
 
 - `openclaw mcp list`
 - `openclaw mcp show [name]`
+- `openclaw mcp status`
+- `openclaw mcp probe [name]`
+- `openclaw mcp add <name> [flags]`
 - `openclaw mcp set <name> <json>`
+- `openclaw mcp configure <name> [flags]`
+- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
+- `openclaw mcp login <name> [--code code]`
+- `openclaw mcp reload`
 - `openclaw mcp unset <name>`
 
 Notes:
 
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
+- `status` classifies configured transports without connecting.
+- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
 - `set` expects one JSON object value on the command line.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
+- `reload` disposes cached in-process MCP runtimes. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
 - `unset` fails if the named server does not exist.
 
@@ -27123,8 +27482,15 @@ Examples:
 ```bash
 openclaw mcp list
 openclaw mcp show context7 --json
+openclaw mcp status
+openclaw mcp probe context7 --json
+openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
 openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
+openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
+openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
+openclaw mcp login docs
 openclaw mcp unset context7
 ```
 
@@ -27140,7 +27506,21 @@ Example config shape:
       },
       "docs": {
         "url": "https://mcp.example.com",
-        "transport": "streamable-http"
+        "transport": "streamable-http",
+        "timeout": 20,
+        "connectTimeout": 5,
+        "supportsParallelToolCalls": true,
+        "auth": "oauth",
+        "oauth": {
+          "scope": "docs.read"
+        },
+        "sslVerify": true,
+        "clientCert": "/path/to/client.crt",
+        "clientKey": "/path/to/client.key",
+        "toolFilter": {
+          "include": ["search_*"],
+          "exclude": ["admin_*"]
+        }
       }
     }
   }
@@ -27170,11 +27550,17 @@ If your MCP server genuinely needs one of the blocked variables, set it on the g
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field                 | Description                                                      |
-| --------------------- | ---------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens) |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                   |
+| Field                          | Description                                                      |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens) |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                   |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)              |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                  |
+| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`             |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints    |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                            |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server              |
 
 Example:
 
@@ -27184,6 +27570,8 @@ Example:
     "servers": {
       "remote-tools": {
         "url": "https://mcp.example.com",
+        "auth": "oauth",
+        "timeout": 20,
         "headers": {
           "Authorization": "Bearer <token>"
         }
@@ -27199,12 +27587,18 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
-| Field                 | Description                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                                      |
-| `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                       |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
+| Field                          | Description                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                                      |
+| `transport`                    | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                       |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                         |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                    |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                        |
+| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`                                   |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                          |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                  |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                    |
 
 OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
@@ -27217,7 +27611,8 @@ Example:
       "streaming-tools": {
         "url": "https://mcp.example.com/stream",
         "transport": "streamable-http",
-        "connectionTimeoutMs": 10000,
+        "connectTimeout": 10,
+        "timeout": 30,
         "headers": {
           "Authorization": "Bearer <token>"
         }
@@ -28000,7 +28395,7 @@ The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file under `skills/<name>/`.
 - Per-skill config values from `skills.config`.
-- Supported OAuth credentials from Hermes `auth.json` and OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set. Hermes `auth.json` OAuth entries are legacy state reported for manual OpenAI reauth or doctor repair.
 - Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys
@@ -28131,8 +28526,8 @@ openclaw models scan
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/API-key status section includes
 provider usage windows and quota snapshots.
-Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
-Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
+Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI,
+MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
 when available; otherwise OpenClaw falls back to matching OAuth/API-key
 credentials from auth profiles, env, or config.
 In `--json` output, `auth.providers` is the env/config/store-aware provider
@@ -28143,10 +28538,10 @@ Use `--agent <id>` to inspect a configured agent's model/auth state. When omitte
 the command uses `OPENCLAW_AGENT_DIR` if set, otherwise the
 configured default agent.
 Probe rows can come from auth profiles, env credentials, or `models.json`.
-For Codex OAuth troubleshooting, `openclaw models status`,
-`openclaw models auth list --provider openai-codex`, and
+For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`,
+`openclaw models auth list --provider openai`, and
 `openclaw config get agents.defaults.model --json` are the quickest way to
-confirm whether an agent has a usable `openai-codex` auth profile for
+confirm whether an agent has a usable `openai` OAuth profile for
 `openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai#check-and-recover-codex-oauth-routing).
 
 Notes:
@@ -28179,7 +28574,7 @@ Notes:
   cap differs from the native context window; JSON rows include `contextTokens`
   when a provider exposes that cap.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or
-  `openai-codex`. It does not accept display labels from interactive provider
+  `openai`. It does not accept display labels from interactive provider
   pickers, such as `Moonshot AI`.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
@@ -28284,7 +28679,7 @@ provider you choose.
 
 `models auth list` lists saved auth profiles for the selected agent without
 printing token, API-key, or OAuth secret material. Use `--provider <id>` to
-filter to one provider, such as `openai-codex`, and `--json` for scripting.
+filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
@@ -28295,15 +28690,15 @@ specific configured agent store. The parent `--agent` flag is honored by
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
 Use `--method api-key` only when you want to add an OpenAI API-key profile,
-usually as a backup for Codex subscription limits. The legacy
-`--provider openai-codex` spelling still works for existing scripts.
+usually as a backup for Codex subscription limits. Run `openclaw doctor --fix`
+to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 Examples:
 
 ```bash
 openclaw models auth login --provider openai --set-default
 openclaw models auth login --provider openai --method api-key
-openclaw models auth paste-api-key --provider openai-codex
+openclaw models auth paste-api-key --provider openai
 openclaw models auth list --provider openai
 ```
 
@@ -28315,7 +28710,7 @@ Notes:
 - `paste-api-key` accepts API keys generated elsewhere, prompts for the key
   value, and writes it to the default profile id `<provider>:manual` unless you
   pass `--profile-id`. In automation, pipe the key on stdin, for example
-  `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai-codex`.
+  `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai`.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth
@@ -28329,7 +28724,7 @@ Notes:
   provider credentials do not appear in shell history or process lists.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
-- For `openai-codex`, OpenAI API keys and ChatGPT/OAuth token material are
+- For `openai`, OpenAI API keys and ChatGPT/OAuth token material are
   different auth shapes. Use `paste-api-key` for `sk-...` OpenAI API keys and
   `paste-token` only for token auth material.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
@@ -29788,6 +30183,8 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
 
 <Note>
 `--force` is not supported with `--link` because linked installs reuse the source path instead of copying over a managed install target.
@@ -31625,6 +32022,20 @@ Scope selection:
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
+Tail human-readable trajectory progress for stored sessions:
+
+```bash
+openclaw sessions tail
+openclaw sessions tail --follow
+openclaw sessions tail --session-key "agent:main:telegram:direct:123" --tail 25
+openclaw sessions --agent work tail --follow
+openclaw sessions --all-agents tail --follow
+```
+
+`openclaw sessions tail` renders recent trajectory JSONL events as compact progress lines. Without `--session-key`, it tails running sessions first, then the latest stored session. `--tail <count>` controls how many existing events print before follow mode; the default is `80`, and `0` starts at the current end. `--follow` keeps watching the selected trajectory files, including relocated files referenced by `<session>.trajectory-path.json`.
+
+The progress view is intentionally conservative: prompt text, tool arguments, and tool result bodies are not printed. Tool calls show the tool name with `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`; model completion lines show provider/model and terminal status.
+
 Export a trajectory bundle for a stored session:
 
 ```bash
@@ -31682,7 +32093,7 @@ openclaw sessions cleanup --json
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
-- Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
+- Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
@@ -31810,7 +32221,7 @@ openclaw setup --non-interactive --mode remote --remote-url wss://gateway-host:1
 # Section: cli/skills.md
 
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
@@ -31827,6 +32238,7 @@ directories, verify ClawHub skills, and update ClawHub-tracked installs.
 Related:
 
 - Skills system: [Skills](/tools/skills)
+- Skill Workshop: [Skill Workshop](/tools/skill-workshop)
 - Skills config: [Skills config](/tools/skills-config)
 - ClawHub installs: [ClawHub](/clawhub/cli)
 
@@ -31864,6 +32276,14 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
@@ -31926,6 +32346,31 @@ Notes:
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Skill Workshop
+
+`openclaw skills workshop` manages pending skill proposals in the selected
+workspace. Proposals are not active skills until applied. For proposal storage,
+support-file safeguards, Gateway methods, and approval policy, see
+[Skill Workshop](/tools/skill-workshop).
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal ./PROPOSAL.md
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal-dir ./qa-check-proposal
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+```
 
 ## Related
 
@@ -34406,7 +34851,7 @@ configuration. They are different layers:
 
 | Layer         | Examples                                     | What it means                                                       |
 | ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| Provider      | `openai`, `anthropic`, `openai-codex`        | How OpenClaw authenticates, discovers models, and names model refs. |
+| Provider      | `openai`, `anthropic`, `github-copilot`      | How OpenClaw authenticates, discovers models, and names model refs. |
 | Model         | `gpt-5.5`, `claude-opus-4-6`                 | The model selected for the agent turn.                              |
 | Agent runtime | `openclaw`, `codex`, `copilot`, `claude-cli` | The low level loop or backend that executes the prepared turn.      |
 | Channel       | Telegram, Discord, Slack, WhatsApp           | Where messages enter and leave OpenClaw.                            |
@@ -34441,14 +34886,14 @@ Most confusion comes from several different surfaces sharing the Codex name:
 | Surface                                          | OpenClaw name/config                 | What it does                                                                                                   |
 | ------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | Native Codex app-server runtime                  | `openai/*` model refs                | Runs OpenAI embedded agent turns through Codex app-server. This is the usual ChatGPT/Codex subscription setup. |
-| Codex OAuth auth profiles                        | `openai-codex` auth provider         | Stores ChatGPT/Codex subscription auth that the Codex app-server harness consumes.                             |
+| Codex OAuth auth profiles                        | `openai` OAuth profiles              | Stores ChatGPT/Codex subscription auth that the Codex app-server harness consumes.                             |
 | Codex ACP adapter                                | `runtime: "acp"`, `agentId: "codex"` | Runs Codex through the external ACP/acpx control plane. Use only when ACP/acpx is explicitly asked.            |
 | Native Codex chat-control command set            | `/codex ...`                         | Binds, resumes, steers, stops, and inspects Codex app-server threads from chat.                                |
 | OpenAI Platform API route for non-agent surfaces | `openai/*` plus API-key auth         | Used for direct OpenAI APIs such as images, embeddings, speech, and realtime.                                  |
 
 Those surfaces are intentionally independent. Enabling the `codex` plugin makes
 the native app-server features available; `openclaw doctor --fix` owns legacy
-`openai-codex/*` route repair and stale session pin cleanup. Selecting
+legacy Codex route repair and stale session pin cleanup. Selecting
 `openai/*` for an agent model now means "run this through Codex" unless a
 non-agent OpenAI API surface is being used.
 
@@ -34485,9 +34930,9 @@ This is the agent-facing decision tree:
    subscription-backed Codex agent experience, use `openai/<model>`.
 3. If the user explicitly chooses **OpenClaw for an OpenAI model**, keep the model ref
    as `openai/<model>` and set provider/model runtime policy to
-   `agentRuntime.id: "openclaw"`. A selected `openai-codex` auth profile is routed
+   `agentRuntime.id: "openclaw"`. A selected `openai` OAuth profile is routed
    internally through OpenClaw's Codex-auth transport.
-4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
+4. If legacy config still contains **legacy Codex model refs**, repair it to
    `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
    route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
    old model ref implied it.
@@ -34502,7 +34947,7 @@ This is the agent-facing decision tree:
 | --------------------------------------- | -------------------------------------------- |
 | Codex app-server chat/thread control    | `/codex ...` from the bundled `codex` plugin |
 | Codex app-server embedded agent runtime | `openai/*` agent model refs                  |
-| OpenAI Codex OAuth                      | `openai-codex` auth profiles                 |
+| OpenAI Codex OAuth                      | `openai` OAuth profiles                      |
 | Claude Code or other external harness   | ACP/acpx                                     |
 
 For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
@@ -34586,13 +35031,13 @@ backend.
 `auto` mode is intentionally conservative for most providers. OpenAI agent
 models are the exception: unset runtime and `auto` both resolve to the Codex
 harness. Explicit OpenClaw runtime config remains an opt-in compatibility route for
-`openai/*` agent turns; when paired with a selected `openai-codex` auth profile,
+`openai/*` agent turns; when paired with a selected `openai` OAuth profile,
 OpenClaw routes that path internally through the Codex-auth transport while
 keeping the public model ref as `openai/*`. Stale OpenAI runtime session pins are
 ignored by runtime selection and can be cleaned with `openclaw doctor --fix`.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
-`openai-codex/*` remains in config, treat that as legacy route state. Run
+legacy Codex model refs remain in config, treat that as legacy route state. Run
 `openclaw doctor --fix` to rewrite it to `openai/*` with the Codex runtime.
 
 ## GitHub Copilot agent runtime
@@ -36406,7 +36851,7 @@ See [Sandboxing](/gateway/sandboxing) and [Multi-Agent Sandbox & Tools](/tools/m
 
 Configure logging before the delegate handles any real data:
 
-- Cron run history: `~/.openclaw/cron/runs/<jobId>.jsonl`
+- Cron run history: OpenClaw shared SQLite state database
 - Session transcripts: `~/.openclaw/agents/delegate/sessions`
 - Identity provider audit logs (Exchange, Google Workspace)
 
@@ -40771,15 +41216,14 @@ Use `auth.order.openai` for the user-facing order:
 {
   auth: {
     order: {
-      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+      openai: ["openai:user@example.com", "openai:api-key-backup"],
     },
   },
 }
 ```
 
-Existing Codex subscription profiles may still use the legacy
-`openai-codex:*` profile id. The ordered API-key backup can be a normal
-`openai:*` API-key profile. When the subscription hits a Codex usage limit,
+Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key
+profiles. When the subscription hits a Codex usage limit,
 OpenClaw records the exact reset time when Codex provides one, tries the next
 ordered auth profile, and keeps the run inside the Codex harness. Once the reset
 time passes, the subscription profile is eligible again and the next automatic
@@ -41035,7 +41479,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     OpenAI-family routes are prefix-specific:
 
     - `openai/<model>` uses the native Codex app-server harness for agent turns by default. This is the usual ChatGPT/Codex subscription setup.
-    - `openai-codex/<model>` is legacy config that doctor rewrites to `openai/<model>`.
+    - legacy Codex model refs are legacy config that doctor rewrites to `openai/<model>`.
     - `openai/<model>` plus provider/model `agentRuntime.id: "openclaw"` uses OpenClaw's built-in runtime for explicit API-key or compatibility routes.
 
     See [OpenAI](/providers/openai) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
@@ -41135,26 +41579,26 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 }
 ```
 
-### OpenAI Codex OAuth
+### OpenAI ChatGPT/Codex OAuth
 
-- Provider: `openai-codex`
+- Provider: `openai`
 - Auth: OAuth (ChatGPT)
-- Legacy OpenAI Codex model ref: `openai-codex/gpt-5.5`
+- Legacy OpenAI Codex model ref: `openai/gpt-5.5`
 - Native Codex app-server harness ref: `openai/gpt-5.5`
 - Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
 - Legacy model refs: `codex/gpt-*`
-- Plugin boundary: `openai-codex/*` loads the OpenAI plugin; the native Codex app-server plugin is selected only by the Codex harness runtime or legacy `codex/*` refs.
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- Plugin boundary: `openai/*` loads the OpenAI plugin; the native Codex app-server plugin is selected by the Codex harness runtime.
+- CLI: `openclaw onboard --auth-choice openai` or `openclaw models auth login --provider openai`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
-- Override per OpenAI Codex model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- Override per OpenAI Codex model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are only attached on native Codex traffic to `chatgpt.com/backend-api`, not generic OpenAI-compatible proxies
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
-- `openai-codex/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
+- `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
-- For the common subscription plus native Codex runtime route, sign in with `openai-codex` auth but configure `openai/gpt-5.5`; OpenAI agent turns select Codex by default.
+- For the common subscription plus native Codex runtime route, sign in with `openai` auth and configure `openai/gpt-5.5`; OpenAI agent turns select Codex by default.
 - Use provider/model `agentRuntime.id: "openclaw"` only when you want the built-in OpenClaw route; otherwise keep `openai/gpt-5.5` on the default Codex harness.
-- `openai-codex/gpt-*` refs remain a legacy OpenAI Codex route. Prefer `openai/gpt-5.5` on the native Codex runtime for new agent config, and run `openclaw doctor --fix` when you want to migrate old `openai-codex/*` refs to canonical `openai/*` refs.
+- legacy Codex GPT refs are legacy state, not a live provider route. Use `openai/gpt-5.5` on the native Codex runtime for new agent config, and run `openclaw doctor --fix` to migrate old legacy Codex model refs to canonical `openai/*` refs.
 
 ```json5
 {
@@ -41171,7 +41615,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 {
   models: {
     providers: {
-      "openai-codex": {
+      openai: {
         models: [{ id: "gpt-5.5", contextTokens: 160000 }],
       },
     },
@@ -41295,36 +41739,36 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ### Other bundled provider plugins
 
-| Provider                                | Id                               | Auth env                                                     | Example model                                      |
-| --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | -------------------------------------------------- |
-| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                    |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                             |
-| Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                  |
-| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`          |
-| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                       |
-| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                  |
-| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                                | `gmi/google/gemini-3.1-flash-lite`                 |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                  |
-| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`              |
-| Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                               |
-| Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                             |
-| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                             |
-| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                     |
-| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                               |
-| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`         |
-| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                 |
-| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                           |
-| OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                  |
-| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                            |
-| Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                |
-| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                          |
-| StepFun                                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                           |
-| Together                                | `together`                       | `TOGETHER_API_KEY`                                           | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` |
-| Venice                                  | `venice`                         | `VENICE_API_KEY`                                             | -                                                  |
-| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6`      |
-| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`                  |
-| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                     |
-| Xiaomi                                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                             |
+| Provider                                | Id                               | Auth env                                                     | Example model                                              |
+| --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                            |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                                     |
+| Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                          |
+| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
+| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                               |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                          |
+| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                                | `gmi/google/gemini-3.1-flash-lite`                         |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                          |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`                      |
+| Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                                       |
+| Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                                     |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                                     |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                             |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                                       |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`                 |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                         |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                                   |
+| OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                          |
+| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                                    |
+| Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                        |
+| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                                  |
+| StepFun                                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                                   |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                                           | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                                             | -                                                          |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6`              |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`                          |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                             |
+| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`               | `xiaomi/mimo-v2-flash` / `xiaomi-token-plan/mimo-v2.5-pro` |
 
 #### Quirks worth knowing
 
@@ -41752,7 +42196,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -41879,7 +42323,7 @@ If you want to limit providers without manually listing every model, add
   agents: {
     defaults: {
       models: {
-        "openai-codex/*": {},
+        "openai/*": {},
         "vllm/*": {},
       },
     },
@@ -42780,7 +43224,7 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
-  `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
+  `openai:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical. If that local refresh token is rejected,
   OpenClaw can use a usable same-account Codex CLI token as a runtime-only
   fallback; other integrations can remain externally managed and re-read their
@@ -42866,7 +43310,7 @@ Flow shape (PKCE):
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `openclaw onboard` → auth choice `openai-codex`.
+Wizard path is `openclaw onboard` → auth choice `openai`.
 
 ## Refresh + expiry
 
@@ -42882,7 +43326,7 @@ At runtime:
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
+  `openai:default` profile, then OpenClaw-owned refreshes keep the local
   profile canonical. If the local Codex refresh fails and Codex CLI has a
   usable token for the same account, OpenClaw may use that token for the current
   runtime request without writing it back to `auth-profiles.json`.
@@ -46079,16 +46523,16 @@ Legend:
 
 ### Media delivery with block streaming
 
-`MEDIA:` directives are normal delivery metadata. When block streaming sends a
-media block early, OpenClaw remembers that delivery for the turn. If the final
-assistant payload repeats the same media URL, the final delivery strips the
-duplicate media instead of sending the attachment again.
+Streaming media must use structured payload fields such as `mediaUrl` or
+`mediaUrls`; streamed text is not parsed as an attachment command. When block
+streaming sends media early, OpenClaw remembers that delivery for the turn. If
+the final assistant payload repeats the same media URL, the final delivery
+strips the duplicate media instead of sending the attachment again.
 
 Exact duplicate final payloads are suppressed. If the final payload adds
 distinct text around media that was already streamed, OpenClaw still sends the
 new text while keeping the media single-delivery. This prevents duplicate voice
-notes or files on channels such as Telegram when an agent emits `MEDIA:` during
-streaming and the provider also includes it in the completed reply.
+notes or files on channels such as Telegram.
 
 ## Chunking algorithm (low/high bounds)
 
@@ -47631,8 +48075,8 @@ Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
 providers that support named auth profiles during login.
 
 ```bash
-openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
-openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
+openclaw models auth login --provider openai --profile-id openai:ritsuko
+openclaw models auth login --provider openai --profile-id openai:lain
 ```
 
 This is the easiest way to keep multiple OAuth logins for the same provider
@@ -49149,7 +49593,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5` for OpenAI API-key or Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`).
-  - Use `provider/*` entries such as `"openai-codex/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
+  - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
@@ -52040,12 +52484,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
+      "openai:personal": { provider: "openai", mode: "oauth" },
     },
     order: {
       anthropic: ["anthropic:default", "anthropic:work"],
-      openai: ["openai:default"],
-      "openai-codex": ["openai-codex:personal"],
+      openai: ["openai:personal", "openai:default"],
     },
   },
 
@@ -52774,8 +53217,22 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
+        timeout: 20,
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
+        },
+        auth: "oauth",
+        oauth: {
+          scope: "docs.read",
+        },
+        sslVerify: true,
+        clientCert: "/path/to/client.crt",
+        clientKey: "/path/to/client.key",
+        toolFilter: {
+          include: ["search_*"],
+          exclude: ["admin_*"],
         },
         // Optional Codex app-server projection controls.
         codex: {
@@ -52793,6 +53250,26 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
+  while excluding it from embedded OpenClaw MCP discovery and tool projection.
+- `mcp.servers.<name>.timeout` / `requestTimeoutMs`: per-server MCP request
+  timeout in seconds or milliseconds.
+- `mcp.servers.<name>.connectTimeout` / `connectionTimeoutMs`: per-server
+  connection timeout in seconds or milliseconds.
+- `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
+  adapters that can choose whether to issue parallel MCP tool calls.
+- `mcp.servers.<name>.auth`: set `"oauth"` for HTTP MCP servers that require
+  OAuth. Run `openclaw mcp login <name>` to store tokens under OpenClaw state.
+- `mcp.servers.<name>.oauth`: optional OAuth scope, redirect URL, and client
+  metadata URL overrides.
+- `mcp.servers.<name>.sslVerify`, `clientCert`, `clientKey`: HTTP TLS controls
+  for private endpoints and mutual TLS.
+- `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
+  limits the discovered MCP tools to matching names; `exclude` hides matching
+  names. Entries are exact MCP tool names or simple `*` globs. Servers with
+  resources or prompts also generate utility tool names (`resources_list`,
+  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
+  same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -52810,6 +53287,11 @@ target server during config edits.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+- Runtime discovery also honors MCP tool-list change notifications by dropping
+  the cached catalog for that session. Servers that advertise resources or
+  prompts get utility tools for listing/reading resources and listing/fetching
+  prompts. Repeated tool-call failures pause the affected server briefly before
+  another call is attempted.
 
 See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 [CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
@@ -52882,7 +53364,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 }
 ```
 
-- Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
+- Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
+- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
@@ -53603,11 +54086,11 @@ Notes:
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
+      "openai:personal": { provider: "openai", mode: "oauth" },
     },
     order: {
       anthropic: ["anthropic:default", "anthropic:work"],
-      "openai-codex": ["openai-codex:personal"],
+      openai: ["openai:personal"],
     },
   },
 }
@@ -53917,8 +54400,8 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
-- `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
+- `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
+- `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
@@ -54495,7 +54978,7 @@ candidate contains redacted secret placeholders such as `***`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
-    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `runLog`: prune retained cron run-history rows per job. `maxBytes` remains accepted for older file-backed run logs.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
@@ -55328,7 +55811,7 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
-    - Codex OAuth shadowing warnings (`models.providers.openai-codex`).
+    - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
@@ -55356,7 +55839,7 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - Channel status warnings (probed from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
-    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
+    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
@@ -55512,10 +55995,10 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="2f. Codex route repair">
     Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw OpenAI provider path.
 
-    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
+    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
     - `openai-codex/gpt-*` becomes `openai/gpt-*`.
-    - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs so `openai-codex:...` auth profiles can still be selected after the model ref becomes `openai/*`.
+    - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs.
     - Stale whole-agent runtime config and persisted session runtime pins are removed because runtime selection is provider/model-scoped.
     - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
@@ -55599,7 +56082,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - short cooldowns (rate limits/timeouts/auth failures)
     - longer disables (billing/credit failures)
 
-    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are not picked up by the embedded runtime path — that path runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt. Affected users will see a one-shot `log.warn` from the legacy sidecar loader naming `openclaw doctor --fix` and macOS Keychain (instead of the credential silently falling through to a downstream `No API key found for provider "openai-codex"`). Run `openclaw doctor --fix` once from an interactive terminal to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them like any other inline OAuth profile.
+    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are repaired only by doctor. Run `openclaw doctor --fix` once from an interactive terminal to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them as canonical OpenAI OAuth profiles.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -57365,7 +57848,7 @@ At startup, the Gateway logs the resolved default agent model together with the
 mode defaults that affect new sessions, for example:
 
 ```text
-agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)
+agent model: openai/gpt-5.5 (thinking=medium, fast=on)
 ```
 
 `thinking` comes from the default agent, model params, or global agent default;
@@ -57925,8 +58408,9 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `frequency_penalty`: number; best-effort frequency penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
 - `presence_penalty`: number; best-effort presence penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
 - `seed`: number (integer); best-effort seed forwarded to the upstream provider via the agent stream-param channel. Returns `400 invalid_request_error` for non-integer values.
+- `stop`: string or array of up to 4 strings; best-effort stop sequences forwarded to the upstream provider via the agent stream-param channel. Returns `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.
 
-When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `seed`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling.
+When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `seed`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling. `stop` also rides the stream-param channel and maps to the transport's stop field (`stop` for Chat Completions backends, `stop_sequences` for Anthropic); the OpenAI Responses API has no stop parameter, so `stop` is not applied on Responses-backed models.
 
 ### Unsupported variants
 
@@ -60135,7 +60619,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
       Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
-    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping. Dreaming-aware clients may also pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to a selected agent workspace; omitting `agentId` keeps the default-agent fallback and aggregates configured Dreaming workspaces.
+    - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }` params for selected-agent Dreaming views/actions. When `agentId` is omitted, they operate on the configured default agent workspace.
     - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
     - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one
       agent, or `agentScope: "all"` to list configured agents together.
@@ -60228,6 +60713,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+    - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Clients pass `sessionKey`, optional `agentId` when the session selection is agent-scoped, plus a transcript `messageId` previously surfaced through `chat.history`, and the Gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
 
   </Accordion>
 
@@ -67534,26 +68020,28 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
     `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
-    native Codex app-server execution. `openai-codex/gpt-*` model refs are
+    native Codex app-server execution. Legacy Codex GPT refs are
     legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
     access remains available for non-agent OpenAI API surfaces and for agent
-    models through an ordered `openai-codex` API-key profile.
+    models through an ordered `openai` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
-  <Accordion title="Why does OpenClaw still mention openai-codex?">
-    `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
+  <Accordion title="Why does OpenClaw still mention legacy OpenAI Codex prefix?">
+    `openai` is the provider and auth-profile id for both OpenAI API keys and
+    ChatGPT/Codex OAuth. You may still see legacy OpenAI Codex prefix in legacy config and
+    migration warnings.
     Older configs also used it as a model prefix:
 
     - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns
-    - `openai-codex/gpt-5.5` = legacy model route repaired by `openclaw doctor --fix`
-    - `openai/gpt-5.5` plus an ordered `openai-codex` API-key profile = API-key auth for an OpenAI agent model
-    - `openai-codex:...` = auth profile id, not a model ref
+    - legacy Codex GPT-5.5 ref = legacy model route repaired by `openclaw doctor --fix`
+    - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model
+    - legacy Codex auth profile ids = legacy auth profile id migrated by `openclaw doctor --fix`
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex`. Keep the model ref as
-    `openai/gpt-5.5`; `openai-codex/*` model refs are legacy config that
+    `openclaw models auth login --provider openai`. Keep the model ref as
+    `openai/gpt-5.5`; legacy Codex model refs are legacy config that
     `openclaw doctor --fix` rewrites.
 
   </Accordion>
@@ -67971,9 +68459,9 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Treat model choice and runtime choice separately:
 
-    - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai-codex` when you want ChatGPT/Codex subscription auth.
+    - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai` when you want ChatGPT/Codex subscription auth.
     - **Direct OpenAI API tasks outside the agent loop:** configure `OPENAI_API_KEY` for images, embeddings, speech, realtime, and other non-agent OpenAI API surfaces.
-    - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai-codex` API-key profile.
+    - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai` API-key profile.
     - **Sub-agents:** route coding tasks to a Codex-focused agent with its own `openai/gpt-5.5` model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -70109,7 +70597,7 @@ lives on the [Models FAQ](/help/faq-models).
 
 <AccordionGroup>
   <Accordion title="My skill generated an image/PDF, but nothing was sent">
-    Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [OpenClaw assistant setup](/start/openclaw) and [Agent send](/tools/agent-send).
+    Outbound attachments from the agent must use structured media fields such as `media`, `mediaUrl`, `path`, or `filePath`. See [OpenClaw assistant setup](/start/openclaw) and [Agent send](/tools/agent-send).
 
     CLI sending:
 
@@ -70122,7 +70610,7 @@ lives on the [Models FAQ](/help/faq-models).
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
     - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
-    - `tools.fs.workspaceOnly=false` lets `MEDIA:` send host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
+    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
 
     See [Images](/nodes/images).
 
@@ -70599,7 +71087,7 @@ Live tests are split into two layers so we can isolate failures:
   - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
   - `OPENCLAW_LIVE_MODELS=small` to run the constrained small-model allowlist (Qwen 8B/9B local-compatible routes, OpenRouter Qwen/GLM, and Z.AI GLM)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all and small sweeps default to their curated caps; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive selected-profile sweep or a positive number for a smaller cap.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
   - Direct-model probes run with 20-way parallelism by default; set `OPENCLAW_LIVE_MODEL_CONCURRENCY` to override.
@@ -70873,7 +71361,7 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -70901,7 +71389,7 @@ There is no fixed "CI model list" (live is opt-in), but these are the **recommen
 This is the "common models" run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.5`
-- OpenAI Codex OAuth: `openai-codex/gpt-5.5`
+- OpenAI ChatGPT/Codex OAuth: `openai/gpt-5.5`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
@@ -70910,7 +71398,7 @@ This is the "common models" run we expect to keep working:
 - MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -70943,7 +71431,7 @@ If you have keys enabled, we also support testing via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
@@ -74381,8 +74869,8 @@ replacement. Gateway startup does not generate bundled-plugin dependency trees.
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files,
-`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+**Disk growth hotspots:** watch `media/`, session JSONL files, the shared
+SQLite state database, installed plugin package roots, and rolling file logs
 under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
@@ -77617,7 +78105,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
     Skills with a `SKILL.md` file under `skills/<name>/` are copied, along with per-skill config values from `skills.config`.
   </Accordion>
   <Accordion title="Auth credentials">
-    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Use `--include-secrets` for non-interactive `openclaw migrate` credential import, `--no-auth-credentials` to skip it, or onboarding `--import-secrets` when importing from the onboarding wizard.
+    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Hermes `auth.json` OAuth entries are legacy state and are surfaced as manual reauth/doctor work instead of imported into live auth. Use `--include-secrets` for non-interactive `openclaw migrate` credential import, `--no-auth-credentials` to skip it, or onboarding `--import-secrets` when importing from the onboarding wizard.
   </Accordion>
 </AccordionGroup>
 
@@ -77688,7 +78176,7 @@ If a conflict surfaces mid-apply (for example, an unexpected race on a config fi
 
 Interactive `openclaw migrate` asks whether to import detected auth credentials, with yes selected by default.
 
-- Accepting the prompt imports supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys).
+- Accepting the prompt imports OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Hermes `auth.json` OAuth entries are reported for manual OpenAI reauth or doctor repair.
 - Use `--no-auth-credentials` or choose no at the prompt to import non-secret state only.
 - Use `--include-secrets` when running unattended with `--yes`.
 - Use onboarding `--import-secrets` when importing credentials from the onboarding wizard.
@@ -79629,9 +80117,9 @@ All camera access is gated behind **user-controlled settings**.
 
 Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
-### CLI helper (temp files + MEDIA)
+### CLI helper
 
-The easiest way to get attachments is via the CLI helper, which writes decoded media to a temp file and prints `MEDIA:<path>`.
+The easiest way to get media files is via the CLI helper, which writes decoded media to a temp file and prints the saved path.
 
 Examples:
 
@@ -79696,12 +80184,12 @@ Examples:
 
 ```bash
 openclaw nodes camera list --node <id>            # list camera ids
-openclaw nodes camera snap --node <id>            # prints MEDIA:<path>
+openclaw nodes camera snap --node <id>            # prints saved path
 openclaw nodes camera snap --node <id> --max-width 1280
 openclaw nodes camera snap --node <id> --delay-ms 2000
 openclaw nodes camera snap --node <id> --device-id <id>
-openclaw nodes camera clip --node <id> --duration 10s          # prints MEDIA:<path>
-openclaw nodes camera clip --node <id> --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
+openclaw nodes camera clip --node <id> --duration 10s          # prints saved path
+openclaw nodes camera clip --node <id> --duration-ms 3000      # prints saved path (legacy flag)
 openclaw nodes camera clip --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --no-audio
 ```
@@ -79722,7 +80210,7 @@ Notes:
 For _screen_ video (not camera), use the macOS companion:
 
 ```bash
-openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDIA:<path>
+openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints saved path
 ```
 
 Notes:
@@ -80041,7 +80529,7 @@ and approve the new request so the gateway stores the updated command snapshot.
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
 
-CLI helper (writes to a temp file and prints `MEDIA:<path>`):
+CLI helper (writes to a temp file and prints the saved path):
 
 ```bash
 openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
@@ -80651,11 +81139,11 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, xAI, Deepgram, OpenRouter, Google, SenseAudio, ElevenLabs, Mistral                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                     |
-| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
+| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, xAI, Deepgram, OpenRouter, Google, SenseAudio, ElevenLabs, Mistral                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                         |
+| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                            |
 
 <Note>
 **MiniMax note**
@@ -82677,7 +83165,7 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: internal preview. The iOS app is not publicly distributed yet.
+Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
 
 ## What it does
 
@@ -88472,25 +88960,25 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                  |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                          |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                               |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                   |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                     |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                             |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                            |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                         |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                    |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                               |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                           |
-| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                         |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                 |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                           |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                             |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                     |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                          |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                           |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                        |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                       |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, or post-tool raw assistant progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                    |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                               |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                          |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                      |
+| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                           |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                    |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                            |
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
@@ -88716,23 +89204,29 @@ OpenClaw session lane so follow-up chat messages are not queued behind a stale
 native turn.
 
 Most non-terminal notifications for the same turn disarm that short watchdog
-because Codex has proven the turn is still alive. Raw `custom_tool_call_output`
-completions keep the short post-tool watchdog armed because they are the
-turn-scoped tool-result handoff. Completed `agentMessage` items and pre-tool raw
-assistant `rawResponseItem/completed` items arm the assistant-output release: if
-Codex then goes quiet without `turn/completed`, OpenClaw best-effort interrupts
-the native turn and releases the session lane. Post-tool raw assistant progress
-keeps waiting for `turn/completed` while a completion-idle guard stays armed; the
-guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when
-configured and defaults to five minutes otherwise. Replay-safe stdio app-server
-failures, including turn-completion idle timeouts without assistant, tool,
-active-item, or side-effect evidence, are retried once on a fresh app-server
-attempt. Unsafe timeouts still retire the stuck app-server client and release
-the OpenClaw session lane. They also clear the stale native thread binding and
-surface a recoverable timeout message for user or maintainer judgment instead of
-being replayed automatically. Timeout diagnostics include the last
-app-server notification method and, for raw assistant response items, the item
-type, role, id, and a bounded assistant text preview.
+because Codex has proven the turn is still alive. Tool handoffs use a longer
+post-tool idle budget: after OpenClaw returns an `item/tool/call` response, after
+native tool items such as `commandExecution` complete, after raw
+`custom_tool_call_output` completions, and after post-tool raw assistant
+progress. The guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs`
+when configured and defaults to five minutes otherwise. That same post-tool
+budget also extends the progress watchdog for the silent synthesis window before
+Codex emits the next current-turn event. Reasoning completions, commentary
+`agentMessage` completions, and pre-tool raw reasoning or assistant progress can
+be followed by an automatic final reply, so they use the post-progress reply
+guard instead of releasing the session lane immediately. Only
+final/non-commentary completed `agentMessage` items and pre-tool raw assistant
+completions arm the assistant-output release: if Codex then goes quiet without
+`turn/completed`, OpenClaw best-effort interrupts the native turn and releases
+the session lane. Replay-safe stdio app-server failures, including
+turn-completion idle timeouts without assistant, tool, active-item, or
+side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+timeouts still retire the stuck app-server client and release the OpenClaw
+session lane. They also clear the stale native thread binding and surface a
+recoverable timeout message for user or maintainer judgment instead of being
+replayed automatically. Timeout diagnostics include the last app-server
+notification method and, for raw assistant response items, the item type, role,
+id, and a bounded assistant text preview.
 
 ## Model discovery
 
@@ -89152,9 +89646,10 @@ selection, OpenClaw dynamic tools, approvals, media delivery, and the visible
 transcript mirror.
 
 The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
-Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
-under `auth.order.openai`; older `openai-codex:*` profiles and
-`auth.order.openai-codex` entries remain supported for existing installs.
+Do not configure legacy Codex GPT refs. Put OpenAI agent auth order
+under `auth.order.openai`; older legacy Codex auth profile ids and
+legacy Codex auth order entries are legacy state repaired by
+`openclaw doctor --fix`.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled while leaving code-mode-only off by default.
@@ -89179,7 +89674,7 @@ Discord, Slack, or another channel remains the communication surface.
 - Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
   Codex app-server binary by default, so local `codex` commands on `PATH` do not
   affect normal harness startup.
-- Codex auth available through `openclaw models auth login --provider openai-codex`,
+- Codex auth available through `openclaw models auth login --provider openai`,
   an app-server account in the agent's Codex home, or an explicit Codex API-key
   auth profile.
 
@@ -89196,7 +89691,7 @@ canonical `openai/gpt-*` model ref.
 Sign in with Codex OAuth:
 
 ```bash
-openclaw models auth login --provider openai-codex
+openclaw models auth login --provider openai
 ```
 
 Enable the bundled `codex` plugin and select an OpenAI agent model:
@@ -89247,7 +89742,7 @@ harness options in OpenClaw config, and use the CLI only for Codex auth:
 | Enable the harness                     | `plugins.entries.codex.enabled: true`                                            | OpenClaw config                    |
 | Keep an allowlisted plugin install     | Include `codex` in `plugins.allow`                                               | OpenClaw config                    |
 | Route OpenAI agent turns through Codex | `agents.defaults.model` or `agents.list[].model` as `openai/gpt-*`               | OpenClaw agent config              |
-| Sign in with Codex OAuth               | `openclaw models auth login --provider openai-codex`                             | CLI auth profile                   |
+| Sign in with ChatGPT/Codex OAuth       | `openclaw models auth login --provider openai`                                   | CLI auth profile                   |
 | Add API-key backup for Codex runs      | `openai:*` API-key profile listed after subscription auth in `auth.order.openai` | CLI auth profile + OpenClaw config |
 | Fail closed when Codex is unavailable  | Provider or model `agentRuntime.id: "codex"`                                     | OpenClaw model/provider config     |
 | Use direct OpenAI API traffic          | Provider or model `agentRuntime.id: "openclaw"` with normal OpenAI auth          | OpenClaw model/provider config     |
@@ -89257,8 +89752,8 @@ harness options in OpenClaw config, and use the CLI only for Codex auth:
 
 Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `auth.order.openai` for subscription-first/API-key-backup ordering. Existing
-`openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
-do not write new `openai-codex/gpt-*` model refs.
+legacy Codex auth profile ids and legacy Codex auth order are doctor-only
+legacy state; do not write new legacy Codex GPT refs.
 
 Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
 Codex compacts through its native app-server thread state, so OpenClaw ignores
@@ -89288,7 +89783,7 @@ instead of silently switching compaction backends.
 {
   auth: {
     order: {
-      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+      openai: ["openai:user@example.com", "openai:api-key-backup"],
     },
   },
 }
@@ -89330,7 +89825,7 @@ the harness and account. If `/status` is surprising, see
 Keep provider refs and runtime policy separate:
 
 - Use `openai/gpt-*` for OpenAI agent turns through Codex.
-- Do not use `openai-codex/gpt-*` in config. Run `openclaw doctor --fix` to
+- Do not use legacy Codex GPT refs in config. Run `openclaw doctor --fix` to
   repair legacy refs and stale session route pins.
 - `agentRuntime.id: "codex"` is optional for normal OpenAI auto mode, but useful
   when a deployment should fail closed if Codex is unavailable.
@@ -89358,13 +89853,13 @@ Common command routing:
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*` plus enabled `codex` plugin                             | `/status` shows `Runtime: OpenAI Codex` | Recommended path                      |
 | Fail closed if Codex is unavailable                  | Provider or model `agentRuntime.id: "codex"`                           | Turn fails instead of embedded fallback | Use for Codex-only deployments        |
 | Direct OpenAI API-key traffic through OpenClaw       | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional |
-| Legacy config                                        | `openai-codex/gpt-*`                                                   | `openclaw doctor --fix` rewrites it     | Do not write new config this way      |
+| Legacy config                                        | legacy Codex GPT refs                                                  | `openclaw doctor --fix` rewrites it     | Do not write new config this way      |
 | ACP/acpx Codex adapter                               | ACP `sessions_spawn({ runtime: "acp" })`                               | ACP task/session status                 | Separate from native Codex harness    |
 
 `agents.defaults.imageModel` follows the same prefix split. Use `openai/gpt-*`
 for the normal OpenAI route and `codex/gpt-*` only when image understanding
 should run through a bounded Codex app-server turn. Do not use
-`openai-codex/gpt-*`; doctor rewrites that legacy prefix to `openai/gpt-*`.
+legacy Codex GPT refs; doctor rewrites that legacy prefix to `openai/gpt-*`.
 
 ## Deployment patterns
 
@@ -89527,6 +90022,9 @@ In `tools.exec.mode: "auto"`, OpenClaw does not preserve legacy unsafe Codex
 legacy `plugins.entries.codex.config.appServer.mode: "guardian"` preset still
 works, but `tools.exec.mode: "auto"` is the normalized OpenClaw surface.
 
+For the mode-level comparison with host exec approvals and ACPX permissions,
+see [Permission modes](/tools/permission-modes).
+
 For every app-server field, auth order, environment isolation, discovery, and
 timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference).
 
@@ -89579,7 +90077,8 @@ For upload mechanics and runtime-level diagnostics boundaries, see
 Auth is selected in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
-   `auth.order.openai`. Existing `openai-codex:*` profile ids remain valid.
+   `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
+   legacy Codex auth profile ids and legacy Codex auth order.
 2. The app-server's existing account in that agent's Codex home.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
@@ -89660,25 +90159,25 @@ Supported top-level Codex plugin fields:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                    |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                              |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                   |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                       |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                    |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                          |
-| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                          |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                 |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                                                                 |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle guard used after a tool handoff when Codex emits raw assistant completion or progress but does not send `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                     |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                       |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                        |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting. |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                          |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                             |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                     |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                           |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                       |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                     |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                          |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                           |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                 |
+| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                 |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                        |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                       |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, or post-tool raw assistant progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                              |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                               |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.        |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                 |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                    |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                            |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
@@ -89699,18 +90198,23 @@ quiet for `appServer.turnCompletionIdleTimeoutMs`, OpenClaw best-effort
 interrupts the Codex turn, records a diagnostic timeout, and releases the
 OpenClaw session lane so follow-up chat messages are not queued behind a stale
 native turn. Most non-terminal notifications for the same turn disarm that short
-watchdog because Codex has proven the turn is still alive; raw
-`custom_tool_call_output` completions keep the short post-tool watchdog armed
-because they are the turn-scoped tool-result handoff. Global app-server
-notifications, such as rate-limit updates, do not reset turn-idle progress.
-Completed `agentMessage` items and pre-tool raw assistant
-`rawResponseItem/completed` items arm the assistant-output release: if Codex then
-goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
-turn and releases the session lane. Post-tool raw assistant progress keeps
-waiting for `turn/completed` while a completion-idle guard stays armed; the guard
-uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when configured and
-defaults to five minutes otherwise. Replay-safe stdio app-server failures,
-including turn-completion idle timeouts without assistant, tool, active-item, or
+watchdog because Codex has proven the turn is still alive. Tool handoffs use a
+longer post-tool idle budget: after OpenClaw returns an `item/tool/call`
+response, after native tool items such as `commandExecution` complete, after raw
+`custom_tool_call_output` completions, and after post-tool raw assistant
+progress. The guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs`
+when configured and defaults to five minutes otherwise. That same post-tool
+budget also extends the progress watchdog for the silent synthesis window before
+Codex emits the next current-turn event. Global app-server notifications, such
+as rate-limit updates, do not reset turn-idle progress. Reasoning completions,
+commentary `agentMessage` completions, and pre-tool raw reasoning or assistant
+progress can be followed by an automatic final reply, so they use the
+post-progress reply guard instead of releasing the session lane immediately.
+Only final/non-commentary completed `agentMessage` items and pre-tool raw
+assistant completions arm the assistant-output release: if Codex then goes quiet
+without `turn/completed`, OpenClaw best-effort interrupts the native turn and
+releases the session lane. Replay-safe stdio app-server failures, including
+turn-completion idle timeouts without assistant, tool, active-item, or
 side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
 session lane. They also clear the stale native thread binding and surface a
@@ -89834,7 +90338,7 @@ Ask affected collaborators to run this read-only command on their OpenClaw host:
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|openai-codex|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
   if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
     grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
@@ -89855,10 +90359,10 @@ Ask affected collaborators to run this read-only command on their OpenClaw host:
 Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
 `Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
 `candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
-`No API key` result. A corrected run should show the `openai-codex` OAuth
+`No API key` result. A corrected run should show the OpenAI OAuth
 path instead of a plain OpenAI API-key failure.
 
-**Legacy `openai-codex/*` config remains:** run `openclaw doctor --fix`.
+**Legacy Codex model refs config remains:** run `openclaw doctor --fix`.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
@@ -92879,7 +93383,10 @@ observation-only.
 
 **Subagents**
 
-- `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` - coordinate subagent routing and completion delivery
+- `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
+- `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
+- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
+- `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 
 **Lifecycle**
 
@@ -93201,6 +93708,10 @@ before the next major release:
 - **`before_agent_start`** remains for compatibility. New plugins should use
   `before_model_resolve` and `before_prompt_build` instead of the combined
   phase.
+- **`subagent_spawning`** remains for compatibility with older plugins, but
+  new plugins should not return thread routing from it. Core prepares
+  `thread: true` subagent bindings through channel session-binding adapters
+  before `subagent_spawned` fires.
 - **`deactivate`** remains as a deprecated cleanup compatibility alias until
   after 2026-08-16. New plugins should use `gateway_stop`.
 - **`onResolution` in `before_tool_call`** now uses the typed
@@ -94163,7 +94674,7 @@ read without importing the plugin runtime.
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "memoryEmbeddingProviders": ["local"],
-    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
     "webFetchProviders": ["firecrawl"],
@@ -95114,8 +95625,8 @@ embeddings:
 }
 ```
 
-OpenAI Codex / ChatGPT OAuth (`openai-codex`) is not an OpenAI Platform
-embeddings credential. For OpenAI embeddings, use an OpenAI API key auth profile,
+OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
+For OpenAI embeddings, use an OpenAI API key auth profile,
 `OPENAI_API_KEY`, or `models.providers.openai.apiKey`. OAuth-only users can use
 another embedding-capable provider such as GitHub Copilot or Ollama.
 
@@ -96669,7 +97180,7 @@ commands.
 | [oc-path](/plugins/reference/oc-path)                             | Adds the openclaw path CLI for oc:// workspace file addressing.                                                                                                      | `@openclaw/oc-path`<br />included in OpenClaw                        | plugin                                                                                                                                                                                                                                                           |
 | [ollama](/plugins/reference/ollama)                               | Adds Ollama, Ollama Cloud model provider support to OpenClaw.                                                                                                        | `@openclaw/ollama-provider`<br />included in OpenClaw                | providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                         |
 | [open-prose](/plugins/reference/open-prose)                       | OpenProse VM skill pack with a /prose slash command.                                                                                                                 | `@openclaw/open-prose`<br />included in OpenClaw                     | skills                                                                                                                                                                                                                                                           |
-| [openai](/plugins/reference/openai)                               | Adds OpenAI, OpenAI Codex model provider support to OpenClaw.                                                                                                        | `@openclaw/openai-provider`<br />included in OpenClaw                | providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                   |
+| [openai](/plugins/reference/openai)                               | Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth.                                                                                       | `@openclaw/openai-provider`<br />included in OpenClaw                | providers: openai; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                                 |
 | [opencode](/plugins/reference/opencode)                           | Adds OpenCode model provider support to OpenClaw.                                                                                                                    | `@openclaw/opencode-provider`<br />included in OpenClaw              | providers: opencode; contracts: mediaUnderstandingProviders                                                                                                                                                                                                      |
 | [opencode-go](/plugins/reference/opencode-go)                     | Adds OpenCode Go model provider support to OpenClaw.                                                                                                                 | `@openclaw/opencode-go-provider`<br />included in OpenClaw           | providers: opencode-go; contracts: mediaUnderstandingProviders                                                                                                                                                                                                   |
 | [openrouter](/plugins/reference/openrouter)                       | Adds OpenRouter model provider support to OpenClaw.                                                                                                                  | `@openclaw/openrouter-provider`<br />included in OpenClaw            | providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders                                                                                                     |
@@ -96682,7 +97193,7 @@ commands.
 | [senseaudio](/plugins/reference/senseaudio)                       | Adds media understanding provider support.                                                                                                                           | `@openclaw/senseaudio-provider`<br />included in OpenClaw            | contracts: mediaUnderstandingProviders                                                                                                                                                                                                                           |
 | [sglang](/plugins/reference/sglang)                               | Adds SGLang model provider support to OpenClaw.                                                                                                                      | `@openclaw/sglang-provider`<br />included in OpenClaw                | providers: sglang                                                                                                                                                                                                                                                |
 | [signal](/plugins/reference/signal)                               | Adds the Signal channel surface for sending and receiving OpenClaw messages.                                                                                         | `@openclaw/signal`<br />included in OpenClaw                         | channels: signal                                                                                                                                                                                                                                                 |
-| [skill-workshop](/plugins/reference/skill-workshop)               | Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh.                                                       | `@openclaw/skill-workshop`<br />included in OpenClaw                 | contracts: tools                                                                                                                                                                                                                                                 |
+| [sms](/plugins/reference/sms)                                     | Twilio SMS channel plugin for OpenClaw text messages.                                                                                                                | `@openclaw/sms`<br />included in OpenClaw                            | channels: sms                                                                                                                                                                                                                                                    |
 | [stepfun](/plugins/reference/stepfun)                             | Adds StepFun, StepFun Plan model provider support to OpenClaw.                                                                                                       | `@openclaw/stepfun-provider`<br />included in OpenClaw               | providers: stepfun, stepfun-plan                                                                                                                                                                                                                                 |
 | [synthetic](/plugins/reference/synthetic)                         | Adds Synthetic model provider support to OpenClaw.                                                                                                                   | `@openclaw/synthetic-provider`<br />included in OpenClaw             | providers: synthetic                                                                                                                                                                                                                                             |
 | [tavily](/plugins/reference/tavily)                               | Adds agent-callable tools. Adds web search provider support.                                                                                                         | `@openclaw/tavily-plugin`<br />included in OpenClaw                  | contracts: tools, webSearchProviders; skills                                                                                                                                                                                                                     |
@@ -96700,7 +97211,7 @@ commands.
 | [webhooks](/plugins/reference/webhooks)                           | Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.                                                                                  | `@openclaw/webhooks`<br />included in OpenClaw                       | plugin                                                                                                                                                                                                                                                           |
 | [workboard](/plugins/reference/workboard)                         | Dashboard workboard for agent-owned issues and sessions.                                                                                                             | `@openclaw/workboard`<br />included in OpenClaw                      | contracts: tools                                                                                                                                                                                                                                                 |
 | [xai](/plugins/reference/xai)                                     | Adds xAI model provider support to OpenClaw.                                                                                                                         | `@openclaw/xai-plugin`<br />included in OpenClaw                     | providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders, tools, videoGenerationProviders, webSearchProviders                                                                           |
-| [xiaomi](/plugins/reference/xiaomi)                               | Adds Xiaomi model provider support to OpenClaw.                                                                                                                      | `@openclaw/xiaomi-provider`<br />included in OpenClaw                | providers: xiaomi; contracts: speechProviders                                                                                                                                                                                                                    |
+| [xiaomi](/plugins/reference/xiaomi)                               | Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.                                                                                                   | `@openclaw/xiaomi-provider`<br />included in OpenClaw                | providers: xiaomi, xiaomi-token-plan; contracts: speechProviders                                                                                                                                                                                                 |
 | [zai](/plugins/reference/zai)                                     | Adds Z.AI model provider support to OpenClaw.                                                                                                                        | `@openclaw/zai-provider`<br />included in OpenClaw                   | providers: zai; contracts: mediaUnderstandingProviders                                                                                                                                                                                                           |
 
 ## Official external packages
@@ -97049,7 +97560,7 @@ pnpm plugins:inventory:gen
 | [oc-path](/plugins/reference/oc-path)                               | Adds the openclaw path CLI for oc:// workspace file addressing.                                                                                                      | `@openclaw/oc-path`<br />included in OpenClaw                                                    | plugin                                                                                                                                                                                                                                                           |
 | [ollama](/plugins/reference/ollama)                                 | Adds Ollama, Ollama Cloud model provider support to OpenClaw.                                                                                                        | `@openclaw/ollama-provider`<br />included in OpenClaw                                            | providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders                                                                                                                                                                         |
 | [open-prose](/plugins/reference/open-prose)                         | OpenProse VM skill pack with a /prose slash command.                                                                                                                 | `@openclaw/open-prose`<br />included in OpenClaw                                                 | skills                                                                                                                                                                                                                                                           |
-| [openai](/plugins/reference/openai)                                 | Adds OpenAI, OpenAI Codex model provider support to OpenClaw.                                                                                                        | `@openclaw/openai-provider`<br />included in OpenClaw                                            | providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                   |
+| [openai](/plugins/reference/openai)                                 | Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth.                                                                                       | `@openclaw/openai-provider`<br />included in OpenClaw                                            | providers: openai; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders                                                 |
 | [opencode](/plugins/reference/opencode)                             | Adds OpenCode model provider support to OpenClaw.                                                                                                                    | `@openclaw/opencode-provider`<br />included in OpenClaw                                          | providers: opencode; contracts: mediaUnderstandingProviders                                                                                                                                                                                                      |
 | [opencode-go](/plugins/reference/opencode-go)                       | Adds OpenCode Go model provider support to OpenClaw.                                                                                                                 | `@openclaw/opencode-go-provider`<br />included in OpenClaw                                       | providers: opencode-go; contracts: mediaUnderstandingProviders                                                                                                                                                                                                   |
 | [openrouter](/plugins/reference/openrouter)                         | Adds OpenRouter model provider support to OpenClaw.                                                                                                                  | `@openclaw/openrouter-provider`<br />included in OpenClaw                                        | providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders                                                                                                     |
@@ -97068,8 +97579,8 @@ pnpm plugins:inventory:gen
 | [senseaudio](/plugins/reference/senseaudio)                         | Adds media understanding provider support.                                                                                                                           | `@openclaw/senseaudio-provider`<br />included in OpenClaw                                        | contracts: mediaUnderstandingProviders                                                                                                                                                                                                                           |
 | [sglang](/plugins/reference/sglang)                                 | Adds SGLang model provider support to OpenClaw.                                                                                                                      | `@openclaw/sglang-provider`<br />included in OpenClaw                                            | providers: sglang                                                                                                                                                                                                                                                |
 | [signal](/plugins/reference/signal)                                 | Adds the Signal channel surface for sending and receiving OpenClaw messages.                                                                                         | `@openclaw/signal`<br />included in OpenClaw                                                     | channels: signal                                                                                                                                                                                                                                                 |
-| [skill-workshop](/plugins/reference/skill-workshop)                 | Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh.                                                       | `@openclaw/skill-workshop`<br />included in OpenClaw                                             | contracts: tools                                                                                                                                                                                                                                                 |
 | [slack](/plugins/reference/slack)                                   | OpenClaw Slack channel plugin for channels, DMs, commands, and app events.                                                                                           | `@openclaw/slack`<br />npm; ClawHub                                                              | channels: slack                                                                                                                                                                                                                                                  |
+| [sms](/plugins/reference/sms)                                       | Twilio SMS channel plugin for OpenClaw text messages.                                                                                                                | `@openclaw/sms`<br />included in OpenClaw                                                        | channels: sms                                                                                                                                                                                                                                                    |
 | [stepfun](/plugins/reference/stepfun)                               | Adds StepFun, StepFun Plan model provider support to OpenClaw.                                                                                                       | `@openclaw/stepfun-provider`<br />included in OpenClaw                                           | providers: stepfun, stepfun-plan                                                                                                                                                                                                                                 |
 | [synology-chat](/plugins/reference/synology-chat)                   | Synology Chat channel plugin for OpenClaw channels and direct messages.                                                                                              | `@openclaw/synology-chat`<br />npm; ClawHub                                                      | channels: synology-chat                                                                                                                                                                                                                                          |
 | [synthetic](/plugins/reference/synthetic)                           | Adds Synthetic model provider support to OpenClaw.                                                                                                                   | `@openclaw/synthetic-provider`<br />included in OpenClaw                                         | providers: synthetic                                                                                                                                                                                                                                             |
@@ -97093,7 +97604,7 @@ pnpm plugins:inventory:gen
 | [whatsapp](/plugins/reference/whatsapp)                             | OpenClaw WhatsApp channel plugin for WhatsApp Web chats.                                                                                                             | `@openclaw/whatsapp`<br />ClawHub: `clawhub:@openclaw/whatsapp`; npm                             | channels: whatsapp                                                                                                                                                                                                                                               |
 | [workboard](/plugins/reference/workboard)                           | Dashboard workboard for agent-owned issues and sessions.                                                                                                             | `@openclaw/workboard`<br />included in OpenClaw                                                  | contracts: tools                                                                                                                                                                                                                                                 |
 | [xai](/plugins/reference/xai)                                       | Adds xAI model provider support to OpenClaw.                                                                                                                         | `@openclaw/xai-plugin`<br />included in OpenClaw                                                 | providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders, tools, videoGenerationProviders, webSearchProviders                                                                           |
-| [xiaomi](/plugins/reference/xiaomi)                                 | Adds Xiaomi model provider support to OpenClaw.                                                                                                                      | `@openclaw/xiaomi-provider`<br />included in OpenClaw                                            | providers: xiaomi; contracts: speechProviders                                                                                                                                                                                                                    |
+| [xiaomi](/plugins/reference/xiaomi)                                 | Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.                                                                                                   | `@openclaw/xiaomi-provider`<br />included in OpenClaw                                            | providers: xiaomi, xiaomi-token-plan; contracts: speechProviders                                                                                                                                                                                                 |
 | [zai](/plugins/reference/zai)                                       | Adds Z.AI model provider support to OpenClaw.                                                                                                                        | `@openclaw/zai-provider`<br />included in OpenClaw                                               | providers: zai; contracts: mediaUnderstandingProviders                                                                                                                                                                                                           |
 | [zalo](/plugins/reference/zalo)                                     | OpenClaw Zalo channel plugin for bot and webhook chats.                                                                                                              | `@openclaw/zalo`<br />npm; ClawHub                                                               | channels: zalo                                                                                                                                                                                                                                                   |
 | [zalouser](/plugins/reference/zalouser)                             | OpenClaw Zalo Personal Account plugin via native zca-js integration.                                                                                                 | `@openclaw/zalouser`<br />npm; ClawHub                                                           | channels: zalouser; contracts: tools                                                                                                                                                                                                                             |
@@ -97292,7 +97803,7 @@ The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
 `plugins.allow` if your config uses a restrictive allowlist. Native app-server
 configs should use `openai/gpt-*`; OpenAI agent turns select the Codex harness
-by default. Legacy `openai-codex/*` routes should be repaired with
+by default. Legacy Codex model refs routes should be repaired with
 `openclaw doctor --fix`, and legacy `codex/*` model refs remain compatibility
 aliases for the native harness.
 
@@ -99730,6 +100241,35 @@ canonical replacement.
 
   </Accordion>
 
+  <Accordion title="subagent_spawning hook → core thread binding">
+    **Old**: `api.on("subagent_spawning", handler)` returning
+    `threadBindingReady` or `deliveryOrigin`.
+
+    **New**: let core prepare `thread: true` subagent bindings through the
+    channel session-binding adapter. Use `api.on("subagent_spawned", handler)`
+    only for post-launch observation.
+
+    ```typescript
+    // Before
+    api.on("subagent_spawning", async () => ({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: { channel: "discord", to: "channel:123", threadId: "456" },
+    }));
+
+    // After
+    api.on("subagent_spawned", async (event) => {
+      await observeSubagentLaunch(event);
+    });
+    ```
+
+    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
+    `PluginHookSubagentSpawningResult`, and
+    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
+    deprecated compatibility surfaces while external plugins migrate.
+
+  </Accordion>
+
   <Accordion title="Provider discovery types → provider catalog types">
     Four discovery type aliases are now thin wrappers over the
     catalog-era types:
@@ -100803,7 +101343,7 @@ API key auth, and dynamic model resolution.
     | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level | `moonshot` |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path | `minimax`, `minimax-portal` |
-    | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management | `openai`, `openai-codex` |
+    | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management | `openai` |
     | `openrouter-thinking` | OpenRouter reasoning wrapper for proxy routes, with unsupported-model/`auto` skips handled centrally | `openrouter` |
     | `tool-stream-default-on` | Default-on `tool_stream` wrapper for providers like Z.AI that want tool streaming unless explicitly disabled | `zai` |
 
@@ -103325,724 +103865,6 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test
 
 
 
-# Section: plugins/skill-workshop.md
-
----
-summary: "Experimental capture of reusable procedures as workspace skills with review, approval, quarantine, and hot skill refresh"
-title: "Skill workshop plugin"
-read_when:
-  - You want agents to turn corrections or reusable procedures into workspace skills
-  - You are configuring procedural skill memory
-  - You are debugging skill_workshop tool behavior
-  - You are deciding whether to enable automatic skill creation
----
-
-Skill Workshop is **experimental**. It is disabled by default, its capture
-heuristics and reviewer prompts may change between releases, and automatic
-writes should be used only in trusted workspaces after reviewing pending-mode
-output first.
-
-Skill Workshop is procedural memory for workspace skills. It lets an agent turn
-reusable workflows, user corrections, hard-won fixes, and recurring pitfalls
-into `SKILL.md` files under:
-
-```text
-<workspace>/skills/<skill-name>/SKILL.md
-```
-
-This is different from long-term memory:
-
-- **Memory** stores facts, preferences, entities, and past context.
-- **Skills** store reusable procedures the agent should follow on future tasks.
-- **Skill Workshop** is the bridge from a useful turn to a durable workspace
-  skill, with safety checks and optional approval.
-
-Skill Workshop is useful when the agent learns a procedure such as:
-
-- how to validate externally sourced animated GIF assets
-- how to replace screenshot assets and verify dimensions
-- how to run a repo-specific QA scenario
-- how to debug a recurring provider failure
-- how to repair a stale local workflow note
-
-It is not intended for:
-
-- facts like "the user likes blue"
-- broad autobiographical memory
-- raw transcript archiving
-- secrets, credentials, or hidden prompt text
-- one-off instructions that will not repeat
-
-## Default state
-
-The bundled plugin is **experimental** and **disabled by default** unless it is
-explicitly enabled in `plugins.entries.skill-workshop`.
-
-The plugin manifest does not set `enabledByDefault: true`. The `enabled: true`
-default inside the plugin config schema applies only after the plugin entry has
-already been selected and loaded.
-
-Experimental means:
-
-- the plugin is supported enough for opt-in testing and dogfooding
-- proposal storage, reviewer thresholds, and capture heuristics can evolve
-- pending approval is the recommended starting mode
-- auto apply is for trusted personal/workspace setups, not shared or hostile
-  input-heavy environments
-
-## Enable
-
-Minimal safe config:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "skill-workshop": {
-        enabled: true,
-        config: {
-          autoCapture: true,
-          approvalPolicy: "pending",
-          reviewMode: "hybrid",
-        },
-      },
-    },
-  },
-}
-```
-
-With this config:
-
-- the `skill_workshop` tool is available
-- explicit reusable corrections are queued as pending proposals
-- threshold-based reviewer passes can propose skill updates
-- no skill file is written until a pending proposal is applied
-
-Use automatic writes only in trusted workspaces:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "skill-workshop": {
-        enabled: true,
-        config: {
-          autoCapture: true,
-          approvalPolicy: "auto",
-          reviewMode: "hybrid",
-        },
-      },
-    },
-  },
-}
-```
-
-`approvalPolicy: "auto"` still uses the same scanner and quarantine path. It
-does not apply proposals with critical findings.
-
-## Configuration
-
-| Key                  | Default     | Range / values                              | Meaning                                                              |
-| -------------------- | ----------- | ------------------------------------------- | -------------------------------------------------------------------- |
-| `enabled`            | `true`      | boolean                                     | Enables the plugin after the plugin entry is loaded.                 |
-| `autoCapture`        | `true`      | boolean                                     | Enables post-turn capture/review on successful agent turns.          |
-| `approvalPolicy`     | `"pending"` | `"pending"`, `"auto"`                       | Queue proposals or write safe proposals automatically.               |
-| `reviewMode`         | `"hybrid"`  | `"off"`, `"heuristic"`, `"llm"`, `"hybrid"` | Chooses explicit correction capture, LLM reviewer, both, or neither. |
-| `reviewInterval`     | `15`        | `1..200`                                    | Run reviewer after this many successful turns.                       |
-| `reviewMinToolCalls` | `8`         | `1..500`                                    | Run reviewer after this many observed tool calls.                    |
-| `reviewTimeoutMs`    | `45000`     | `5000..180000`                              | Timeout for the embedded reviewer run.                               |
-| `maxPending`         | `50`        | `1..200`                                    | Max pending/quarantined proposals kept per workspace.                |
-| `maxSkillBytes`      | `40000`     | `1024..200000`                              | Max generated skill/support file size.                               |
-
-Recommended profiles:
-
-```json5
-// Conservative: explicit tool use only, no automatic capture.
-{
-  autoCapture: false,
-  approvalPolicy: "pending",
-  reviewMode: "off",
-}
-```
-
-```json5
-// Review-first: capture automatically, but require approval.
-{
-  autoCapture: true,
-  approvalPolicy: "pending",
-  reviewMode: "hybrid",
-}
-```
-
-```json5
-// Trusted automation: write safe proposals immediately.
-{
-  autoCapture: true,
-  approvalPolicy: "auto",
-  reviewMode: "hybrid",
-}
-```
-
-```json5
-// Low-cost: no reviewer LLM call, only explicit correction phrases.
-{
-  autoCapture: true,
-  approvalPolicy: "pending",
-  reviewMode: "heuristic",
-}
-```
-
-## Capture paths
-
-Skill Workshop has three capture paths.
-
-### Tool suggestions
-
-The model can call `skill_workshop` directly when it sees a reusable procedure
-or when the user asks it to save/update a skill.
-
-This is the most explicit path and works even with `autoCapture: false`.
-
-### Heuristic capture
-
-When `autoCapture` is enabled and `reviewMode` is `heuristic` or `hybrid`, the
-plugin scans successful turns for explicit user correction phrases:
-
-- `next time`
-- `from now on`
-- `remember to`
-- `make sure to`
-- `always ... use/check/verify/record/save/prefer`
-- `prefer ... when/for/instead/use`
-- `when asked`
-
-The heuristic creates a proposal from the latest matching user instruction. It
-uses topic hints to choose skill names for common workflows:
-
-- animated GIF tasks -> `animated-gif-workflow`
-- screenshot or asset tasks -> `screenshot-asset-workflow`
-- QA or scenario tasks -> `qa-scenario-workflow`
-- GitHub PR tasks -> `github-pr-workflow`
-- fallback -> `learned-workflows`
-
-Heuristic capture is intentionally narrow. It is for clear corrections and
-repeatable process notes, not for general transcript summarization.
-
-### LLM reviewer
-
-When `autoCapture` is enabled and `reviewMode` is `llm` or `hybrid`, the plugin
-runs a compact embedded reviewer after thresholds are reached.
-
-The reviewer receives:
-
-- the recent transcript text, capped to the last 12,000 characters
-- up to 12 existing workspace skills
-- up to 2,000 characters from each existing skill
-- JSON-only instructions
-
-The reviewer has no tools:
-
-- `disableTools: true`
-- `toolsAllow: []`
-- `disableMessageTool: true`
-
-The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` - prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
-
-Example `create`:
-
-```json
-{
-  "action": "create",
-  "skillName": "media-asset-qa",
-  "title": "Media Asset QA",
-  "reason": "Reusable animated media acceptance workflow",
-  "description": "Validate externally sourced animated media before product use.",
-  "body": "## Workflow\n\n- Verify true animation.\n- Record attribution.\n- Store a local approved copy.\n- Verify in product UI before final reply."
-}
-```
-
-`append` adds `section` + `body`. `replace` swaps `oldText` for `newText` in the named skill.
-
-## Proposal lifecycle
-
-Every generated update becomes a proposal with:
-
-- `id`
-- `createdAt`
-- `updatedAt`
-- `workspaceDir`
-- optional `agentId`
-- optional `sessionId`
-- `skillName`
-- `title`
-- `reason`
-- `source`: `tool`, `agent_end`, or `reviewer`
-- `status`
-- `change`
-- optional `scanFindings`
-- optional `quarantineReason`
-
-Proposal statuses:
-
-- `pending` - waiting for approval
-- `applied` - written to `<workspace>/skills`
-- `rejected` - rejected by operator/model
-- `quarantined` - blocked by critical scanner findings
-
-State is stored per workspace under the Gateway state directory:
-
-```text
-<stateDir>/skill-workshop/<workspace-hash>.json
-```
-
-Pending and quarantined proposals are deduplicated by skill name and change
-payload. The store keeps the newest pending/quarantined proposals up to
-`maxPending`.
-
-## Tool reference
-
-The plugin registers one agent tool:
-
-```text
-skill_workshop
-```
-
-### `status`
-
-Count proposals by state for the active workspace.
-
-```json
-{ "action": "status" }
-```
-
-Result shape:
-
-```json
-{
-  "workspaceDir": "/path/to/workspace",
-  "pending": 1,
-  "quarantined": 0,
-  "applied": 3,
-  "rejected": 0
-}
-```
-
-### `list_pending`
-
-List pending proposals.
-
-```json
-{ "action": "list_pending" }
-```
-
-To list another status:
-
-```json
-{ "action": "list_pending", "status": "applied" }
-```
-
-Valid `status` values:
-
-- `pending`
-- `applied`
-- `rejected`
-- `quarantined`
-
-### `list_quarantine`
-
-List quarantined proposals.
-
-```json
-{ "action": "list_quarantine" }
-```
-
-Use this when automatic capture appears to do nothing and the logs mention
-`skill-workshop: quarantined <skill>`.
-
-### `inspect`
-
-Fetch a proposal by id.
-
-```json
-{
-  "action": "inspect",
-  "id": "proposal-id"
-}
-```
-
-### `suggest`
-
-Create a proposal. With `approvalPolicy: "pending"` (default), this queues instead of writing.
-
-```json
-{
-  "action": "suggest",
-  "skillName": "animated-gif-workflow",
-  "title": "Animated GIF Workflow",
-  "reason": "User established reusable GIF validation rules.",
-  "description": "Validate animated GIF assets before using them.",
-  "body": "## Workflow\n\n- Verify the URL resolves to image/gif.\n- Confirm it has multiple frames.\n- Record attribution and license.\n- Avoid hotlinking when a local asset is needed."
-}
-```
-
-<AccordionGroup>
-  <Accordion title="Request immediate write in auto mode (apply: true)">
-
-```json
-{
-  "action": "suggest",
-  "apply": true,
-  "skillName": "animated-gif-workflow",
-  "description": "Validate animated GIF assets before using them.",
-  "body": "## Workflow\n\n- Verify true animation.\n- Record attribution."
-}
-```
-
-With `approvalPolicy: "pending"`, `apply: true` still queues the proposal. Review it, then use
-the `apply` action after approval.
-
-  </Accordion>
-
-  <Accordion title="Force pending under auto policy (apply: false)">
-
-```json
-{
-  "action": "suggest",
-  "apply": false,
-  "skillName": "screenshot-asset-workflow",
-  "description": "Screenshot replacement workflow.",
-  "body": "## Workflow\n\n- Verify dimensions.\n- Optimize the PNG.\n- Run the relevant gate."
-}
-```
-
-  </Accordion>
-
-  <Accordion title="Append to a named section">
-
-```json
-{
-  "action": "suggest",
-  "skillName": "qa-scenario-workflow",
-  "section": "Workflow",
-  "description": "QA scenario workflow.",
-  "body": "- For media QA, verify generated assets render and pass final assertions."
-}
-```
-
-  </Accordion>
-
-  <Accordion title="Replace exact text">
-
-```json
-{
-  "action": "suggest",
-  "skillName": "github-pr-workflow",
-  "oldText": "- Check the PR.",
-  "newText": "- Check unresolved review threads, CI status, linked issues, and changed files before deciding."
-}
-```
-
-  </Accordion>
-</AccordionGroup>
-
-### `apply`
-
-Apply a pending proposal.
-
-With `approvalPolicy: "pending"`, this action asks for operator approval before writing the
-workspace skill.
-
-```json
-{
-  "action": "apply",
-  "id": "proposal-id"
-}
-```
-
-`apply` refuses quarantined proposals:
-
-```text
-quarantined proposal cannot be applied
-```
-
-### `reject`
-
-Mark a proposal rejected.
-
-```json
-{
-  "action": "reject",
-  "id": "proposal-id"
-}
-```
-
-### `write_support_file`
-
-Write a supporting file inside an existing or proposed skill directory.
-
-Allowed top-level support directories:
-
-- `references/`
-- `templates/`
-- `scripts/`
-- `assets/`
-
-Example:
-
-```json
-{
-  "action": "write_support_file",
-  "skillName": "release-workflow",
-  "relativePath": "references/checklist.md",
-  "body": "# Release Checklist\n\n- Run release docs.\n- Verify changelog.\n"
-}
-```
-
-Support files are workspace-scoped, path-checked, byte-limited by
-`maxSkillBytes`, scanned, and written atomically.
-
-## Skill writes
-
-Skill Workshop writes only under:
-
-```text
-<workspace>/skills/<normalized-skill-name>/
-```
-
-Skill names are normalized:
-
-- lowercased
-- non `[a-z0-9_-]` runs become `-`
-- leading/trailing non-alphanumerics are removed
-- max length is 80 characters
-- final name must match `[a-z0-9][a-z0-9_-]{1,79}`
-
-For `create`:
-
-- if the skill does not exist, Skill Workshop writes a new `SKILL.md`
-- if it already exists, Skill Workshop appends the body to `## Workflow`
-
-For `append`:
-
-- if the skill exists, Skill Workshop appends to the requested section
-- if it does not exist, Skill Workshop creates a minimal skill then appends
-
-For `replace`:
-
-- the skill must already exist
-- `oldText` must be present exactly
-- only the first exact match is replaced
-
-All writes are atomic and refresh the in-memory skills snapshot immediately, so
-the new or updated skill can become visible without a Gateway restart.
-
-## Safety model
-
-Skill Workshop has a safety scanner on generated `SKILL.md` content and support
-files.
-
-Critical findings quarantine proposals:
-
-| Rule id                                | Blocks content that...                                                |
-| -------------------------------------- | --------------------------------------------------------------------- |
-| `prompt-injection-ignore-instructions` | tells the agent to ignore prior/higher instructions                   |
-| `prompt-injection-system`              | references system prompts, developer messages, or hidden instructions |
-| `prompt-injection-tool`                | encourages bypassing tool permission/approval                         |
-| `shell-pipe-to-shell`                  | includes `curl`/`wget` piped into `sh`, `bash`, or `zsh`              |
-| `secret-exfiltration`                  | appears to send env/process env data over the network                 |
-
-Warn findings are retained but do not block by themselves:
-
-| Rule id              | Warns on...                      |
-| -------------------- | -------------------------------- |
-| `destructive-delete` | broad `rm -rf` style commands    |
-| `unsafe-permissions` | `chmod 777` style permission use |
-
-Quarantined proposals:
-
-- keep `scanFindings`
-- keep `quarantineReason`
-- appear in `list_quarantine`
-- cannot be applied through `apply`
-
-To recover from a quarantined proposal, create a new safe proposal with the
-unsafe content removed. Do not edit the store JSON by hand.
-
-## Prompt guidance
-
-When enabled, Skill Workshop injects a short prompt section that tells the agent
-to use `skill_workshop` for durable procedural memory.
-
-The guidance emphasizes:
-
-- procedures, not facts/preferences
-- user corrections
-- non-obvious successful procedures
-- recurring pitfalls
-- stale/thin/wrong skill repair through append/replace
-- saving reusable procedure after long tool loops or hard fixes
-- short imperative skill text
-- no transcript dumps
-
-The write mode text changes with `approvalPolicy`:
-
-- pending mode: queue suggestions; use `apply` after explicit approval
-- auto mode: apply safe workspace-skill updates unless `apply: false` queues instead
-
-## Costs and runtime behavior
-
-Heuristic capture does not call a model.
-
-LLM review uses an embedded run on the active/default agent model. It is
-threshold-based so it does not run on every turn by default.
-
-The reviewer:
-
-- uses the same configured provider/model context when available
-- falls back to runtime agent defaults
-- has `reviewTimeoutMs`
-- uses lightweight bootstrap context
-- has no tools
-- writes nothing directly
-- can only emit a proposal that goes through the normal scanner and
-  approval/quarantine path
-
-If the reviewer fails, times out, or returns invalid JSON, the plugin logs a
-warning/debug message and skips that review pass.
-
-## Operating patterns
-
-Use Skill Workshop when the user says:
-
-- "next time, do X"
-- "from now on, prefer Y"
-- "make sure to verify Z"
-- "save this as a workflow"
-- "this took a while; remember the process"
-- "update the local skill for this"
-
-Good skill text:
-
-```markdown
-## Workflow
-
-- Verify the GIF URL resolves to `image/gif`.
-- Confirm the file has multiple frames.
-- Record source URL, license, and attribution.
-- Store a local copy when the asset will ship with the product.
-- Verify the local asset renders in the target UI before final reply.
-```
-
-Poor skill text:
-
-```markdown
-The user asked about a GIF and I searched two websites. Then one was blocked by
-Cloudflare. The final answer said to check attribution.
-```
-
-Reasons the poor version should not be saved:
-
-- transcript-shaped
-- not imperative
-- includes noisy one-off details
-- does not tell the next agent what to do
-
-## Debugging
-
-Check whether the plugin is loaded:
-
-```bash
-openclaw plugins list --enabled
-```
-
-Check proposal counts from an agent/tool context:
-
-```json
-{ "action": "status" }
-```
-
-Inspect pending proposals:
-
-```json
-{ "action": "list_pending" }
-```
-
-Inspect quarantined proposals:
-
-```json
-{ "action": "list_quarantine" }
-```
-
-Common symptoms:
-
-| Symptom                               | Likely cause                                                                        | Check                                                                |
-| ------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Tool is unavailable                   | Plugin entry is not enabled                                                         | `plugins.entries.skill-workshop.enabled` and `openclaw plugins list` |
-| No automatic proposal appears         | `autoCapture: false`, `reviewMode: "off"`, or thresholds not met                    | Config, proposal status, Gateway logs                                |
-| Heuristic did not capture             | User wording did not match correction patterns                                      | Use explicit `skill_workshop.suggest` or enable LLM reviewer         |
-| Reviewer did not create a proposal    | Reviewer returned `none`, invalid JSON, or timed out                                | Gateway logs, `reviewTimeoutMs`, thresholds                          |
-| Proposal is not applied               | `approvalPolicy: "pending"`                                                         | `list_pending`, then `apply`                                         |
-| Proposal disappeared from pending     | Duplicate proposal reused, max pending pruning, or was applied/rejected/quarantined | `status`, `list_pending` with status filters, `list_quarantine`      |
-| Skill file exists but model misses it | Skill snapshot not refreshed or skill gating excludes it                            | `openclaw skills` status and workspace skill eligibility             |
-
-Relevant logs:
-
-- `skill-workshop: queued <skill>`
-- `skill-workshop: applied <skill>`
-- `skill-workshop: quarantined <skill>`
-- `skill-workshop: heuristic capture skipped: ...`
-- `skill-workshop: reviewer skipped: ...`
-- `skill-workshop: reviewer found no update`
-
-## QA scenarios
-
-Repo-backed QA scenarios:
-
-- `qa/scenarios/plugins/skill-workshop-animated-gif-autocreate.md`
-- `qa/scenarios/plugins/skill-workshop-pending-approval.md`
-- `qa/scenarios/plugins/skill-workshop-reviewer-autonomous.md`
-
-Run the deterministic coverage:
-
-```bash
-pnpm openclaw qa suite \
-  --scenario skill-workshop-animated-gif-autocreate \
-  --scenario skill-workshop-pending-approval \
-  --concurrency 1
-```
-
-Run reviewer coverage:
-
-```bash
-pnpm openclaw qa suite \
-  --scenario skill-workshop-reviewer-autonomous \
-  --concurrency 1
-```
-
-The reviewer scenario is intentionally separate because it enables
-`reviewMode: "llm"` and exercises the embedded reviewer pass.
-
-## When not to enable auto apply
-
-Avoid `approvalPolicy: "auto"` when:
-
-- the workspace contains sensitive procedures
-- the agent is working on untrusted input
-- skills are shared across a broad team
-- you are still tuning prompts or scanner rules
-- the model frequently handles hostile web/email content
-
-Use pending mode first. Switch to auto mode only after reviewing the kind of
-skills the agent proposes in that workspace.
-
-## Related docs
-
-- [Skills](/tools/skills)
-- [Plugins](/tools/plugin)
-- [Testing](/reference/test)
-
-
-
 # Section: plugins/tool-plugins.md
 
 ---
@@ -105657,8 +105479,8 @@ Each card stores:
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
 - compact metadata for attempts, comments, links, proof, artifacts, automation,
-  claims, diagnostics, notifications, templates, archive state, and
-  stale-session detection
+  attachments, worker logs, worker protocol state, claims, diagnostics,
+  notifications, templates, archive state, and stale-session detection
 - recent card events such as created, moved, linked, claimed, heartbeat,
   attempt, proof, artifact, diagnostic, notification, dispatch, archive, stale,
   or agent-updated changes
@@ -105715,6 +105537,27 @@ Workboard also exposes optional agent tools for board-aware workflows:
   final summaries, proof, artifacts, created-card manifests, and blocker
   reasons. Created-card manifests must reference cards linked back to the
   completed card, which keeps phantom children out of summaries.
+- `workboard_attachment_add`, `workboard_attachment_read`, and
+  `workboard_attachment_delete` store small card attachments in plugin SQLite
+  state, index them on the card, and expose them in worker context.
+- `workboard_worker_log` and `workboard_protocol_violation` record worker log
+  lines and block cards when an automated worker stops without calling
+  `workboard_complete` or `workboard_block`.
+- `workboard_board_create`, `workboard_board_archive`, and
+  `workboard_board_delete` manage persisted board metadata such as display name,
+  description, archive state, and default workspace.
+- `workboard_runs` returns the persisted run-attempt history stored on a card.
+- `workboard_specify` turns a rough triage or backlog card into a clarified
+  `todo` card and records the specification summary on the card.
+- `workboard_decompose` fans a parent orchestration card into linked children,
+  inherits board and tenant metadata, and can complete the parent with a
+  created-card manifest.
+- `workboard_notify_subscribe`, `workboard_notify_list`,
+  `workboard_notify_events`, `workboard_notify_advance`, and
+  `workboard_notify_unsubscribe` manage notification subscriptions in plugin
+  state. Event reads are replay-safe; the advance tool moves the durable cursor
+  so callers can resume without losing or double-reading completed, failed, or
+  stale card events.
 - `workboard_boards`, `workboard_stats`, `workboard_promote`,
   `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
   `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
@@ -105726,6 +105569,20 @@ Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use
 the normal Gateway RPC surface and can recover or reassign cards.
 
+Workboard stores durable board data in a plugin-owned relational SQLite database
+under the OpenClaw state directory. Boards, cards, labels, lifecycle events,
+run attempts, comments, dependency links, proof, artifact references,
+attachment metadata and blobs, diagnostics, notifications, worker logs,
+protocol state, and subscriptions are persisted in Workboard tables instead of
+plugin key-value entries. A card export still preserves the board narrative
+without inlining attachment blob contents.
+
+Installations that used Workboard in the `.28` release can run
+`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
+(`workboard.cards`, `workboard.boards`, and `workboard.notify`) into the
+relational database. If a legacy `workboard.attachments` namespace is present,
+doctor migrates those attachment blobs too.
+
 Workboard diagnostics are computed from local card metadata. The built-in checks
 flag assigned cards that wait too long, running cards without recent heartbeat,
 blocked cards that need attention, repeated failures, done cards without proof,
@@ -105733,9 +105590,16 @@ and running cards that only have a loose session link.
 
 Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
 system processes; normal OpenClaw sessions still own execution. A dispatch nudge
-promotes dependency-ready cards, records dispatch metadata on ready cards, and
-blocks expired claims or timed-out runs so operators can recover them from the
-board.
+promotes dependency-ready cards, records dispatch metadata on ready cards,
+blocks expired claims or timed-out runs, marks board-configured triage cards as
+orchestration candidates, and leaves durable notification subscriptions for the
+caller that delivers notifications.
+
+Board metadata can include orchestration settings such as `autoDecompose`,
+`autoDecomposePerDispatch`, `defaultAssignee`, and `orchestratorProfile`.
+OpenClaw records the orchestration intent and exposes it in worker context; the
+actual specification, decomposition, or session start still happens through the
+normal Workboard tools and dashboard session flow.
 
 ## Session lifecycle sync
 
@@ -105795,9 +105659,12 @@ The plugin registers Gateway RPC methods under the `workboard.*` namespace:
 - `workboard.cards.export` requires `operator.read`
 - `workboard.cards.diagnostics` requires `operator.read`
 - `workboard.cards.diagnostics.refresh` requires `operator.write`
+- attachment list/get and notification event reads require `operator.read`
+- notification cursor advancement requires `operator.write`
 - create, update, move, delete, comment, link, dependency link, proof, artifact,
-  claim, heartbeat, release, complete, block, unblock, dispatch, bulk, and
-  archive methods require `operator.write`
+  attachment add/delete, worker log, protocol violation, claim, heartbeat,
+  release, complete, block, unblock, dispatch, bulk, and archive methods require
+  `operator.write`
 
 Browsers connected with read-only operator access can inspect the board but
 cannot mutate cards.
@@ -108040,6 +107907,7 @@ providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchP
 ## Related docs
 
 - [ollama](/providers/ollama)
+- [ollama-cloud](/providers/ollama-cloud)
 
 
 
@@ -108070,7 +107938,7 @@ skills
 # Section: plugins/reference/openai.md
 
 ---
-summary: "Adds OpenAI, OpenAI Codex model provider support to OpenClaw."
+summary: "Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth."
 read_when:
   - You are installing, configuring, or auditing the openai plugin
 title: "OpenAI plugin"
@@ -108078,7 +107946,7 @@ title: "OpenAI plugin"
 
 # OpenAI plugin
 
-Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
+Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth.
 
 ## Distribution
 
@@ -108087,7 +107955,7 @@ Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
 
 ## Surface
 
-providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders
+providers: openai; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders
 
 ## Related docs
 
@@ -108493,6 +108361,7 @@ providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwe
 ## Related docs
 
 - [qwen](/providers/qwen)
+- [qwen-oauth](/providers/qwen-oauth)
 
 
 
@@ -108632,34 +108501,6 @@ channels: signal
 
 
 
-# Section: plugins/reference/skill-workshop.md
-
----
-summary: "Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh."
-read_when:
-  - You are installing, configuring, or auditing the skill-workshop plugin
-title: "Skill Workshop plugin"
----
-
-# Skill Workshop plugin
-
-Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh.
-
-## Distribution
-
-- Package: `@openclaw/skill-workshop`
-- Install route: included in OpenClaw
-
-## Surface
-
-contracts: tools
-
-## Related docs
-
-- [skill-workshop](/plugins/skill-workshop)
-
-
-
 # Section: plugins/reference/slack.md
 
 ---
@@ -108685,6 +108526,34 @@ channels: slack
 ## Related docs
 
 - [slack](/channels/slack)
+
+
+
+# Section: plugins/reference/sms.md
+
+---
+summary: "Twilio SMS channel plugin for OpenClaw text messages."
+read_when:
+  - You are installing, configuring, or auditing the sms plugin
+title: "Sms plugin"
+---
+
+# Sms plugin
+
+Twilio SMS channel plugin for OpenClaw text messages.
+
+## Distribution
+
+- Package: `@openclaw/sms`
+- Install route: included in OpenClaw
+
+## Surface
+
+channels: sms
+
+## Related docs
+
+- [sms](/channels/sms)
 
 
 
@@ -109323,7 +109192,7 @@ providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders
 # Section: plugins/reference/xiaomi.md
 
 ---
-summary: "Adds Xiaomi model provider support to OpenClaw."
+summary: "Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the xiaomi plugin
 title: "Xiaomi plugin"
@@ -109331,7 +109200,7 @@ title: "Xiaomi plugin"
 
 # Xiaomi plugin
 
-Adds Xiaomi model provider support to OpenClaw.
+Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
 ## Distribution
 
@@ -109340,7 +109209,7 @@ Adds Xiaomi model provider support to OpenClaw.
 
 ## Surface
 
-providers: xiaomi; contracts: speechProviders
+providers: xiaomi, xiaomi-token-plan; contracts: speechProviders
 
 ## Related docs
 
@@ -118509,8 +118378,8 @@ title: "OpenAI"
 ---
 
 OpenAI provides developer APIs for GPT models, and Codex is also available as a
-ChatGPT-plan coding agent through OpenAI's Codex clients. OpenClaw keeps those
-surfaces separate so config stays predictable.
+ChatGPT-plan coding agent through OpenAI's Codex clients. OpenClaw uses one
+provider id, `openai`, for both auth shapes.
 
 OpenClaw uses `openai/*` as the canonical OpenAI model route. Embedded agent
 turns on OpenAI models run through the native Codex app-server runtime by
@@ -118522,7 +118391,7 @@ surfaces such as images, embeddings, speech, and realtime.
   OpenAI API-key backup when you intentionally want API-key auth.
 - **Non-agent OpenAI APIs** - direct OpenAI Platform access with usage-based
   billing through `OPENAI_API_KEY` or OpenAI API-key onboarding.
-- **Legacy config** - `openai-codex/*` model refs are repaired by
+- **Legacy config** - legacy Codex model refs are repaired by
   `openclaw doctor --fix` to `openai/*` plus the Codex runtime.
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
@@ -118539,7 +118408,7 @@ changing config.
 | Direct API-key billing for agent models              | `openai/gpt-5.5` plus a Codex-compatible API-key profile | Use `auth.order.openai` to place the backup after subscription auth.  |
 | Direct API-key billing through explicit OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select a normal `openai` API-key profile.                             |
 | Latest ChatGPT Instant API alias                     | `openai/chat-latest`                                     | Direct API-key only. Moving alias for experiments, not the default.   |
-| ChatGPT/Codex subscription auth through OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select an `openai-codex` auth profile for the compatibility route.    |
+| ChatGPT/Codex subscription auth through OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select an `openai` OAuth profile for the compatibility route.         |
 | Image generation or editing                          | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.             |
 | Transparent-background images                        | `openai/gpt-image-1.5`                                   | Use `outputFormat=png` or `webp` and `openai.background=transparent`. |
 
@@ -118547,20 +118416,20 @@ changing config.
 
 The names are similar but not interchangeable:
 
-| Name you see                            | Layer                      | Meaning                                                                                                              |
-| --------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `openai`                                | Provider prefix            | Canonical OpenAI model route; agent turns use the Codex runtime.                                                     |
-| `openai-codex`                          | Legacy auth/profile prefix | Older OpenAI Codex OAuth/subscription profile namespace. Existing profiles and `auth.order.openai-codex` still work. |
-| `codex` plugin                          | Plugin                     | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls.                    |
-| provider/model `agentRuntime.id: codex` | Agent runtime              | Force the native Codex app-server harness for matching embedded turns.                                               |
-| `/codex ...`                            | Chat command set           | Bind/control Codex app-server threads from a conversation.                                                           |
-| `runtime: "acp", agentId: "codex"`      | ACP session route          | Explicit fallback path that runs Codex through ACP/acpx.                                                             |
+| Name you see                            | Layer             | Meaning                                                                                           |
+| --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
+| `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
+| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
+| `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
+| provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
+| `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                        |
+| `runtime: "acp", agentId: "codex"`      | ACP session route | Explicit fallback path that runs Codex through ACP/acpx.                                          |
 
 This means a config can intentionally contain `openai/*` model refs while auth
-profiles still point at Codex-compatible credentials. Prefer `auth.order.openai`
-for new config; existing `openai-codex:*` profiles and `auth.order.openai-codex`
-remain supported. `openclaw doctor --fix` rewrites legacy `openai-codex/*` model
-refs to the canonical OpenAI model route.
+profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
+`auth.order.openai` for config; `openclaw doctor --fix` rewrites legacy
+legacy Codex model refs, legacy Codex auth profile ids, and
+legacy Codex auth order to the canonical OpenAI route.
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
@@ -118573,10 +118442,10 @@ direct API-key auth for an OpenAI agent model.
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit
 OpenClaw runtime config remains available as an opt-in compatibility route. When OpenClaw is
-explicitly selected with an `openai-codex` auth profile, OpenClaw keeps the
+explicitly selected with an `openai` OAuth profile, OpenClaw keeps the
 public model ref as `openai/*` and routes internally through the Codex-auth
 transport. Run `openclaw doctor --fix` to repair stale
-`openai-codex/*`, `codex-cli/*`, or old runtime session pins that do not come from
+legacy Codex model refs, `codex-cli/*`, or old runtime session pins that do not come from
 explicit runtime config.
 </Note>
 
@@ -118585,8 +118454,8 @@ explicit runtime config.
 | OpenAI capability         | OpenClaw surface                                                                              | Status                                                                 |
 | ------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Chat / Responses          | `openai/<model>` model provider                                                               | Yes                                                                    |
-| Codex subscription models | `openai/<model>` with `openai-codex` OAuth                                                    | Yes                                                                    |
-| Legacy Codex model refs   | `openai-codex/<model>` or `codex-cli/<model>`                                                 | Repaired by doctor to `openai/<model>`                                 |
+| Codex subscription models | `openai/<model>` with OpenAI OAuth                                                            | Yes                                                                    |
+| Legacy Codex model refs   | legacy Codex model refs or `codex-cli/<model>`                                                | Repaired by doctor to `openai/<model>`                                 |
 | Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex`              | Yes                                                                    |
 | Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no provider pinned                 |
 | Images                    | `image_generate`                                                                              | Yes                                                                    |
@@ -118602,7 +118471,7 @@ explicit runtime config.
   Control UI Talk with `talk.realtime.provider: "openai"`) goes through the
   public **OpenAI Platform Realtime API**, which is billed against OpenAI
   Platform credits rather than Codex/ChatGPT subscription quota. An account
-  with healthy Codex OAuth that runs `openai-codex/*` chat models without
+  with healthy OpenAI OAuth that runs Codex-backed chat models without
   issue can still hit `insufficient_quota` / "You exceeded your current
   quota" on the first Realtime turn if the same OpenAI organization has no
   Platform billing set up.
@@ -118612,10 +118481,10 @@ Fix: top up Platform credits at
 for the organization backing your realtime credentials. Realtime accepts
 either a Platform `OPENAI_API_KEY` (configured via `talk.realtime.providers.openai.apiKey`
 for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
-for Voice Call) or an `openai-codex` OAuth profile whose underlying
+for Voice Call) or an `openai` OAuth profile whose underlying
 organization has Platform billing — both routes mint Realtime client secrets
 through the Platform API, so either way the org needs funded Platform
-credits. For chat turns you can still use `openai-codex/*` against the same
+credits. For chat turns you can still use Codex-backed `openai/*` models against the same
 OpenClaw install; Realtime is the one route that needs Platform billing.
 </Note>
 
@@ -118679,14 +118548,14 @@ Choose your preferred auth method and follow the setup steps.
     | ---------------------- | -------------------------- | --------------------------- | ---------------- |
     | `openai/gpt-5.5`      | omitted / provider/model `agentRuntime.id: "codex"` | Codex app-server harness | Codex-compatible OpenAI profile |
     | `openai/gpt-5.4-mini` | omitted / provider/model `agentRuntime.id: "codex"` | Codex app-server harness | Codex-compatible OpenAI profile |
-    | `openai/gpt-5.5`      | provider/model `agentRuntime.id: "openclaw"`              | OpenClaw embedded runtime      | `openai` profile or selected `openai-codex` profile |
+    | `openai/gpt-5.5`      | provider/model `agentRuntime.id: "openclaw"`              | OpenClaw embedded runtime      | Selected `openai` profile |
 
     <Note>
     `openai/*` agent models use the Codex app-server harness. To use API-key
     auth for an agent model, create a Codex-compatible API-key profile and order
     it with `auth.order.openai`; `OPENAI_API_KEY` remains the direct fallback for
-    non-agent OpenAI API surfaces. Older `auth.order.openai-codex` entries still
-    work.
+    non-agent OpenAI API surfaces. Run `openclaw doctor --fix` to migrate older
+    legacy Codex auth order entries.
     </Note>
 
     ### Config example
@@ -118716,7 +118585,7 @@ Choose your preferred auth method and follow the setup steps.
     model.
 
     <Warning>
-    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that direct provider route. Use `openai-codex/gpt-5.3-codex-spark` only when the Codex catalog exposes it for your signed-in account.
+    OpenClaw does **not** expose `gpt-5.3-codex-spark` on the direct OpenAI API-key route. It is available only through Codex subscription catalog entries when your signed-in account exposes it.
     </Warning>
 
   </Tab>
@@ -118727,19 +118596,19 @@ Choose your preferred auth method and follow the setup steps.
     <Steps>
       <Step title="Run Codex OAuth">
         ```bash
-        openclaw onboard --auth-choice openai-codex
+        openclaw onboard --auth-choice openai
         ```
 
         Or run OAuth directly:
 
         ```bash
-        openclaw models auth login --provider openai-codex
+        openclaw models auth login --provider openai
         ```
 
         For headless or callback-hostile setups, add `--device-code` to sign in with a ChatGPT device-code flow instead of the localhost browser callback:
 
         ```bash
-        openclaw models auth login --provider openai-codex --device-code
+        openclaw models auth login --provider openai --device-code
         ```
       </Step>
       <Step title="Use the canonical OpenAI model route">
@@ -118753,7 +118622,7 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Verify Codex auth is available">
         ```bash
-        openclaw models list --provider openai-codex
+        openclaw models list --provider openai
         ```
 
         After the gateway is running, send `/codex status` or `/codex models`
@@ -118766,25 +118635,25 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or ordered `openai` auth profile |
-    | `openai/gpt-5.5` | provider/model `agentRuntime.id: "openclaw"` | OpenClaw embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
-    | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
+    | `openai/gpt-5.5` | provider/model `agentRuntime.id: "openclaw"` | OpenClaw embedded runtime with internal Codex-auth transport | Selected `openai` OAuth profile |
+    | legacy Codex GPT-5.5 ref | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Migrated OpenAI OAuth profile |
     | `codex-cli/gpt-5.5` | repaired by doctor | Legacy CLI route rewritten to `openai/gpt-5.5` | Codex app-server auth |
 
     <Warning>
     Prefer `openai/gpt-5.5` for new subscription-backed agent config. Older
-    `openai-codex/gpt-*` refs are legacy OpenClaw routes, not the native Codex runtime
+    legacy Codex GPT refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` when you want to migrate them to canonical
-    `openai/*` refs. `openai-codex/gpt-5.3-codex-spark` is the exception for
-    accounts whose Codex catalog advertises that model; direct `openai/*` and
+    `openai/*` refs. `gpt-5.3-codex-spark` remains limited to accounts whose
+    Codex subscription catalog advertises that model; direct OpenAI API-key and
     Azure refs for it remain suppressed.
     </Warning>
 
     <Note>
-    The `openai-codex/*` model prefix is legacy config repaired by doctor. For
+    The legacy Codex model prefix is legacy config repaired by doctor. For
     the common subscription plus native runtime setup, sign in with Codex auth
     but keep the model ref as `openai/gpt-5.5`. New config should put OpenAI
-    agent auth order under `auth.order.openai`; older `auth.order.openai-codex`
-    entries remain valid.
+    agent auth order under `auth.order.openai`; doctor migrates older
+    legacy Codex auth order entries.
     </Note>
 
     ### Config example
@@ -118815,7 +118684,7 @@ Choose your preferred auth method and follow the setup steps.
       auth: {
         order: {
           openai: [
-            "openai-codex:user@example.com",
+            "openai:user@example.com",
             "openai:api-key-backup",
           ],
         },
@@ -118834,7 +118703,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ```bash
     openclaw models status
-    openclaw models auth list --provider openai-codex
+    openclaw models auth list --provider openai
     openclaw config get agents.defaults.model --json
     openclaw config get models.providers.openai.agentRuntime --json
     ```
@@ -118843,10 +118712,10 @@ Choose your preferred auth method and follow the setup steps.
 
     ```bash
     openclaw models status --agent <id>
-    openclaw models auth list --agent <id> --provider openai-codex
+    openclaw models auth list --agent <id> --provider openai
     ```
 
-    If an older config still has `openai-codex/gpt-*` or a stale OpenAI runtime
+    If an older config still has legacy Codex GPT refs or a stale OpenAI runtime
     session pin without explicit runtime config, repair it:
 
     ```bash
@@ -118854,25 +118723,25 @@ Choose your preferred auth method and follow the setup steps.
     openclaw config validate
     ```
 
-    If `models auth list --provider openai-codex` shows no usable profile, sign
+    If `models auth list --provider openai` shows no usable profile, sign
     in again:
 
     ```bash
-    openclaw models auth login --provider openai-codex
-    openclaw models status --probe --probe-provider openai-codex
+    openclaw models auth login --provider openai
+    openclaw models status --probe --probe-provider openai
     ```
 
     Use `--profile-id` when you want multiple Codex OAuth logins in the same
     agent and later want to control them via auth ordering or `/model ...@<profileId>`:
 
     ```bash
-    openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
-    openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
+    openclaw models auth login --provider openai --profile-id openai:ritsuko
+    openclaw models auth login --provider openai --profile-id openai:lain
     ```
 
-    `openai/*` is the model route for OpenAI agent turns through Codex. The
-    `openai-codex` auth/profile provider id remains accepted for existing
-    profiles and CLI listing.
+    `openai/*` is the model route for OpenAI agent turns through Codex. Run
+    `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix profile ids and
+    order entries before relying on profile ordering.
 
     ### Status indicator
 
@@ -118883,7 +118752,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ### Doctor warning
 
-    If `openai-codex/*` routes or stale OpenAI runtime pins remain in config or
+    If legacy Codex model refs or stale OpenAI runtime pins remain in config or
     session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
     Codex runtime unless OpenClaw is explicitly configured.
 
@@ -118902,7 +118771,7 @@ Choose your preferred auth method and follow the setup steps.
     {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [{ id: "gpt-5.5", contextTokens: 160000 }],
           },
         },
@@ -118932,8 +118801,8 @@ runtime config or provider/model `agentRuntime.id: "codex"`, but its auth is
 still account-based. OpenClaw selects auth in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
-   `auth.order.openai`. Existing `openai-codex:*` profiles and
-   `auth.order.openai-codex` remain valid for older installs.
+   `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
+   legacy Codex auth profile ids and legacy Codex auth order.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when the app-server reports no account and still requires
@@ -119010,8 +118879,8 @@ Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
 
-For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
-`openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
+For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
+`openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
 access token and sends image requests through the Codex Responses backend. It
 does not first try `OPENAI_API_KEY` or silently fall back to an API key for that
 request. Configure `models.providers.openai` explicitly with an API key,
@@ -119072,7 +118941,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so OpenClaw/provider routes such as legacy pre-repair refs (`openai-codex/gpt-5.5`), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so OpenClaw/provider routes such as legacy pre-repair refs (legacy Codex GPT-5.5 ref), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness does not receive this OpenClaw GPT-5 overlay through Codex app-server developer instructions. Native Codex keeps Codex-owned base, model, and project-doc behavior, while OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files stay authoritative. OpenClaw contributes only runtime context such as channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and OpenClaw skills.
 
@@ -119198,10 +119067,10 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Prompt | `...openai.prompt` | (unset) |
     | Silence duration | `...openai.silenceDurationMs` | `800` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
-    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai-codex` OAuth | API keys connect directly; OAuth mints a Realtime transcription client secret |
+    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth | API keys connect directly; OAuth mints a Realtime transcription client secret |
 
     <Note>
-    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. When only `openai-codex` OAuth is configured, the Gateway mints an ephemeral Realtime transcription client secret before opening the WebSocket. This streaming provider is for Voice Call's realtime transcription path; Discord voice currently records short segments and uses the batch `tools.media.audio` transcription path instead.
+    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. When only `openai` OAuth is configured, the Gateway mints an ephemeral Realtime transcription client secret before opening the WebSocket. This streaming provider is for Voice Call's realtime transcription path; Discord voice currently records short segments and uses the batch `tools.media.audio` transcription path instead.
     </Note>
 
   </Accordion>
@@ -119218,7 +119087,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | Prefix padding | `...openai.prefixPaddingMs` | `300` |
     | Reasoning effort | `...openai.reasoningEffort` | (unset) |
-    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai-codex` OAuth | Browser Talk and non-Azure backend bridges can use Codex OAuth |
+    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth | Browser Talk and non-Azure backend bridges can use OpenAI OAuth |
 
     Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -119241,7 +119110,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     Control UI Talk uses OpenAI browser realtime sessions with a Gateway-minted
     ephemeral client secret and a direct browser WebRTC SDP exchange against the
     OpenAI Realtime API. When no direct OpenAI API key is configured, the
-    Gateway can mint that client secret with the selected `openai-codex` OAuth
+    Gateway can mint that client secret with the selected `openai` OAuth
     profile. Gateway relay and Voice Call backend realtime WebSocket bridges use
     the same OAuth fallback for native OpenAI endpoints. Maintainer live
     verification is available with
@@ -124005,54 +123874,70 @@ runtime selection, fallback, normalization, and media attachment path.
 # Section: providers/xiaomi.md
 
 ---
-summary: "Use Xiaomi MiMo models with OpenClaw"
+summary: "Use Xiaomi MiMo pay-as-you-go and Token Plan models with OpenClaw"
 read_when:
   - You want Xiaomi MiMo models in OpenClaw
-  - You need XIAOMI_API_KEY setup
+  - You need Xiaomi MiMo auth or Token Plan setup
 title: "Xiaomi MiMo"
 ---
 
-Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled `xiaomi` plugin that registers both an OpenAI-compatible chat provider and a speech (TTS) provider against the same `XIAOMI_API_KEY`.
+Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled Xiaomi plugin with two text-provider presets:
 
-| Property        | Value                                    |
-| --------------- | ---------------------------------------- |
-| Provider id     | `xiaomi`                                 |
-| Plugin          | bundled, `enabledByDefault: true`        |
-| Auth env var    | `XIAOMI_API_KEY`                         |
-| Onboarding flag | `--auth-choice xiaomi-api-key`           |
-| Direct CLI flag | `--xiaomi-api-key <key>`                 |
-| Contracts       | chat completions + `speechProviders`     |
-| API             | OpenAI-compatible (`openai-completions`) |
-| Base URL        | `https://api.xiaomimimo.com/v1`          |
-| Default model   | `xiaomi/mimo-v2-flash`                   |
-| TTS default     | `mimo-v2.5-tts`, voice `mimo_default`    |
+- `xiaomi` for pay-as-you-go keys (`sk-...`)
+- `xiaomi-token-plan` for Token Plan keys (`tp-...`) with regional endpoint presets
+
+The same plugin also registers the `xiaomi` speech (TTS) provider.
+
+| Property         | Value                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider ids     | `xiaomi` (pay-as-you-go), `xiaomi-token-plan` (Token Plan)                                                                                         |
+| Plugin           | bundled, `enabledByDefault: true`                                                                                                                  |
+| Auth env vars    | `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`                                                                                                      |
+| Onboarding flags | `--auth-choice xiaomi-api-key`, `--auth-choice xiaomi-token-plan-cn`, `--auth-choice xiaomi-token-plan-sgp`, `--auth-choice xiaomi-token-plan-ams` |
+| Direct CLI flags | `--xiaomi-api-key <key>`, `--xiaomi-token-plan-api-key <key>`                                                                                      |
+| Contracts        | chat completions + `speechProviders`                                                                                                               |
+| API              | OpenAI-compatible (`openai-completions`)                                                                                                           |
+| Base URLs        | Pay-as-you-go: `https://api.xiaomimimo.com/v1`; Token Plan presets: `token-plan-{cn,sgp,ams}...`                                                   |
+| Default models   | `xiaomi/mimo-v2-flash`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                          |
+| TTS default      | `mimo-v2.5-tts`, voice `mimo_default`                                                                                                              |
 
 ## Getting started
 
 <Steps>
-  <Step title="Get an API key">
-    Create an API key in the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys).
+  <Step title="Get the right key">
+    Create a pay-as-you-go key in the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys), or open your Token Plan subscription page and copy the regional OpenAI-compatible base URL plus the matching `tp-...` key.
   </Step>
+
   <Step title="Run onboarding">
+    Pay-as-you-go:
+
     ```bash
     openclaw onboard --auth-choice xiaomi-api-key
     ```
 
-    Or pass the key directly:
+    Token Plan:
+
+    ```bash
+    openclaw onboard --auth-choice xiaomi-token-plan-sgp
+    ```
+
+    Or pass the keys directly:
 
     ```bash
     openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+    openclaw onboard --auth-choice xiaomi-token-plan-sgp --xiaomi-token-plan-api-key "$XIAOMI_TOKEN_PLAN_API_KEY"
     ```
 
   </Step>
   <Step title="Verify the model is available">
     ```bash
     openclaw models list --provider xiaomi
+    openclaw models list --provider xiaomi-token-plan
     ```
   </Step>
 </Steps>
 
-## Built-in catalog
+## Pay-as-you-go catalog
 
 | Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
 | ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |
@@ -124062,6 +123947,23 @@ Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled
 
 <Tip>
 The default model ref is `xiaomi/mimo-v2-flash`. The provider is injected automatically when `XIAOMI_API_KEY` is set or an auth profile exists.
+</Tip>
+
+## Token Plan catalog
+
+Choose the Token Plan auth choice that matches the regional base URL shown in Xiaomi's subscription UI:
+
+- `xiaomi-token-plan-cn` -> `https://token-plan-cn.xiaomimimo.com/v1`
+- `xiaomi-token-plan-sgp` -> `https://token-plan-sgp.xiaomimimo.com/v1`
+- `xiaomi-token-plan-ams` -> `https://token-plan-ams.xiaomimimo.com/v1`
+
+| Model ref                         | Input       | Context   | Max output | Reasoning | Notes         |
+| --------------------------------- | ----------- | --------- | ---------- | --------- | ------------- |
+| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | Default model |
+| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | Multimodal    |
+
+<Tip>
+Token Plan onboarding validates the key shape and warns when a `tp-...` key is entered into the pay-as-you-go path, or an `sk-...` key is entered into the Token Plan path.
 </Tip>
 
 ## Text-to-speech
@@ -124123,7 +124025,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Flash",
             reasoning: false,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 8192,
           },
@@ -124132,7 +124033,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1048576,
             maxTokens: 32000,
           },
@@ -124141,7 +124041,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Omni",
             reasoning: true,
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 32000,
           },
@@ -124152,24 +124051,68 @@ Opus with `ffmpeg` before delivery.
 }
 ```
 
+Pricing and compat flags come from the bundled plugin manifest, so the config example omits `cost` and `compat` to avoid diverging from runtime behavior.
+
+Token Plan:
+
+```json5
+{
+  env: { XIAOMI_TOKEN_PLAN_API_KEY: "tp-your-key" },
+  agents: { defaults: { model: { primary: "xiaomi-token-plan/mimo-v2.5-pro" } } },
+  models: {
+    mode: "merge",
+    providers: {
+      "xiaomi-token-plan": {
+        baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+        api: "openai-completions",
+        apiKey: "XIAOMI_TOKEN_PLAN_API_KEY",
+        models: [
+          {
+            id: "mimo-v2.5-pro",
+            name: "Xiaomi MiMo V2.5 Pro",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+          {
+            id: "mimo-v2.5",
+            name: "Xiaomi MiMo V2.5",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Pricing comes from the bundled manifest (Token Plan models include tiered cache-read pricing), so the config example omits `cost`.
+
 <AccordionGroup>
   <Accordion title="Auto-injection behavior">
-    The `xiaomi` provider is injected automatically when `XIAOMI_API_KEY` is set in your environment or an auth profile exists. You do not need to manually configure the provider unless you want to override model metadata or the base URL.
+    The `xiaomi` provider is injected automatically when `XIAOMI_API_KEY` is set in your environment or an auth profile exists. `xiaomi-token-plan` needs a regional base URL, so the supported path is the bundled Token Plan onboarding choice or an explicit `models.providers.xiaomi-token-plan` config block.
   </Accordion>
 
   <Accordion title="Model details">
     - **mimo-v2-flash** — lightweight and fast, ideal for general-purpose text tasks. No reasoning support.
     - **mimo-v2-pro** — supports reasoning with a 1M token context window for long-document workloads.
     - **mimo-v2-omni** — reasoning-enabled multimodal model that accepts both text and image inputs.
+    - **mimo-v2.5-pro** — Token Plan default with Xiaomi's current V2.5 reasoning stack.
+    - **mimo-v2.5** — Token Plan multimodal V2.5 route.
 
     <Note>
-    All models use the `xiaomi/` prefix (for example `xiaomi/mimo-v2-pro`).
+    Pay-as-you-go models use the `xiaomi/` prefix. Token Plan models use the `xiaomi-token-plan/` prefix.
     </Note>
 
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If models do not appear, confirm `XIAOMI_API_KEY` is set and valid.
+    - If models do not appear, confirm the relevant key env var or auth profile is present and valid.
+    - For Token Plan, confirm the chosen onboarding region matches the subscription page base URL and that the key starts with `tp-`.
     - When the Gateway runs as a daemon, ensure the key is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
     <Warning>
@@ -128860,6 +128803,7 @@ read_when:
   - You want to enable OpenClaw code mode for an agent run
   - You need to explain why code mode is different from Codex Code mode
   - You are reviewing the exec/wait contract, QuickJS-WASI sandbox, TypeScript transform, or hidden tool-catalog bridge
+  - You are adding or reviewing an internal code-mode namespace registry integration
 ---
 
 Code mode is an experimental OpenClaw agent-runtime feature. It is off by
@@ -129234,6 +129178,7 @@ The guest runtime exposes a small global API:
 ```typescript
 declare const ALL_TOOLS: ToolCatalogEntry[];
 declare const tools: ToolCatalog;
+declare const namespaces: Record<string, unknown>;
 
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
@@ -129286,6 +129231,189 @@ const hits = await tools.web_search({ query: "OpenClaw code mode" });
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
+
+## Internal namespaces
+
+Internal namespaces give code mode a concise domain API without adding more
+model-visible tools. A loader-owned integration can register a namespace such
+as `Issues`, `Fictions`, or `Calendar`; guest code then calls that namespace
+inside the QuickJS program while OpenClaw still shows only `exec` and `wait` to
+the model.
+
+Namespaces are internal for now. There is no public plugin SDK namespace API:
+external plugin namespaces need a loader-owned contract so plugin identity,
+installed manifests, auth state, and cached catalog descriptors cannot drift
+from the plugin tools that back the namespace. Core code mode owns only the
+sandbox, serialization, catalog gating, and bridge dispatch.
+
+Guest code can then use either the direct global or the `namespaces` map:
+
+```javascript
+const open = await Issues.list({ state: "open" });
+const alsoOpen = await namespaces.Issues.list({ state: "open" });
+return { count: open.length, alsoCount: alsoOpen.length };
+```
+
+### Registry lifecycle
+
+The namespace registry is process-local and keyed by namespace id. A typical
+run follows this path:
+
+1. A trusted loader calls `registerCodeModeNamespaceForPlugin(pluginId, registration)`.
+2. Code mode creates the hidden `ToolSearchRuntime` for the run and reads its
+   run-scoped catalog.
+3. `createCodeModeNamespaceRuntime(ctx, catalog)` keeps only registrations
+   whose `requiredToolNames` are all visible and owned by the same `pluginId`.
+4. Each visible namespace calls `createScope(ctx)` for the current run. The
+   scope receives run context such as `agentId`, `sessionKey`, `sessionId`,
+   `runId`, config, and abort state.
+5. Scope data is serialized into a plain descriptor and injected into QuickJS as
+   direct globals and `namespaces.<globalName>`.
+6. Guest calls suspend through the worker bridge, resolve the namespace path on
+   the host, map the call to a declared plugin-owned catalog tool, and execute
+   that tool through `ToolSearchRuntime.call`.
+7. `wait` resumes the same namespace runtime when a code-mode run suspended on
+   nested tool work.
+8. Plugin rollback or uninstall calls `clearCodeModeNamespacesForPlugin(pluginId)`
+   so stale globals do not survive a failed plugin load.
+
+The important invariant: namespace calls are catalog tool calls. They use the
+same policy hooks, approvals, abort handling, telemetry, transcript projection,
+and suspend/resume behavior as `tools.call(...)`.
+
+### Registration shape
+
+Register namespaces from the integration that owns the backing tools. Keep the
+scope small and only expose domain verbs that map to declared catalog tools.
+
+```typescript
+import {
+  createCodeModeNamespaceTool,
+  registerCodeModeNamespaceForPlugin,
+} from "../agents/code-mode-namespaces.js";
+
+const pluginId = "github";
+
+registerCodeModeNamespaceForPlugin(pluginId, {
+  id: "github-issues",
+  globalName: "Issues",
+  description: "GitHub issue helpers for the current repository.",
+  requiredToolNames: ["github_list_issues", "github_update_issue"],
+  prompt: "Use Issues.list(params) and Issues.update(number, patch).",
+  createScope: (ctx) => ({
+    repository: ctx.config,
+    list: createCodeModeNamespaceTool("github_list_issues", ([params]) => params ?? {}),
+    update: createCodeModeNamespaceTool("github_update_issue", ([number, patch]) => ({
+      number,
+      patch,
+    })),
+  }),
+});
+```
+
+`createCodeModeNamespaceTool(toolName, inputMapper)` marks a scope member as a
+callable namespace function. The optional `inputMapper` receives the guest
+arguments and returns the input object for the backing catalog tool. Without an
+input mapper, the first guest argument is used, or `{}` when omitted.
+
+Raw host functions are rejected before guest code runs:
+
+```typescript
+createScope: () => ({
+  // Wrong: this bypasses the catalog tool lifecycle and will be rejected.
+  list: async () => githubClient.listIssues(),
+});
+```
+
+### Ownership and visibility
+
+Namespace ownership is bound to the registration caller's `pluginId`.
+`requiredToolNames` is both a visibility gate and an ownership check:
+
+- every required tool must exist in the run catalog
+- every required tool must have `sourceName === pluginId`
+- the namespace is hidden when any required tool is absent or owned by another
+  plugin
+- each callable path may target only a tool named in `requiredToolNames`
+
+This prevents another plugin from exposing a namespace by registering a
+same-named tool. It also keeps namespaces aligned with ordinary agent policy:
+if the run cannot see the backing tools, it cannot see the namespace.
+
+For example, a GitHub namespace should live behind a GitHub-owned extension that
+owns GitHub auth, REST or GraphQL clients, rate limits, write approvals, and
+tests. Core code mode should not embed GitHub-specific APIs, token handling, or
+provider policy.
+
+### Scope serialization rules
+
+`createScope(ctx)` may return a plain object containing JSON-compatible values,
+arrays, nested objects, and `createCodeModeNamespaceTool(...)` call markers.
+Host objects never enter QuickJS directly.
+
+The serializer rejects:
+
+- raw functions
+- circular object graphs
+- unsafe path segments: `__proto__`, `constructor`, `prototype`, empty keys, or
+  keys containing the internal path separator
+- `globalName` values that are not JavaScript identifiers
+- `globalName` collisions with built-in code-mode globals such as `tools`,
+  `namespaces`, `text`, `json`, `yield_control`, or `__openclaw*`
+
+Values that cannot be JSON-serialized are converted to JSON-safe fallback
+values before crossing the bridge. Binary data, handles, sockets, clients, and
+class instances should stay behind ordinary catalog tools.
+
+### Prompts
+
+The namespace `description` and optional `prompt` are appended to the model
+visible `exec` schema only when the namespace is visible for that run. Use them
+to teach the smallest useful surface:
+
+```typescript
+{
+  description: "Fiction production service helpers.",
+  prompt:
+    "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), and Fictions.unpaidOver(amount).",
+}
+```
+
+Keep prompts about the namespace contract, not auth setup, implementation
+history, or unrelated plugin behavior.
+
+### Cleanup
+
+Namespaces are process-local registrations. Remove them when the owning plugin
+is disabled, uninstalled, or rolled back:
+
+```typescript
+clearCodeModeNamespacesForPlugin(pluginId);
+```
+
+Use `unregisterCodeModeNamespace(namespaceId)` only when removing one known
+namespace. Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
+registrations across cases.
+
+### Test checklist
+
+Namespace changes should cover the security boundary and the guest behavior:
+
+- namespace prompt text appears only when backing tools are visible
+- same-named tools from another `sourceName` do not expose the namespace
+- raw scope functions are rejected
+- forged namespace ids and forged paths are rejected
+- callable paths cannot target undeclared tools
+- nested objects and shared references serialize correctly
+- namespace calls execute through catalog tools and return JSON-safe details
+- failures can be caught by guest code
+- suspended namespace calls resume through `wait`
+- plugin rollback clears the owning namespace registrations
+
+Namespaces complement the generic `tools.search` / `tools.call` catalog. Use
+the catalog for arbitrary enabled tools; use namespaces for plugin-owned,
+documented domain APIs where concise code is more reliable than repeated schema
+lookups.
 
 ## Output API
 
@@ -131312,9 +131440,11 @@ to the public blog post.
 
 Two audits are combined here:
 
-- **Release performance sweep:** GitHub Releases from `v2026.5.27` back through
+- **Release performance sweep:** GitHub Releases from `v2026.5.28` back through
   stable `v2026.4.23`, using the `OpenClaw Performance` workflow,
-  `profile=smoke`, `repeat=1`, mock-provider lane.
+  `profile=smoke`, mock-provider lane. Most tag rows are one sample; the
+  `v2026.5.27` and `v2026.5.28` rows use the latest repeat-3 release-branch
+  artifacts.
 - **Earlier April context:** published `clawgrit-reports` mock-provider
   baselines from `v2026.4.1` through `v2026.5.2`, used only to avoid treating
   the broken late-April releases as the public performance baseline.
@@ -131326,42 +131456,44 @@ Two audits are combined here:
   file count.
 
 <Warning>
-The main performance sweep uses one smoke sample per tag. Earlier April context
-uses published repeat-3 medians from `clawgrit-reports`. Treat the numbers as
-trend evidence and regression-hunting signal, not as release-gate statistics.
+The main performance sweep uses one smoke sample per tag, except the
+`v2026.5.27` and `v2026.5.28` rows, which use the latest repeat-3
+release-branch artifacts. Earlier April context uses published repeat-3
+medians from `clawgrit-reports`. Treat the numbers as trend evidence and
+regression-hunting signal, not as release-gate statistics.
 </Warning>
 
 ## Snapshot
 
-Performance coverage: **76 requested releases**, **73 artifact-backed points**,
-and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.27`.
+Performance coverage: **77 requested releases**, **74 artifact-backed points**,
+and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.28`.
 
 <CardGroup cols={2}>
   <Card title="Stable agent turn" icon="gauge">
-    **2.9x faster cold turn**
+    **5.1x faster cold turn**
 
     - `v2026.4.14`: 9.8s
-    - `v2026.5.27`: 3.4s
+    - `v2026.5.28`: 1.9s
 
   </Card>
   <Card title="Published package" icon="package">
-    **17.8MB tarball**
+    **17.9MB tarball**
 
     Latest stable package, down from the 43.3MB March package-size peak.
 
   </Card>
   <Card title="Latest stable install" icon="hard-drive">
-    **786.9MB fresh install**
+    **361.7MiB fresh install**
 
-    `v2026.5.27` still contains the nested OpenClaw dependency tree. The
-    next-release state on `main` is 407.4MB.
+    `v2026.5.28` cuts the nested OpenClaw dependency tree sharply, but a
+    smaller 259.7MiB nested tree still remains in the local install audit.
 
   </Card>
   <Card title="Dependency graph" icon="boxes">
-    **371 installed packages**
+    **300 installed packages**
 
-    Latest stable release. Current `main` is down to 314 after the follow-up
-    dependency cleanup.
+    Latest stable release, measured as unique package name/version roots in a
+    fresh install with scripts disabled.
 
   </Card>
 </CardGroup>
@@ -131383,45 +131515,44 @@ and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.27`.
 
   </Card>
   <Card title="Latest stable" icon="tag">
-    **786.9MB install**
+    **361.7MiB install**
 
-    `2026.5.27` reduced the peak but still installed a 675.9MB nested
-    OpenClaw tree.
+    `2026.5.28` cuts fresh install size by 52.8% from `2026.5.27`, but still
+    installs a 259.7MiB nested OpenClaw tree.
 
   </Card>
-  <Card title="Next-release state" icon="scissors">
-    **407.4MB install**
+  <Card title="Dependency graph" icon="scissors">
+    **300 package roots**
 
-    Current `main` keeps shrinkwrap, removes the nested tree, and installs
-    314 packages.
+    `2026.5.28` installs 71 fewer unique package name/version roots than
+    `2026.5.27`.
 
   </Card>
 </CardGroup>
 
 <Tip>
-Shrinkwrap was not the problem by itself. The bad package shape was. Current
-`main` still ships shrinkwrap, but npm no longer materializes a second
-OpenClaw dependency tree during install.
+Shrinkwrap was not the problem by itself. The bad package shape was.
+`v2026.5.28` still ships shrinkwrap, but the nested dependency tree is much
+smaller and the all-platform canvas fanout is gone in the local audit.
 </Tip>
 
-## What Changed After 5.27
+## What Changed In 5.28
 
-The cleanup between `v2026.5.27` and current `main` removed the duplicate
-default-install graph instead of removing the capabilities themselves.
+The cleanup between `v2026.5.27` and `v2026.5.28` reduced the default-install
+graph instead of removing the capabilities themselves.
 
 <CardGroup cols={2}>
   <Card title="Root default graph" icon="git-branch">
-    Root shrinkwrap package paths fell from **372** to **331**. Unique package
-    names fell from **357** to **318**.
+    Unique package name/version roots fell from **371** to **300**. Package
+    instances fell from **372** to **301**.
   </Card>
-  <Card title="Direct root dependencies" icon="unplug">
-    `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`,
-    `@earendil-works/pi-coding-agent`, and `pdfjs-dist` left the default root
-    dependency path.
+  <Card title="Nested tree" icon="unplug">
+    Nested `openclaw/node_modules` fell from **656.1MiB** to **259.7MiB** in
+    the same local install audit.
   </Card>
   <Card title="Native optional cones" icon="cpu">
-    The all-platform `@napi-rs/canvas` and `@mariozechner/clipboard` native
-    package cones stopped landing in the default install.
+    The all-platform `@napi-rs/canvas` native package cone stopped landing in
+    the default install.
   </Card>
   <Card title="Supply-chain surface" icon="shield">
     Fewer default packages means fewer tarballs, maintainers, native binaries,
@@ -131437,11 +131568,11 @@ Do not use the late-April broken rows as public performance baselines.
 
 For the blog narrative, use the earlier April published baseline as scale:
 
-| Metric          | Earlier April baseline | `v2026.5.27` |                    Delta |
+| Metric          | Earlier April baseline | `v2026.5.28` |                    Delta |
 | --------------- | ---------------------: | -----------: | -----------------------: |
-| Cold agent turn |                9,819ms |      3,378ms | 65.6% lower, 2.9x faster |
-| Warm agent turn |                7,458ms |      2,973ms | 60.1% lower, 2.5x faster |
-| Agent peak RSS  |                686.2MB |      635.5MB |               7.4% lower |
+| Cold agent turn |                9,819ms |      1,908ms | 80.6% lower, 5.1x faster |
+| Warm agent turn |                7,458ms |      1,870ms | 74.9% lower, 4.0x faster |
+| Agent peak RSS  |                686.2MB |      581.0MB |              15.3% lower |
 
 The earlier April baseline is `v2026.4.14` from the published
 `clawgrit-reports` mock-provider run. That run used repeat 3 and failed only
@@ -131449,32 +131580,33 @@ because the diagnostic timeline was not emitted; the cold, warm, and RSS
 medians are still useful as rough scale. Treat this as narrative context, not a
 release-gate statistic.
 
-Within the single-sample stable May sweep, the line moved more modestly:
+Within the May sweep, the latest release-branch row moved materially from
+`v2026.5.2`:
 
-| Metric          | `v2026.5.2` | `v2026.5.27` |       Delta |
+| Metric          | `v2026.5.2` | `v2026.5.28` |       Delta |
 | --------------- | ----------: | -----------: | ----------: |
-| Cold agent turn |     3,897ms |      3,378ms | 13.3% lower |
-| Warm agent turn |     3,610ms |      2,973ms | 17.6% lower |
-| Agent peak RSS  |     613.7MB |      635.5MB | 3.6% higher |
+| Cold agent turn |     3,897ms |      1,908ms | 51.0% lower |
+| Warm agent turn |     3,610ms |      1,870ms | 48.2% lower |
+| Agent peak RSS  |     613.7MB |      581.0MB |  5.3% lower |
 
-Best prerelease point in the single-sample sweep:
+Compared with the previous stable release:
 
-| Metric          | `v2026.5.27` | `v2026.5.27-beta.1` |       Delta |
-| --------------- | -----------: | ------------------: | ----------: |
-| Cold agent turn |      3,378ms |             2,575ms | 23.8% lower |
-| Warm agent turn |      2,973ms |             2,217ms | 25.4% lower |
-| Agent peak RSS  |      635.5MB |             635.3MB |        flat |
+| Metric          | `v2026.5.27` | `v2026.5.28` |       Delta |
+| --------------- | -----------: | -----------: | ----------: |
+| Cold agent turn |      2,231ms |      1,908ms | 14.5% lower |
+| Warm agent turn |      2,226ms |      1,870ms | 16.0% lower |
+| Agent peak RSS  |      649.0MB |      581.0MB | 10.5% lower |
 
 ### Install footprint
 
-| Metric                                          |  Baseline | Current main |       Delta |
+| Metric                                          |  Baseline | `v2026.5.28` |       Delta |
 | ----------------------------------------------- | --------: | -----------: | ----------: |
-| Install size from `2026.5.22` peak              | 1,020.6MB |      407.4MB | 60.1% lower |
-| Install size from latest release `2026.5.27`    |   786.9MB |      407.4MB | 48.2% lower |
-| Dependencies from monthly high `2026.2.26`      |       645 |          314 | 51.3% lower |
-| Dependencies from latest release `2026.5.27`    |       371 |          314 | 15.4% lower |
-| Nested `openclaw/node_modules` from `2026.5.22` |   911.8MB |          0MB |     removed |
-| Nested `openclaw/node_modules` from `2026.5.27` |   675.9MB |          0MB |     removed |
+| Install size from `2026.5.22` peak              | 1,020.6MB |     361.7MiB | 64.6% lower |
+| Install size from latest release `2026.5.27`    |  767.1MiB |     361.7MiB | 52.8% lower |
+| Dependencies from monthly high `2026.2.26`      |       645 |          300 | 53.5% lower |
+| Dependencies from latest release `2026.5.27`    |       371 |          300 | 19.1% lower |
+| Nested `openclaw/node_modules` from `2026.5.22` |   911.8MB |     259.7MiB | 71.5% lower |
+| Nested `openclaw/node_modules` from `2026.5.27` |  656.1MiB |     259.7MiB | 60.4% lower |
 
 ### npm package size
 
@@ -131486,7 +131618,8 @@ Best prerelease point in the single-sample sweep:
 | `2026.4.29` |             22.9MB |           74.6MB |  9,309 | package pruning visible           |
 | `2026.5.12` |             23.4MB |           80.1MB | 12,035 | major external-plugin split       |
 | `2026.5.22` |             17.2MB |           76.9MB | 12,386 | docs/assets excluded from package |
-| `2026.5.27` |             17.8MB |           79.0MB | 12,509 | latest stable package             |
+| `2026.5.27` |             17.8MB |           79.0MB | 12,509 | previous stable package           |
+| `2026.5.28` |             17.9MB |           81.0MB |  9,082 | latest stable package             |
 
 `2026.5.12` is the visible plugin-extraction milestone in the changelog:
 Amazon Bedrock, Bedrock Mantle, Slack, OpenShell sandbox, Anthropic Vertex,
@@ -131510,7 +131643,7 @@ Earlier published context:
 | `v2026.4.20` | FAIL |  22,314ms |  18,811ms |        810.8MB |
 | `v2026.4.22` | FAIL |   9,630ms |   7,459ms |        743.0MB |
 
-Supplied single-sample sweep:
+Supplied sweep:
 
 | Release             | Kova | Cold turn | Warm turn | Agent peak RSS |
 | ------------------- | ---- | --------: | --------: | -------------: |
@@ -131528,7 +131661,8 @@ Supplied single-sample sweep:
 | `v2026.5.22`        | PASS |   4,494ms |   4,093ms |        654.3MB |
 | `v2026.5.26`        | PASS |   2,626ms |   2,282ms |        660.4MB |
 | `v2026.5.27-beta.1` | PASS |   2,575ms |   2,217ms |        635.3MB |
-| `v2026.5.27`        | PASS |   3,378ms |   2,973ms |        635.5MB |
+| `v2026.5.27`        | PASS |   2,231ms |   2,226ms |        649.0MB |
+| `v2026.5.28`        | PASS |   1,908ms |   1,870ms |        581.0MB |
 
 ## Source probes
 
@@ -131548,7 +131682,8 @@ Representative source-probe points:
 | `v2026.5.22`        |              2,081ms |                 1,884ms |        5,095ms |        444.2MB |
 | `v2026.5.26`        |              1,546ms |                 1,634ms |          656ms |        400.4MB |
 | `v2026.5.27-beta.1` |              1,462ms |                 1,548ms |          548ms |        394.0MB |
-| `v2026.5.27`        |              1,874ms |                 1,925ms |          660ms |        398.0MB |
+| `v2026.5.27`        |              1,491ms |                 1,571ms |          553ms |        401.5MB |
+| `v2026.5.28`        |              1,457ms |                 1,474ms |          623ms |        386.1MB |
 
 The `v2026.5.22` CLI health spike is visible in this table even though the
 agent-turn lane still passed. Keep the source probes when investigating
@@ -131557,8 +131692,7 @@ targeted CLI or gateway regressions.
 ## Install footprint audit
 
 Dependency samples use one stable release per month, plus the
-`2026.5.22` shrinkwrap-introduction event, latest `2026.5.27`, and current
-`main`.
+`2026.5.22` shrinkwrap-introduction event and the latest `2026.5.28` release.
 
 | Point              | Installed deps | Fresh install | OpenClaw package | Nested `openclaw/node_modules` | Root shrinkwrap | Canvas install behavior                   |
 | ------------------ | -------------: | ------------: | ---------------: | -----------------------------: | --------------- | ----------------------------------------- |
@@ -131568,8 +131702,8 @@ Dependency samples use one stable release per month, plus the
 | Apr `2026.4.29`    |            392 |       335.0MB |           97.4MB |                            0MB | no              | none installed                            |
 | `2026.5.22`        |            401 |     1,020.6MB |        1,020.4MB |                        911.8MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
 | May `2026.5.26`    |            371 |       767.5MB |          767.4MB |                        656.4MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
-| Latest `2026.5.27` |            371 |       786.9MB |          786.7MB |                        675.9MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
-| Current `main`     |            314 |       407.4MB |          101.0MB |                            0MB | yes             | top-level wrapper + `darwin-arm64`        |
+| `2026.5.27`        |            371 |      767.1MiB |         766.9MiB |                       656.1MiB | yes             | nested: all 12 `@napi-rs/canvas` packages |
+| Latest `2026.5.28` |            300 |      361.7MiB |         361.6MiB |                       259.7MiB | yes             | none installed                            |
 
 ### Shrinkwrap boundary
 
@@ -131583,11 +131717,12 @@ Dependency samples use one stable release per month, plus the
     `openclaw/node_modules`.
   </Card>
   <Card title="Latest stable" icon="tag">
-    `2026.5.27` keeps shrinkwrap and still installs 675.9MB under nested
+    `2026.5.28` keeps shrinkwrap and still installs 259.7MiB under nested
     `openclaw/node_modules`.
   </Card>
-  <Card title="Current main" icon="check">
-    `main` keeps shrinkwrap and removes the nested OpenClaw dependency tree.
+  <Card title="Canvas fanout fixed" icon="check">
+    `2026.5.28` no longer installs any `@napi-rs/canvas` packages in the local
+    fresh install audit.
   </Card>
 </CardGroup>
 
@@ -131603,12 +131738,13 @@ Published tarball inspection verifies the boundary:
 | `2026.5.25` | no                | n/a                        | no stable npm release                 |
 | `2026.5.26` | yes               | yes                        | nested dependency tree still present  |
 | `2026.5.27` | yes               | yes                        | nested dependency tree still present  |
-| `main`      | n/a               | yes                        | nested dependency tree removed        |
+| `2026.5.28` | yes               | yes                        | nested dependency tree much smaller   |
 
-The important distinction: **shrinkwrap itself is not the problem**. Current
-`main` still ships root shrinkwrap. The problem was the package shape that made
-npm materialize a large nested OpenClaw dependency tree and all 12
-`@napi-rs/canvas` platform packages.
+The important distinction: **shrinkwrap itself is not the problem**.
+`v2026.5.28` still ships root shrinkwrap. The problem was the package shape
+that made npm materialize a large nested OpenClaw dependency tree and all 12
+`@napi-rs/canvas` platform packages. The nested tree is smaller in `v2026.5.28`,
+and the canvas platform fanout no longer lands in the local audit.
 
 For a plain-English explanation of shrinkwrap and the maintainer-level package
 checks, see [npm shrinkwrap](/gateway/security/shrinkwrap).
@@ -131637,87 +131773,58 @@ Related docs:
 - [Plugin inventory](/plugins/plugin-inventory)
 - [Full release validation](/reference/full-release-validation)
 
-## Unavailable performance runs
-
-| Release             | Run                                                                          | Result    | Reason                                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `v2026.5.3-1`       | [26561664645](https://github.com/openclaw/openclaw/actions/runs/26561664645) | failure   | mock-provider job failed: CLI startup timed out waiting for qa-channel ready; no qa-channel accounts reported |
-| `v2026.5.3`         | [26561666722](https://github.com/openclaw/openclaw/actions/runs/26561666722) | failure   | mock-provider job failed: CLI startup timed out waiting for qa-channel ready; no qa-channel accounts reported |
-| `v2026.4.29-beta.2` | [26561683635](https://github.com/openclaw/openclaw/actions/runs/26561683635) | cancelled | optional baseline fetch hung before artifact upload                                                           |
-
-## Follow-up gates
-
-Recommended release checks from this sweep:
-
-1. Run the mock-provider performance smoke for release candidates and retain
-   artifacts.
-2. Track cold turn, warm turn, agent RSS, Gateway `readyz`, and CLI health.
-3. Fresh-install the packed tarball with scripts disabled.
-4. Record installed dependency count, install size, package size, nested
-   `openclaw/node_modules` size, and native optional package shape.
-5. Fail or hold release review when nested dependency trees or all-platform
-   native packages appear unexpectedly.
-
 
 
 # Section: reference/rich-output-protocol.md
 
 ---
-summary: "Rich output shortcode protocol for embeds, media, audio hints, and replies"
+summary: "Rich output protocol for structured media, embeds, audio hints, and replies"
 read_when:
   - Changing assistant output rendering in the Control UI
-  - Debugging `[embed ...]`, `MEDIA:`, reply, or audio presentation directives
+  - Debugging `[embed ...]`, structured media, reply, or audio presentation directives
 title: "Rich output protocol"
 ---
 
 Assistant output can carry a small set of delivery/render directives:
 
-- `MEDIA:` for attachment delivery
+- structured `mediaUrl` / `mediaUrls` fields for attachment delivery
 - `[[audio_as_voice]]` for audio presentation hints
 - `[[reply_to_current]]` / `[[reply_to:<id>]]` for reply metadata
 - `[embed ...]` for Control UI rich rendering
 
-Remote `MEDIA:` attachments must be public `https:` URLs. Plain `http:`,
+Remote media attachments must be public `https:` URLs. Plain `http:`,
 loopback, link-local, private, and internal hostnames are ignored as attachment
 directives; server-side media fetchers still enforce their own network guards.
 
-Local `MEDIA:` attachments can use absolute paths, workspace-relative paths, or
+Local media attachments can use absolute paths, workspace-relative paths, or
 home-relative `~/` paths. They still pass through the agent file-read policy and
 media type checks before delivery.
 
 <Warning>
-`MEDIA:` is parsed only as plain text. Wrapping the directive in Markdown
-formatting (bold, inline code, fenced code) prevents the parser from
-recognizing it, and the attachment is silently dropped from delivery.
+Do not emit text commands for attachments from tools, plugins, streaming blocks,
+browser output, or message actions. Use structured media fields instead.
 
-Valid:
+Valid message-tool payload:
 
-```text
-MEDIA:/workspace/image.png
+```json
+{ "message": "Here is your image.", "mediaUrl": "/workspace/image.png" }
 ```
 
-Invalid (parsed as prose, no attachment delivered):
-
-```text
-**MEDIA:/workspace/image.png**
-`MEDIA:/workspace/image.png`
-Here is your image: MEDIA:/workspace/image.png
-```
-
-Keep `MEDIA:` on its own line, in plain text, with no surrounding formatting.
+Legacy final assistant reply text may still be normalized for compatibility, but
+it is not a general plugin/tool protocol.
 </Warning>
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
 adapter; Telegram does this so `![alt](url)` can still become a media reply.
 
-These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
-Trusted tool-result media uses the same `MEDIA:` / `[[audio_as_voice]]` parser before delivery, so text tool outputs can still mark an audio attachment as a voice note.
+These directives are separate. Structured media fields and reply/voice tags are
+delivery metadata; `[embed ...]` is the web-only rich render path.
 
-When block streaming is enabled, `MEDIA:` remains single-delivery metadata for a
-turn. If the same media URL is sent in a streamed block and repeated in the final
-assistant payload, OpenClaw delivers the attachment once and strips the duplicate
-from the final payload.
+When block streaming is enabled, media must be carried on structured payload
+fields. If the same media URL is sent in a streamed block and repeated in the
+final assistant payload, OpenClaw delivers the attachment once and strips the
+duplicate from the final payload.
 
 ## `[embed ...]`
 
@@ -131736,7 +131843,7 @@ Rules:
 - Only URL-backed embeds are rendered. Use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes are not rendered.
 - The web UI strips the shortcode from visible text and renders the embed inline.
-- `MEDIA:` is not an embed alias and should not be used for rich embed rendering.
+- Structured media is not an embed alias and should not be used for rich embed rendering.
 
 ## Stored rendering shape
 
@@ -132145,7 +132252,7 @@ openclaw sessions cleanup --enforce
 Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
 
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
-- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per cron job (default: `2000`). `cron.runLog.maxBytes` remains accepted for older file-backed run logs.
 
 When cron force-creates a new isolated run session, it sanitizes the previous
 `cron:<jobId>` session entry before writing the new row. It carries safe
@@ -133258,7 +133365,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
       - Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
+      - Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
     - **xAI (Grok) OAuth / API key**: signs in with xAI OAuth when chosen, or prompts for `XAI_API_KEY` on the API-key path, and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
     - **Ollama**: offers **Cloud + Local**, **Cloud only**, or **Local only** first. `Cloud only` prompts for `OLLAMA_API_KEY` and uses `https://ollama.com`; the host-backed modes prompt for the Ollama base URL, discover available models, and auto-pull the selected local model when needed; `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
@@ -137127,27 +137234,21 @@ Inbound attachments (images/audio/docs) can be surfaced to your command via temp
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (if audio transcription is enabled)
 
-Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). The directive must start the line as plain text, outside code fences and without Markdown wrappers such as bold or inline code. Example:
+Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 
+```json
+{
+  "message": "Here's the screenshot.",
+  "mediaUrl": "https://example.com/screenshot.png"
+}
 ```
-Here's the screenshot.
-MEDIA:https://example.com/screenshot.png
-```
 
-OpenClaw extracts these and sends them as media alongside the text.
-
-These forms are not attachment directives and are sent as normal text:
-
-```md
-**MEDIA:https://example.com/screenshot.png**
-`MEDIA:https://example.com/screenshot.png`
-Here is the screenshot: MEDIA:https://example.com/screenshot.png
-```
+OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
 
 Local-path behavior follows the same file-read trust model as the agent:
 
-- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
-- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound local media can use host-local files the agent is already allowed to read.
 - Local paths can be absolute, workspace-relative, or home-relative with `~/`.
 - Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
 
@@ -138156,7 +138257,7 @@ What you set:
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
@@ -139117,6 +139218,10 @@ ACP sessions run non-interactively — there is no TTY to approve or deny file-w
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 
+For the broader comparison between OpenClaw `tools.exec.mode`, Codex Guardian
+approvals, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 ### `permissionMode`
 
 Controls which operations the harness agent can perform without prompting.
@@ -139348,7 +139453,7 @@ Quick `/acp` flow from chat:
 
   </Accordion>
   <Accordion title="Model / provider / runtime selection cheat sheet">
-    - `openai-codex/*` - legacy Codex OAuth/subscription model route repaired by doctor.
+    - legacy Codex model refs - legacy Codex OAuth/subscription model route repaired by doctor.
     - `openai/*` - native Codex app-server embedded runtime for OpenAI agent turns.
     - `/codex ...` - native Codex conversation control.
     - `/acp ...` or `runtime: "acp"` - explicit ACP/acpx control.
@@ -139722,9 +139827,9 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="model" type="string">
   Explicit model override for the ACP child session. Codex ACP spawns
-  normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex
-  ACP startup config before `session/new`; slash forms such as
-  `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort.
+  normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup
+  config before `session/new`; slash forms such as `openai/gpt-5.4/high`
+  also set Codex ACP reasoning effort.
   Other harnesses must advertise ACP `models` and support
   `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of
   silently falling back to the target agent default.
@@ -139957,7 +140062,7 @@ operations:
 
 | Command                      | Maps to                              | Notes                                                                                                                                                                                                      |
 | ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`.                             |
+| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai/gpt-5.4/high` to `reasoning_effort`.                                         |
 | `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
 | `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
 | `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
@@ -140563,6 +140668,7 @@ openclaw browser select 9 OptionA OptionB
 openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
 openclaw browser dialog --dismiss --dialog-id d1
@@ -140604,7 +140710,12 @@ Notes:
 
 - `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
-- Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
+- Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
+- `upload` accepts files from the OpenClaw temp uploads root and
+  OpenClaw-managed inbound media. Managed inbound media can be referenced as
+  `media://inbound/<id>`, sandbox-relative `media/inbound/<id>`, or a resolved
+  path inside the managed inbound media directory. Nested media refs,
+  traversal, symlinks, hardlinks, and arbitrary local paths are still rejected.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
@@ -140618,7 +140729,7 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
-- `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
+- `--labels` adds a viewport-only screenshot with overlayed ref labels and prints the saved path.
 - `--urls` appends discovered link destinations to AI snapshots.
 
 ## Snapshots and refs
@@ -141439,6 +141550,57 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   },
 }
 ```
+
+### Screenshot vision (text-only model support)
+
+When the main model is text-only (no vision/multimodal support), browser
+screenshots return image blocks that the model cannot read. Browser screenshots
+reuse the existing image-understanding configuration, so an image model
+configured for media understanding can describe screenshots as text without any
+browser-specific model settings.
+
+```json5
+{
+  tools: {
+    media: {
+      image: {
+        models: [
+          { provider: "bytedance", model: "doubao-seed-2.0-pro" },
+          // Add fallback candidates; first success wins
+          { provider: "openai", model: "gpt-4o" },
+        ],
+      },
+      // Shared media models also work when tagged for image support.
+      // models: [{ provider: "openai", model: "gpt-4o", capabilities: ["image"] }],
+    },
+  },
+  agents: {
+    defaults: {
+      // Existing image-model defaults are also honored.
+      // imageModel: { primary: "openai/gpt-4o" },
+    },
+  },
+}
+```
+
+**How it works:**
+
+1. Agent calls `browser screenshot` → image captured to disk as usual.
+2. The browser tool asks the existing image-understanding runtime whether it
+   can describe the screenshot using configured media image models, shared media
+   models, image-model defaults, or an auth-backed image provider.
+3. The vision model returns a text description, which is wrapped with
+   `wrapExternalContent` (prompt injection guard) and returned to the agent
+   as a text block instead of an image block.
+4. If image understanding is unavailable, skipped, or fails, the browser falls
+   back to returning the original image block.
+
+Use the existing `tools.media.image` / `tools.media.models` fields for model
+fallbacks, timeouts, byte limits, profiles, and provider request settings.
+
+If the active main model already supports vision and no explicit image
+understanding model is configured, OpenClaw keeps the normal image result so the
+main model can read the screenshot directly.
 
 <AccordionGroup>
 
@@ -142445,7 +142607,9 @@ read_when:
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
 
-For how skills are loaded and prioritized, see [Skills](/tools/skills).
+For how skills are loaded and prioritized, see [Skills](/tools/skills). For
+agent-generated or reviewed skill changes, see
+[Skill Workshop](/tools/skill-workshop).
 
 ## Create your first skill
 
@@ -142530,6 +142694,46 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 </Steps>
 
+## Use Skill Workshop for generated skills
+
+For agent-generated procedures, use Skill Workshop instead of writing `SKILL.md`
+directly. Skill Workshop creates a pending proposal first; it becomes an active
+skill only after review and apply:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal ./PROPOSAL.md
+```
+
+Use `--proposal-dir` when the proposal also has support files:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal-dir ./hello-world-proposal
+```
+
+The proposal stays inactive until an operator reviews and applies it.
+Proposal directories must contain `PROPOSAL.md`. Support files can be included
+under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`:
+
+```bash
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+```
+
+When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
+root, writes approved support files beside it, and removes proposal-only
+frontmatter such as `status: proposal`, proposal `version`, and proposal
+`date`.
+
+Full proposal storage, review, Gateway, and approval-policy details are in
+[Skill Workshop](/tools/skill-workshop).
+
 ## Skill metadata reference
 
 The YAML frontmatter supports these fields:
@@ -142589,6 +142793,7 @@ Each skills root can contain direct skill folders such as
 ## Related
 
 - [Skills reference](/tools/skills) — loading, precedence, and gating rules
+- [Skill Workshop](/tools/skill-workshop) — governed creation for generated or reviewed skill changes
 - [Skills config](/tools/skills-config) — `skills.*` config schema
 - [ClawHub](/clawhub) — public skill registry
 - [Building Plugins](/plugins/building-plugins) — plugins can ship skills
@@ -143695,11 +143900,16 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).
 If no decision arrives before the timeout, the request is treated as an approval timeout and
-surfaced as a terminal denial rather than an agent-waking system event.
+surfaced as a terminal host-command denial. For main-agent async approvals with an originating
+session, OpenClaw also resumes that session with an internal followup so the agent observes that
+the command did not run instead of later repairing a missing result.
 
 ### Followup delivery behavior
 
 After an approved async exec finishes, OpenClaw sends a followup `agent` turn to the same session.
+Denied async approvals use the same main-session followup path for the denial status, but they do
+not register elevated runtime handoffs and they do not run the command. Denials without a resumable
+main session are either suppressed or reported through a safe direct route when one exists.
 
 - If a valid external delivery target exists (deliverable channel plus target `to`), followup delivery uses that channel.
 - In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
@@ -143996,6 +144206,10 @@ safety interlock: commands are allowed only when policy + allowlist +
 (optional) user approval all agree. Exec approvals stack **on top of**
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
+
+For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
+Codex Guardian mapping, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
 
 <Note>
 Effective policy is the **stricter** of `tools.exec.*` and approvals
@@ -144425,9 +144639,13 @@ Exec lifecycle is surfaced as system messages:
 - `Exec finished`.
 
 These are posted to the agent's session after the node reports the event.
-Denied exec approvals are terminal: OpenClaw can report the denial to the
-operator or direct chat route, but it does not post `Exec denied` back into the
-agent session or wake agent work.
+Denied exec approvals are terminal for the host command itself: the command
+does not run. For main-agent async approvals with an originating session,
+OpenClaw posts the denial back into that session as an internal followup so the
+agent can stop waiting on the async command and avoid a missing-result repair.
+If there is no session or the session cannot be resumed, OpenClaw can still
+report a concise denial to the operator or direct chat route. Denials for
+subagent sessions are not posted back into the subagent.
 Gateway-host exec approvals emit the same lifecycle events when the
 command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these
@@ -144435,11 +144653,12 @@ messages for easy correlation.
 
 ## Denied approval behavior
 
-When an async exec approval is denied, OpenClaw treats the request as terminal.
-It can show a concise denial to the operator or direct chat route, but it does
-not send denial guidance back through the agent session. That keeps a denied
-command from becoming another model turn and prevents the agent from reusing
-output from an earlier run of the same command.
+When an async exec approval is denied, OpenClaw treats the host command as
+terminal and fail-closed. For main-agent sessions, the denial is delivered as an
+internal session followup that tells the agent the async command did not run.
+That preserves transcript continuity without exposing stale command output. If
+session delivery is unavailable, OpenClaw falls back to a concise operator or
+direct-chat denial when a safe route exists.
 
 ## Implications
 
@@ -145428,7 +145647,7 @@ idempotent direct fallback with only the missing images.
 The tool only appears when at least one image-generation provider is
 available. If you do not see `image_generate` in your agent's tools,
 configure `agents.defaults.imageGenerationModel`, set up a provider API key,
-or sign in with OpenAI Codex OAuth.
+or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
 
 ## Quick start
@@ -145452,9 +145671,9 @@ or sign in with OpenAI Codex OAuth.
     }
     ```
 
-    Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
-    `openai-codex` OAuth profile is configured, OpenClaw routes image
-    requests through that OAuth profile instead of first trying
+    ChatGPT/Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
+    `openai` OAuth profile is configured, OpenClaw routes image requests
+    through that OAuth profile instead of first trying
     `OPENAI_API_KEY`. Explicit `models.providers.openai` config (API key,
     custom/Azure base URL) opts back into the direct OpenAI Images API
     route.
@@ -145483,7 +145702,7 @@ internal image endpoints remain blocked by default.
 | Goal                                                 | Model ref                                          | Auth                                   |
 | ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
 | OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                     |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
 | OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
 | DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
 | fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
@@ -145511,7 +145730,7 @@ backend emits it.
 | Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
+| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
 | OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
 | Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
 | xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
@@ -145686,7 +145905,7 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
 <AccordionGroup>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
     OpenAI image generation defaults to `openai/gpt-image-2`. If an
-    `openai-codex` OAuth profile is configured, OpenClaw reuses the same
+    `openai` OAuth profile is configured, OpenClaw reuses the same
     OAuth profile used by Codex subscription chat models and sends the
     image request through the Codex Responses backend. Legacy Codex base
     URLs such as `https://chatgpt.com/backend-api` are canonicalized to
@@ -145925,15 +146144,15 @@ group membership, provider restrictions, and configuration fields, use
 For most agents, start with the built-in tool categories, then adjust policy
 only when the agent should see fewer tools or needs explicit host access.
 
-| If you need to...                           | Use this first                                 | Then read                                                               |
-| ------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
-| Let an agent act with existing capabilities | [Built-in tools](#built-in-tool-categories)    | [Tool categories](#built-in-tool-categories)                            |
-| Control what an agent can call              | [Tool policy](#configure-access-and-approvals) | [Tools and custom providers](/gateway/config-tools)                     |
-| Teach an agent a workflow                   | [Skills](#choose-tools-skills-or-plugins)      | [Skills](/tools/skills) and [Creating skills](/tools/creating-skills)   |
-| Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins) |
-| Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                      |
-| Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)     |
-| Search a large OpenClaw tool catalog        | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                       |
+| If you need to...                           | Use this first                                 | Then read                                                                                                       |
+| ------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Let an agent act with existing capabilities | [Built-in tools](#built-in-tool-categories)    | [Tool categories](#built-in-tool-categories)                                                                    |
+| Control what an agent can call              | [Tool policy](#configure-access-and-approvals) | [Tools and custom providers](/gateway/config-tools)                                                             |
+| Teach an agent a workflow                   | [Skills](#choose-tools-skills-or-plugins)      | [Skills](/tools/skills), [Creating skills](/tools/creating-skills), and [Skill Workshop](/tools/skill-workshop) |
+| Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins)                                         |
+| Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                                                              |
+| Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)                                             |
+| Search a large OpenClaw tool catalog        | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                                                               |
 
 ## Choose tools, skills, or plugins
 
@@ -145959,7 +146178,7 @@ only when the agent should see fewer tools or needs explicit host access.
     Skills can live in a workspace, shared skill directory, managed OpenClaw
     skill root, or plugin package.
 
-    [Skills](/tools/skills) | [Creating skills](/tools/creating-skills) | [Skills config](/tools/skills-config)
+    [Skills](/tools/skills) | [Skill Workshop](/tools/skill-workshop) | [Creating skills](/tools/creating-skills) | [Skills config](/tools/skills-config)
 
   </Step>
 
@@ -146047,9 +146266,6 @@ Choose the extension path by the job you need OpenClaw to do:
   [Build plugins](/plugins/building-plugins).
 - Add or tune reusable agent instructions with [Skills](/tools/skills) and
   [Creating skills](/tools/creating-skills).
-- Package reusable workflow material with
-  [Skill workshop](/plugins/skill-workshop) when the workflow belongs in a
-  plugin-distributed skill bundle.
 - Use [Plugin SDK](/plugins/sdk-overview) and [Plugin manifest](/plugins/manifest) when you need implementation contracts.
 
 ## Troubleshoot missing tools
@@ -146079,6 +146295,7 @@ current turn:
 - [Plugins](/tools/plugin) for plugin installation and management
 - [Plugin SDK](/plugins/sdk-overview) for plugin author reference
 - [Skills](/tools/skills) for skill load order, gating, and config
+- [Skill Workshop](/tools/skill-workshop) for generated and reviewed skill creation
 - [Tool Search](/tools/tool-search) for compact OpenClaw tool catalog discovery
 
 
@@ -146244,10 +146461,10 @@ Use `tools.allow` only when you want restrictive allowlist mode.
       "llm-task": {
         "enabled": true,
         "config": {
-          "defaultProvider": "openai-codex",
+          "defaultProvider": "openai",
           "defaultModel": "gpt-5.5",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai/gpt-5.4"],
+          "allowedModels": ["openai/gpt-5.5"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -148303,6 +148520,122 @@ Encrypted PDF with extraction fallback:
 
 
 
+# Section: tools/permission-modes.md
+
+---
+summary: "Permission modes for host exec, Codex Guardian approvals, and ACPX harness sessions"
+read_when:
+  - Choosing auto, ask, allowlist, full, or deny for command permissions
+  - Configuring Codex Guardian-reviewed approvals through tools.exec.mode
+  - Comparing OpenClaw exec approvals with ACPX harness permissions
+title: "Permission modes"
+---
+
+Permission modes decide how much authority an agent has before it can run host commands, write files, or ask a backend harness for extra access. Start with `tools.exec.mode: "auto"` when you want OpenClaw to use allowlists first, then Codex native auto-review or a human approval route for misses.
+
+<Note>
+  Permission mode is separate from `tools.exec.host=auto`. `tools.exec.host`
+  chooses where a command runs. `tools.exec.mode` chooses how host exec is
+  approved.
+</Note>
+
+## Recommended default
+
+Use `auto` for coding agents that need useful host access without making every miss a human prompt:
+
+```bash
+openclaw config set tools.exec.mode auto
+openclaw approvals get
+openclaw gateway restart
+```
+
+Then verify the effective policy:
+
+```bash
+openclaw exec-policy show
+```
+
+In `auto` mode, OpenClaw runs deterministic allowlist matches directly. Approval misses go through OpenClaw's native auto reviewer first, then fall back to the configured human approval route when needed.
+
+## OpenClaw host exec modes
+
+`tools.exec.mode` is the normalized policy surface for host `exec`.
+
+| Mode        | Behavior                                     | Use when                                              |
+| ----------- | -------------------------------------------- | ----------------------------------------------------- |
+| `deny`      | Block host exec.                             | No host commands are allowed.                         |
+| `allowlist` | Run only allowlisted commands.               | You have a known-safe command set.                    |
+| `ask`       | Run allowlist matches and ask on misses.     | A human should review new commands.                   |
+| `auto`      | Run allowlist matches, then use auto-review. | Coding sessions need practical guarded access.        |
+| `full`      | Run host exec without prompts.               | This trusted host/session should skip approval gates. |
+
+For the full host exec policy, local approvals file, allowlist schema, safe bins, and forwarding behavior, see [Exec approvals](/tools/exec-approvals).
+
+## Codex Guardian mapping
+
+For native Codex app-server sessions, `tools.exec.mode: "auto"` maps to Codex Guardian-reviewed approvals when the local Codex requirements allow it. OpenClaw usually sends:
+
+| Codex field         | Typical value     |
+| ------------------- | ----------------- |
+| `approvalPolicy`    | `on-request`      |
+| `approvalsReviewer` | `auto_review`     |
+| `sandbox`           | `workspace-write` |
+
+In `auto` mode, OpenClaw does not preserve legacy unsafe Codex overrides such as `approvalPolicy: "never"` or `sandbox: "danger-full-access"`. Use `tools.exec.mode: "full"` only when you intentionally want the no-approval posture.
+
+For app-server setup, auth order, and native Codex runtime details, see [Codex harness](/plugins/codex-harness).
+
+## ACPX harness permissions
+
+ACPX sessions are non-interactive, so they cannot click a TTY permission prompt. ACPX uses separate harness-level settings under `plugins.entries.acpx.config`:
+
+| Setting                     | Common value    | Meaning                                     |
+| --------------------------- | --------------- | ------------------------------------------- |
+| `permissionMode`            | `approve-reads` | Auto-approve reads only.                    |
+| `permissionMode`            | `approve-all`   | Auto-approve writes and shell commands.     |
+| `permissionMode`            | `deny-all`      | Deny all permission prompts.                |
+| `nonInteractivePermissions` | `fail`          | Abort when a prompt would be required.      |
+| `nonInteractivePermissions` | `deny`          | Deny the prompt and continue when possible. |
+
+Set ACPX permissions separately from OpenClaw exec approvals:
+
+```bash
+openclaw config set plugins.entries.acpx.config.permissionMode approve-all
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
+openclaw gateway restart
+```
+
+Use `approve-all` as the ACPX break-glass equivalent of a no-prompt harness session. For setup details and failure modes, see [ACP agents setup](/tools/acp-agents-setup#permission-configuration).
+
+## Choosing a mode
+
+| Goal                                          | Configure                                                   |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| Block host commands completely                | `tools.exec.mode: "deny"`                                   |
+| Let known-safe commands run only              | `tools.exec.mode: "allowlist"`                              |
+| Ask a human for every new command shape       | `tools.exec.mode: "ask"`                                    |
+| Use Codex/OpenClaw auto-review before humans  | `tools.exec.mode: "auto"`                                   |
+| Skip host exec approvals entirely             | `tools.exec.mode: "full"` plus matching host approvals file |
+| Make non-interactive ACPX sessions write/exec | `plugins.entries.acpx.config.permissionMode: "approve-all"` |
+
+If a command still prompts or fails after changing mode, inspect both layers:
+
+```bash
+openclaw approvals get
+openclaw exec-policy show
+```
+
+Host exec uses the stricter result of OpenClaw config and the host-local approvals file. ACPX harness permissions do not loosen host exec approvals, and host exec approvals do not loosen ACPX harness prompts.
+
+## Related
+
+- [Exec approvals](/tools/exec-approvals)
+- [Exec approvals - advanced](/tools/exec-approvals-advanced)
+- [Codex harness](/plugins/codex-harness)
+- [ACP agents setup](/tools/acp-agents-setup#permission-configuration)
+
+
+
 # Section: tools/perplexity-search.md
 
 ---
@@ -148718,7 +149051,7 @@ Key policy rules:
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
-  separate: `openai-codex/*` is legacy OpenAI-provider config, while the bundled
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 
@@ -149147,6 +149480,278 @@ key wins first).
 
 
 
+# Section: tools/skill-workshop.md
+
+---
+summary: "Create and update workspace skills through Skill Workshop review"
+read_when:
+  - You want the agent to create or update a skill from chat
+  - You need to review, apply, reject, or quarantine a generated skill draft
+  - You are configuring Skill Workshop approval, autonomy, storage, or limits
+title: "Skill Workshop"
+sidebarTitle: "Skill Workshop"
+---
+
+Skill Workshop is OpenClaw's governed path for creating and updating workspace
+skills.
+
+Agents and operators do not write active `SKILL.md` files directly through this
+path. They create a **proposal** first. A proposal is a pending draft containing
+the proposed skill content, target binding, scanner state, hashes, support-file
+metadata, and rollback metadata. It becomes a live skill only when applied.
+
+Skill Workshop writes workspace skills only. It does not mutate bundled,
+plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
+
+## How it works
+
+- **Proposal first:** generated skill content is stored as `PROPOSAL.md`, not
+  `SKILL.md`.
+- **Apply is the only live write:** create, update, and revise do not change
+  active skills.
+- **Workspace scoped:** creates target the workspace `skills/` root. Updates
+  are allowed only for writable workspace skills.
+- **No clobber:** create fails if the target skill already exists.
+- **Hash bound:** update proposals bind to the current target hash and become
+  stale if the live skill changes before apply.
+- **Scanner gated:** apply reruns scanning before writing.
+- **Recoverable:** apply writes rollback metadata before changing live files.
+- **Consistent surfaces:** chat, CLI, and Gateway all call the same Skill
+  Workshop service.
+
+## Lifecycle
+
+```text
+create/update -> pending
+revise        -> pending
+apply         -> applied
+reject        -> rejected
+quarantine    -> quarantined
+target change -> stale
+```
+
+Only `pending` proposals can be revised, applied, rejected, or quarantined.
+
+## Chat
+
+Ask the agent for the skill you want. The agent calls `skill_workshop` and
+returns a proposal id.
+
+Create:
+
+```text
+Make a skill called morning-catchup that runs my Monday inbox routine.
+```
+
+Update an existing workspace skill:
+
+```text
+Update trip-planning to also check seat maps before booking.
+```
+
+Iterate on a pending proposal:
+
+```text
+Show me the morning-catchup proposal.
+Revise it to also flag anything marked urgent.
+Apply the morning-catchup proposal.
+```
+
+By default, agent-initiated `apply`, `reject`, and `quarantine` show an
+approval prompt before they run. Set `skills.workshop.approvalPolicy` to
+`"auto"` to skip the prompt for trusted environments.
+
+## CLI
+
+Create a new skill proposal:
+
+```bash
+openclaw skills workshop propose-create \
+  --name morning-catchup \
+  --description "Daily inbox catch-up: triage, archive, surface, draft, plan" \
+  --proposal ./PROPOSAL.md
+```
+
+Create an update proposal for an existing workspace skill:
+
+```bash
+openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
+```
+
+List and inspect:
+
+```bash
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+```
+
+Revise before approval:
+
+```bash
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+```
+
+Close out the proposal:
+
+```bash
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+```
+
+## Proposal content
+
+While pending, the proposal is stored as `PROPOSAL.md` with proposal-only
+frontmatter:
+
+```markdown
+---
+name: "morning-catchup"
+description: "Daily inbox catch-up: triage, archive, surface, draft, plan"
+status: proposal
+version: "v1"
+date: "2026-05-30T00:00:00.000Z"
+---
+```
+
+On apply, Skill Workshop writes the active `SKILL.md` and removes proposal-only
+fields: `status`, proposal `version`, and proposal `date`.
+
+## Support files
+
+Use `--proposal-dir` when the proposed skill needs files beside `PROPOSAL.md`:
+
+```bash
+openclaw skills workshop propose-create \
+  --name weekly-update \
+  --description "Friday wrap-up: stats, highlights, next week's top three" \
+  --proposal-dir ./weekly-update-proposal
+```
+
+The directory must contain `PROPOSAL.md`. Support files must be under:
+
+- `assets/`
+- `examples/`
+- `references/`
+- `scripts/`
+- `templates/`
+
+Skill Workshop scans, hashes, and stores support files with the proposal. They
+are written beside the live `SKILL.md` only on apply.
+
+Rejected support-file paths include absolute paths, hidden path segments, path
+traversal, overlapping paths, executable files from proposal directories,
+non-UTF-8 text, null bytes, and files outside the standard support folders.
+
+## Agent tool
+
+The model uses `skill_workshop`:
+
+```text
+action: create | update | revise | list | inspect | apply | reject | quarantine
+```
+
+Agents must use `skill_workshop` for generated skill work. They must not create
+or change proposal files through `write`, `edit`, `exec`, shell commands, or
+direct filesystem operations.
+
+## Approval and autonomy
+
+```json5
+{
+  skills: {
+    workshop: {
+      autonomous: {
+        enabled: false,
+      },
+      approvalPolicy: "pending",
+      maxPending: 50,
+      maxSkillBytes: 40000,
+    },
+  },
+}
+```
+
+- `autonomous.enabled`: allows OpenClaw to create pending proposals from durable
+  conversation signals after successful turns. Default: `false`.
+- `approvalPolicy: "pending"`: requires an approval prompt before
+  agent-initiated `apply`, `reject`, or `quarantine`.
+- `approvalPolicy: "auto"`: skips that approval prompt. The agent must still
+  call the action.
+- `maxPending`: caps pending and quarantined proposals per workspace.
+- `maxSkillBytes`: caps proposal body size. Default: `40000`.
+
+Proposal descriptions are always capped at 160 bytes.
+
+## Gateway methods
+
+```text
+skills.proposals.list
+skills.proposals.inspect
+skills.proposals.create
+skills.proposals.update
+skills.proposals.revise
+skills.proposals.apply
+skills.proposals.reject
+skills.proposals.quarantine
+```
+
+Read-only methods require `operator.read`. Mutating methods require
+`operator.admin`.
+
+## Storage
+
+```text
+<OPENCLAW_STATE_DIR>/skill-workshop/
+  proposals.json
+  proposals/<proposal-id>/
+    proposal.json
+    PROPOSAL.md
+    rollback.json
+    assets/
+    examples/
+    references/
+    scripts/
+    templates/
+```
+
+Default state directory: `~/.openclaw`.
+
+- `proposal.json`: canonical proposal record.
+- `proposals.json`: fast listing index, rebuildable from proposal folders.
+- `PROPOSAL.md`: pending skill proposal.
+- `rollback.json`: recovery metadata written before apply changes live files.
+
+## Limits
+
+- Description: 160 bytes.
+- Proposal body: `skills.workshop.maxSkillBytes` (default 40,000).
+- Support files: 64 per proposal.
+- Support file size: 256 KB each, 2 MB total.
+- Pending and quarantined proposals: `skills.workshop.maxPending` per workspace
+  (default 50).
+
+## Troubleshooting
+
+| Problem                                        | Resolution                                                                                   |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                  |
+| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                          |
+| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                    |
+| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                            |
+| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. |
+| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                             |
+
+## Related
+
+- [Skills](/tools/skills) for load order, precedence, and visibility
+- [Creating skills](/tools/creating-skills) for hand-written `SKILL.md`
+  basics
+- [Skills config](/tools/skills-config) for the full `skills.workshop` schema
+- [Skills CLI](/cli/skills) for `openclaw skills` commands
+
+
+
 # Section: tools/skills-config.md
 
 ---
@@ -149159,7 +149764,9 @@ title: "Skills config"
 
 Most skills loader/install configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific skill visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.list[].skills`. Skill Workshop behavior is
+configured under `skills.workshop`; see
+[Skill Workshop](/tools/skill-workshop) for the full creation and review flow.
 
 ```json5
 {
@@ -149175,6 +149782,14 @@ Most skills loader/install configuration lives under `skills` in
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
       allowUploadedArchives: false,
+    },
+    workshop: {
+      autonomous: {
+        enabled: false,
+      },
+      approvalPolicy: "pending", // pending | auto
+      maxPending: 50,
+      maxSkillBytes: 40000,
     },
     entries: {
       "image-lab": {
@@ -149261,6 +149876,18 @@ Rules:
   clients to install private zip archives staged through `skills.upload.*`
   (default: false). This only enables the uploaded-archive path; normal ClawHub
   installs do not require it.
+- `workshop.autonomous.enabled`: allow agents to create pending proposals from
+  durable conversation signals after successful turns (default: false).
+  User-prompted skill creation still goes through Skill Workshop.
+- `workshop.approvalPolicy`: Skill Workshop review policy. `pending` requires
+  approval before agent-initiated apply/reject/quarantine actions; `auto`
+  allows those actions without approval.
+- `workshop.maxPending`: maximum pending/quarantined proposals retained per
+  workspace (default: 50).
+- `workshop.maxSkillBytes`: maximum generated proposal body size in bytes
+  (default: 40000).
+  Proposal descriptions are also hard-capped at 160 bytes because they can be
+  shown in skill discovery and proposal listings.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.
@@ -149471,20 +150098,13 @@ the tool surface those skills teach.
 
 ## Skill Workshop
 
-The optional, experimental **Skill Workshop** plugin can create or update
-workspace skills from reusable procedures observed during agent work. It
-is disabled by default and must be explicitly enabled via
-`plugins.entries.skill-workshop`.
+[Skill Workshop](/tools/skill-workshop) is the governed path for
+agent-generated or reviewed skill creation and improvement. It turns reusable
+work into a pending proposal, scans and hashes the proposal bundle, supports
+review and revision, and writes the final `SKILL.md` only after apply.
 
-Skill Workshop writes only to `<workspace>/skills`, scans generated
-content, supports pending approval or automatic safe writes, quarantines
-unsafe proposals, and refreshes the skill snapshot after successful
-writes so new skills become available without a Gateway restart.
-
-Use it for corrections such as _"next time, verify GIF attribution"_ or
-hard-won workflows such as media QA checklists. Start with pending
-approval; use automatic writes only in trusted workspaces after reviewing
-its proposals. Full guide: [Skill Workshop plugin](/plugins/skill-workshop).
+Use it when an agent or operator wants to capture reusable work without
+silently mutating active workspace skills.
 
 ## ClawHub (install and sync)
 
@@ -149915,7 +150535,6 @@ schema: [Skills config](/tools/skills-config).
 - [ClawHub](/clawhub) - public skills registry
 - [Creating skills](/tools/creating-skills) - building custom skills
 - [Plugins](/tools/plugin) - plugin system overview
-- [Skill Workshop plugin](/plugins/skill-workshop) - generate skills from agent work
 - [Skills config](/tools/skills-config) - skill configuration reference
 - [Slash commands](/tools/slash-commands) - all available slash commands
 
@@ -150643,6 +151262,10 @@ session to confirm the effective tool list.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
+Accepted native sub-agent spawns include the resolved child model metadata in
+the tool result: `resolvedModel` contains the applied model ref and
+`resolvedProvider` contains the provider prefix when the ref has one.
+
 ### Delegation prompt mode
 
 `agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
@@ -150786,14 +151409,12 @@ same sub-agent session.
 
 ### Thread supporting channels
 
-**Discord** is currently the only supported channel. It supports
-persistent thread-bound subagent sessions (`sessions_spawn` with
-`thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`,
-`/session idle`, `/session max-age`), and adapter keys
-`channels.discord.threadBindings.enabled`,
-`channels.discord.threadBindings.idleHours`,
-`channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSessions`.
+Any channel with a session-binding adapter can support persistent
+thread-bound subagent sessions (`sessions_spawn` with `thread: true`).
+Bundled adapters currently include Discord threads, Matrix threads,
+Telegram forum topics, and current-conversation bindings for Feishu.
+Use the per-channel `threadBindings` config keys for enablement,
+timeouts, and `spawnSessions`.
 
 ### Quick flow
 
@@ -151392,7 +152013,7 @@ title: "Thinking levels"
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`
 - For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
-- For `openai-codex/*`, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For Codex-backed `openai/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
@@ -152802,7 +153423,7 @@ OpenAI/ElevenLabs output formats are fixed per channel (see above).
 
 When `messages.tts.auto` is enabled, OpenClaw:
 
-- Skips TTS if the reply already contains media or a `MEDIA:` directive.
+- Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
@@ -152817,7 +153438,7 @@ summary model), audio is skipped and the normal text reply is sent.
 ```text
 Reply -> TTS enabled?
   no  -> send text
-  yes -> has media / MEDIA: / short?
+  yes -> has media / short?
           yes -> send text
           no  -> length > limit?
                    no  -> TTS -> attach audio
@@ -153978,7 +154599,7 @@ Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatical
 Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
 
 - Configure it under `tools.web.search.openaiCodex`
-- It only activates for Codex-capable models (`openai-codex/*` or providers using `api: "openai-codex-responses"`)
+- It only activates for Codex-capable OpenAI models (`openai/*` models using `api: "openai-chatgpt-responses"`)
 - Managed `web_search` still applies to non-Codex models
 - `mode: "cached"` is the default and recommended setting
 - `tools.web.search.enabled: false` disables both managed and native search
@@ -154488,6 +155109,7 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+    - When a visible assistant message was truncated in `chat.history`, the side reader can fetch the full display-normalized transcript entry on demand through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. If the Gateway still cannot return more, the reader shows an explicit unavailable state instead of silently repeating the truncated preview.
     - Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
@@ -154504,7 +155126,7 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
-    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus either `talk.realtime.providers.openai.apiKey`, `OPENAI_API_KEY`, or an `openai-codex` OAuth profile; configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. For hosted GPT realtime models, OpenClaw prefers the `openai-codex` OAuth profile before `OPENAI_API_KEY`; an explicit OpenAI realtime `apiKey` remains the advanced override. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
+    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus either `talk.realtime.providers.openai.apiKey`, `OPENAI_API_KEY`, or an `openai` OAuth profile; configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. For hosted GPT realtime models, OpenClaw prefers the `openai` OAuth profile before `OPENAI_API_KEY`; an explicit OpenAI realtime `apiKey` remains the advanced override. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
 
     The Chat composer includes a Talk options button next to the Talk start/stop button. The options apply to the next Talk session and can override provider, transport, model, voice, reasoning effort, VAD threshold, silence duration, and prefix padding. When an option is blank, the Gateway uses configured defaults where available or the provider default. Selecting Gateway relay forces the backend relay path; selecting WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
@@ -155367,6 +155989,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
+- When a visible assistant message was truncated in `chat.history`, Control UI can open a side reader and fetch the full display-normalized entry on demand through `chat.message.get` without increasing the default history payload.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
 - Compaction entries render as an explicit compacted-history divider. The divider explains that the compacted transcript is preserved as a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore from that compacted view when their permissions allow it.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
@@ -155397,6 +156020,7 @@ WebChat has two separate data paths:
 - Harnesses that require visible replies through `tools.message` still use WebChat as a current-run internal source reply sink. A targetless `message.send` from that active WebChat run is projected into the same chat and mirrored to the session transcript; WebChat does not become a reusable outbound channel and never inherits `lastChannel`.
 - WebChat injects assistant transcript entries only when the Gateway owns a displayed message outside a normal embedded agent turn: `chat.inject`, non-agent command replies, aborted partial output, and WebChat-managed media transcript supplements.
 - `chat.history` reads the stored session transcript and applies WebChat display projection. If live assistant text appears during a run but disappears after history reload, first check whether the raw JSONL contains the assistant text, then whether `chat.history` projection stripped it, then whether the Control UI optimistic-tail merge replaced local delivery state with the persisted snapshot.
+- `chat.message.get` uses the same transcript branch and display projection rules as `chat.history`, including active-agent scoping, but targets one transcript entry by `messageId` and returns an honest unavailable reason when the full content can no longer be returned.
 
 Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
 
