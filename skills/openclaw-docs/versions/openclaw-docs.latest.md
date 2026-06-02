@@ -21564,6 +21564,93 @@ session.
 
 
 
+# Section: clawhub/cli.md
+
+---
+summary: "ClawHub CLI entry points for discovering, installing, publishing, and verifying OpenClaw skills and plugins."
+read_when:
+  - You want to use ClawHub from the command line
+  - You want to install ClawHub skills or plugins through OpenClaw
+  - You want to publish ClawHub packages
+title: "ClawHub CLI"
+---
+
+# ClawHub CLI
+
+OpenClaw has two command-line entry points for ClawHub:
+
+- `openclaw skills` and `openclaw plugins` install and manage ClawHub packages
+  inside OpenClaw.
+- The standalone `clawhub` CLI handles publisher workflows such as login,
+  publish, transfer, and sync.
+
+## Discover and install
+
+Use OpenClaw commands when you want to install or update packages for a local
+OpenClaw agent or Gateway.
+
+```bash
+openclaw skills search "calendar"
+openclaw skills install <slug>
+openclaw skills update <slug>
+openclaw skills verify <slug>
+
+openclaw plugins search "calendar"
+openclaw plugins install clawhub:<package>
+openclaw plugins update <id-or-npm-spec>
+```
+
+Skill installs target the active workspace `skills/` directory by default. Add
+`--global` to install into the shared managed skills directory.
+
+Plugin installs use the `clawhub:` prefix when you want ClawHub resolution
+instead of npm or another install source.
+
+## Publish and maintain
+
+Install the standalone ClawHub CLI for publisher workflows:
+
+```bash
+npm i -g clawhub
+clawhub login
+```
+
+Publish plugin packages with `clawhub package publish`:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+clawhub package publish your-org/your-plugin@v1.0.0
+```
+
+Publish skill folders with `clawhub skill publish`:
+
+```bash
+clawhub skill publish ./skills/review-helper
+clawhub skill publish ./skills/review-helper --version 1.0.0
+```
+
+When local skill scan state or package ownership needs maintenance, use the
+relevant standalone command:
+
+```bash
+clawhub sync --all
+clawhub package transfer @old-owner/package --to new-owner
+```
+
+## Related
+
+- [`openclaw skills`](/cli/skills) - local skill search, install, update, and
+  verification
+- [`openclaw plugins`](/cli/plugins) - plugin search, install, update, and
+  inspection
+- [ClawHub publishing](/clawhub/publishing) - owner scope, release validation,
+  and review flow
+- [Creating skills](/tools/creating-skills) - skill authoring and publish flow
+- [Building plugins](/plugins/building-plugins) - plugin package authoring
+
+
+
 # Section: clawhub/publishing.md
 
 ---
@@ -29618,6 +29705,7 @@ openclaw onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
+Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`.
 
 LM Studio also supports a provider-specific key flag in non-interactive mode:
 
@@ -49907,6 +49995,30 @@ its own control markers and channel delivery.
 For CLIs that emit Claude Code stream-json compatible JSONL, set
 `jsonlDialect: "claude-stream-json"` on that backend's config.
 
+## Native compaction ownership
+
+Some CLI backends run an agent that compacts its **own** transcript, so OpenClaw must
+not run its safeguard summarizer against them - doing so fights the backend's own
+compaction and can hard-fail the turn.
+
+`claude-cli` has no harness endpoint - Claude Code compacts internally - so it declares
+`ownsNativeCompaction: true`, and OpenClaw returns a no-op from the compaction path.
+Native-harness sessions such as Codex keep routing to their harness compaction endpoint
+instead.
+
+Because the backend owns compaction, the old stopgap of setting
+`contextTokens: 1_000_000` purely to keep OpenClaw's safeguard from firing on a
+claude-cli session is **no longer needed** - the opt-out replaces it.
+
+```typescript
+api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });
+```
+
+Only declare `ownsNativeCompaction` for a backend that genuinely owns its compaction: it
+must reliably bound its own transcript as it nears its context window and persist a
+resumable session (e.g. `--resume` / `--session-id`); otherwise a deferred session can
+stay over budget. Matching `agentHarnessId` sessions still route to the harness endpoint.
+
 ## Bundle MCP overlays
 
 CLI backends do **not** receive OpenClaw tool calls directly, but a backend can
@@ -52926,7 +53038,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of configured target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only). Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up.
-- `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
+- `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn`. `0` means no timeout.
 - `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
@@ -81619,6 +81731,7 @@ Android nodes can advertise additional command families when the corresponding c
 Available families:
 
 - `device.status`, `device.info`, `device.permissions`, `device.health`
+- `device.apps` when Installed Apps sharing is enabled in Android Settings
 - `notifications.list`, `notifications.actions`
 - `photos.latest`
 - `contacts.search`, `contacts.add`
@@ -81631,12 +81744,14 @@ Example invokes:
 
 ```bash
 openclaw nodes invoke --node <idOrNameOrIp> --command device.status --params '{}'
+openclaw nodes invoke --node <idOrNameOrIp> --command device.apps --params '{"limit":10}'
 openclaw nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
 openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
 ```
 
 Notes:
 
+- `device.apps` is opt-in and returns launcher-visible apps by default.
 - Motion commands are capability-gated by available sensors.
 
 ## System commands (node host / mac node)
@@ -83869,8 +83984,9 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Voice wake remains disabled in the Android UX/runtime.
-- Additional Android command families (availability depends on device + permissions):
+- Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
+  - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default.
   - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)
   - `photos.latest`
   - `contacts.search`, `contacts.add`
@@ -89452,9 +89568,27 @@ only for behavior that really belongs to the backend.
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
 | `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
+| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers      |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+### `ownsNativeCompaction`: opting out of OpenClaw compaction
+
+If your backend runs an agent that compacts its **own** transcript, set
+`ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs against its
+sessions - the CLI compaction lifecycle returns a no-op and the turn proceeds. `claude-cli`
+declares it because Claude Code compacts internally with no harness endpoint. Native-harness
+sessions such as Codex keep routing to their harness compaction endpoint instead.
+
+**Only declare it when all of the following hold**, or a deferred over-budget session can
+stay over budget / go stale (OpenClaw no longer rescues it):
+
+- the backend reliably compacts or bounds its own transcript as it nears its window;
+- it persists a resumable session so the compacted state survives turns
+  (e.g. `--resume` / `--session-id`);
+- it is not a native-harness compaction session - matching `agentHarnessId` sessions
+  route to the harness endpoint instead.
 
 ## MCP tool bridge
 
@@ -131478,6 +131612,15 @@ explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
 Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
+<Warning>
+Changing the embedding provider, model, provider settings, sources, scope,
+chunking, or tokenizer can make the existing SQLite vector index incompatible.
+OpenClaw pauses vector search and reports an index identity warning instead of
+automatically re-embedding everything. Rebuild when you are ready with
+`openclaw memory status --index --agent <id>` or
+`openclaw memory index --force --agent <id>`.
+</Warning>
+
 If OpenAI embeddings are unreachable from your network, memory recall fails open
 instead of blocking the turn. Set the existing `memorySearch.provider` field to a
 reachable local, Ollama, regional, or OpenAI-compatible provider to restore
@@ -131575,7 +131718,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
 
     <Warning>
-    Changing model or `outputDimensionality` triggers an automatic full reindex.
+    Changing model or `outputDimensionality` changes the index identity. OpenClaw
+    pauses vector search until you explicitly rebuild the memory index.
     </Warning>
 
   </Accordion>
@@ -138972,6 +139116,8 @@ Automated UK school meal booking via ParentPay. Uses mouse coordinates for relia
   **@julianengel** • `files` `r2` `presigned-urls`
 
 Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful for remote OpenClaw instances.
+
+  <img src="/assets/showcase/r2-upload.png" alt="R2 upload skill on ClawHub" />
 </Card>
 
 <Card title="iOS app via Telegram" icon="mobile">
@@ -139140,6 +139286,8 @@ Vapi voice assistant to OpenClaw HTTP bridge. Near real-time phone calls with yo
   **@obviyus** • `transcription` `multilingual` `skill`
 
 Multi-lingual audio transcription via OpenRouter (Gemini, and more). Available on ClawHub.
+
+  <img src="/assets/showcase/openrouter-transcribe.png" alt="OpenRouter transcription skill on ClawHub" />
 </Card>
 
 </CardGroup>
@@ -139160,6 +139308,8 @@ OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persis
   **ClawHub** • `homeassistant` `skill` `automation`
 
 Control and automate Home Assistant devices via natural language.
+
+  <img src="/assets/showcase/homeassistant.png" alt="Home Assistant skill on ClawHub" />
 </Card>
 
 <Card title="Nix packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
@@ -139172,6 +139322,8 @@ Batteries-included nixified OpenClaw configuration for reproducible deployments.
   **ClawHub** • `calendar` `caldav` `skill`
 
 Calendar skill using khal and vdirsyncer. Self-hosted calendar integration.
+
+  <img src="/assets/showcase/caldav-calendar.png" alt="CalDAV calendar skill on ClawHub" />
 </Card>
 
 </CardGroup>
@@ -139695,7 +139847,7 @@ What you set:
     - `--custom-model-id`
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
-    - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-compatibility <openai|openai-responses|anthropic>` (optional; default `openai`)
     - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>
@@ -140565,8 +140717,9 @@ different operation limit:
 openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
-Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout` and
-`sessions_spawn.timeoutSeconds`. Restart the gateway after changing this value.
+Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+`sessions_spawn` does not accept per-call timeout overrides. Restart the
+gateway after changing this value.
 
 ### Health probe agent configuration
 
@@ -141188,12 +141341,11 @@ Two ways to start an ACP session:
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 </ParamField>
-<ParamField path="runTimeoutSeconds" type="number">
-  Aborts the ACP child turn after N seconds. `0` keeps the turn on the
-  gateway's no-timeout path. The same value is applied to the Gateway
-  run and ACP runtime so stalled/quota-exhausted harnesses do not
-  occupy the parent agent lane indefinitely.
-</ParamField>
+
+ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds` for
+their default child turn limit. The tool does not accept per-call timeout
+overrides.
+
 <ParamField path="model" type="string">
   Explicit model override for the ACP child session. Codex ACP spawns
   normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup
@@ -152828,7 +152980,7 @@ session to confirm the effective tool list.
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
-- **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 Accepted native sub-agent spawns include the resolved child model metadata in
@@ -152894,9 +153046,6 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run.
-</ParamField>
-<ParamField path="runTimeoutSeconds" type="number">
-  Defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`. When set, the sub-agent run is aborted after N seconds.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
@@ -153062,7 +153211,7 @@ remain spawnable while inheriting defaults.
 - Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
-- `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
+- Configured run timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
@@ -153081,7 +153230,7 @@ worker sub-sub-agents.
         maxSpawnDepth: 2, // allow sub-agents to spawn children (default: 1)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
-        runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // per-call gateway announce timeout
       },
     },
