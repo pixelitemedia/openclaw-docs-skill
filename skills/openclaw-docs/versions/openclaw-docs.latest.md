@@ -17980,6 +17980,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `progress` keeps one editable status draft for tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
+    - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
@@ -30964,7 +30965,7 @@ instead of creating a separate health gate.
 
 Policy currently manages configured channels, MCP servers, model providers,
 network SSRF posture, ingress/channel access posture, Gateway exposure posture, agent workspace posture,
-OpenClaw config secret provider/auth profile posture, and governed tool
+data-handling posture, OpenClaw config secret provider/auth profile posture, and governed tool
 declarations. For example, IT or a workspace operator can record that Telegram
 is not an approved channel provider, restrict MCP servers and model refs to
 approved entries, require private-network fetch/browser access to remain
@@ -30973,7 +30974,9 @@ to stay within reviewed bounds, require Gateway bind/auth/HTTP exposure to stay 
 bounds, require agent workspace access and tool denies to stay in a reviewed
 posture, require OpenClaw config SecretRefs to use managed providers, require
 config auth profiles to carry provider/mode metadata, require governed tools to
-carry risk and sensitivity metadata, then use `doctor --lint` as the shared
+carry risk and sensitivity metadata, require sensitive logging redaction, deny
+telemetry content capture, require session retention maintenance, deny session
+transcript memory indexing, then use `doctor --lint` as the shared
 conformance gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
@@ -30997,7 +31000,7 @@ doctor can report the missing artifact.
 Policy is authored, not generated from the user's current settings. A minimal
 policy for channels, MCP servers, model providers, network posture, ingress/channel access, Gateway
 exposure, agent workspace posture, configured sandbox runtime posture, OpenClaw
-config secret provider/auth profile posture, and tool metadata looks like this:
+data-handling posture, config secret provider/auth profile posture, and tool metadata looks like this:
 
 ```jsonc
 {
@@ -31063,6 +31066,20 @@ config secret provider/auth profile posture, and tool metadata looks like this:
       "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
     },
   },
+  "dataHandling": {
+    "sensitiveLogging": {
+      "requireRedaction": true,
+    },
+    "telemetry": {
+      "denyContentCapture": true,
+    },
+    "retention": {
+      "requireSessionMaintenance": true,
+    },
+    "memory": {
+      "denySessionTranscriptIndexing": true,
+    },
+  },
   "secrets": {
     "requireManagedProviders": true,
     "denySources": ["exec"],
@@ -31100,7 +31117,8 @@ when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
 settings, direct-message session scope, channel DM policy, channel group policy,
 channel/group mention gates, Gateway bind/auth/Control UI/Tailscale/remote/HTTP
-posture, OpenClaw config agent sandbox workspace access and tool deny posture, config secret
+posture, OpenClaw config agent sandbox workspace access and tool deny posture,
+data-handling config posture, config secret
 provider and SecretRef provenance, config auth profile metadata, configured
 global/per-agent tool posture, and `TOOLS.md` declarations as evidence, then
 reports observed state that does not conform. If a policy denies non-loopback
@@ -31121,6 +31139,11 @@ runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
+Data-handling evidence is config-level posture only: it checks configured
+redaction mode, telemetry content-capture toggles, session maintenance mode, and
+session-transcript memory indexing settings. It does not inspect raw logs,
+telemetry exports, transcript contents, memory files, or prove that no personal
+data or secrets exist.
 
 ### Policy rule reference
 
@@ -31128,6 +31151,8 @@ Each policy field below is optional. A check runs only when the matching rule is
 present in `policy.jsonc`. The observed state is existing OpenClaw config or
 workspace metadata; policy reports drift but does not rewrite runtime behavior
 unless a repair path is explicitly available and enabled.
+Policy files are strict: unsupported sections or rule keys are reported as
+`policy/policy-jsonc-invalid` instead of being ignored.
 
 Policy overlays keep broad top-level rules global, then let named scope blocks
 add stricter normal policy sections for explicit selectors. A scope name is a
@@ -31139,7 +31164,8 @@ its own finding against the same observed config.
 
 Use `scopes.<scopeName>` when one set of agents or channels needs stricter
 policy than the top-level baseline. Agent-scoped sections use `agentIds`, which
-supports `tools.*`, `agents.workspace.*`, and `sandbox.*`. Channel-scoped
+supports `tools.*`, `agents.workspace.*`, `sandbox.*`, and
+`dataHandling.memory.*`. Channel-scoped
 ingress uses `channelIds`, which supports `ingress.channels.*`. Unsupported
 sections are rejected instead of being ignored. If an `agentIds` entry is not
 present in `agents.list[]`, OpenClaw evaluates the scoped rule against inherited
@@ -31177,6 +31203,11 @@ global/default posture for that runtime agent id.
       "sandbox": {
         "requireMode": ["all"],
         "allowBackends": ["docker"],
+      },
+      "dataHandling": {
+        "memory": {
+          "denySessionTranscriptIndexing": true,
+        },
       },
     },
     "shell-sandbox": {
@@ -31219,10 +31250,10 @@ groups where those fields cannot be observed.
 Top-level `ingress.session.requireDmScope` remains global because
 `session.dmScope` is not channel-attributable evidence.
 
-| Selector     | Supported sections                         | Use when                                          |
-| ------------ | ------------------------------------------ | ------------------------------------------------- |
-| `agentIds`   | `tools`, `agents.workspace`, and `sandbox` | One or more runtime agents need stricter rules.   |
-| `channelIds` | `ingress.channels`                         | One or more channels need stricter ingress rules. |
+| Selector     | Supported sections                                                | Use when                                          |
+| ------------ | ----------------------------------------------------------------- | ------------------------------------------------- |
+| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, and `dataHandling.memory` | One or more runtime agents need stricter rules.   |
+| `channelIds` | `ingress.channels`                                                | One or more channels need stricter ingress rules. |
 
 Every scope present in `policy.jsonc` must be valid and enforceable.
 
@@ -31298,6 +31329,15 @@ Every scope present in `policy.jsonc` must be valid and enforceable.
 Policy treats missing `sandbox.mode` as the implicit default `off`, so
 `sandbox.requireMode` reports a fresh or unconfigured sandbox as outside an
 allowlist such as `["all"]`.
+
+#### Data Handling
+
+| Policy field                                        | Observed state                                                                       | Use when                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                            | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                    | Set to `true` to reject telemetry content capture.                     |
+| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                           | Set to `true` to require effective session maintenance mode `enforce`. |
+| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled` and `agents.*.memorySearch.experimental.sessionMemory` | Set to `true` to reject session transcript indexing into memory.       |
 
 #### Secrets
 
@@ -31619,63 +31659,67 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                          | Finding                                                                           |
-| ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`                     | Policy is enabled but `policy.jsonc` is missing.                                  |
-| `policy/policy-jsonc-invalid`                     | Policy cannot be parsed or contains malformed rule entries.                       |
-| `policy/policy-hash-mismatch`                     | Policy does not match configured `expectedHash`.                                  |
-| `policy/attestation-hash-mismatch`                | Current policy evidence no longer matches the accepted attestation.               |
-| `policy/policy-conformance-invalid`               | A baseline or checked policy file has invalid comparison syntax.                  |
-| `policy/policy-conformance-missing`               | A checked policy file is missing a rule required by the baseline policy file.     |
-| `policy/policy-conformance-weaker`                | A checked policy file has a weaker value than the baseline policy file.           |
-| `policy/channels-denied-provider`                 | An enabled channel matches a channel deny rule.                                   |
-| `policy/mcp-denied-server`                        | A configured MCP server is denied by policy.                                      |
-| `policy/mcp-unapproved-server`                    | A configured MCP server is outside the allowlist.                                 |
-| `policy/models-denied-provider`                   | A configured model provider or model ref uses a denied provider.                  |
-| `policy/models-unapproved-provider`               | A configured model provider or model ref is outside the allowlist.                |
-| `policy/network-private-access-enabled`           | A private-network SSRF escape hatch is enabled when policy denies it.             |
-| `policy/ingress-dm-policy-unapproved`             | A channel DM policy is outside the policy allowlist.                              |
-| `policy/ingress-dm-scope-unapproved`              | `session.dmScope` does not match the policy-required DM isolation scope.          |
-| `policy/ingress-open-groups-denied`               | A channel group policy is `open` while policy denies open group ingress.          |
-| `policy/ingress-group-mention-required`           | A channel or group entry disables mention gates while policy requires them.       |
-| `policy/gateway-non-loopback-bind`                | Gateway bind posture permits non-loopback exposure when policy denies it.         |
-| `policy/gateway-auth-disabled`                    | Gateway authentication is disabled when policy requires auth.                     |
-| `policy/gateway-rate-limit-missing`               | Gateway auth rate-limit posture is not explicit when policy requires it.          |
-| `policy/gateway-control-ui-insecure`              | Gateway Control UI insecure exposure toggles are enabled.                         |
-| `policy/gateway-tailscale-funnel`                 | Gateway Tailscale Funnel exposure is enabled when policy denies it.               |
-| `policy/gateway-remote-enabled`                   | Gateway remote mode is active when policy denies it.                              |
-| `policy/gateway-http-endpoint-enabled`            | A Gateway HTTP API endpoint is enabled while denied by policy.                    |
-| `policy/gateway-http-url-fetch-unrestricted`      | Gateway HTTP URL-fetch input lacks a required URL allowlist.                      |
-| `policy/agents-workspace-access-denied`           | Agent sandbox mode or workspace access is outside the policy allowlist.           |
-| `policy/agents-tool-not-denied`                   | An agent or default config does not deny a tool required by policy.               |
-| `policy/tools-profile-unapproved`                 | A configured global or per-agent tool profile is outside the allowlist.           |
-| `policy/tools-fs-workspace-only-required`         | Filesystem tools are not configured with workspace-only path posture.             |
-| `policy/tools-exec-security-unapproved`           | Exec security mode is outside the policy allowlist.                               |
-| `policy/tools-exec-ask-unapproved`                | Exec ask mode is outside the policy allowlist.                                    |
-| `policy/tools-exec-host-unapproved`               | Exec host routing is outside the policy allowlist.                                |
-| `policy/tools-elevated-enabled`                   | Elevated tool mode is enabled when policy denies it.                              |
-| `policy/tools-also-allow-missing`                 | A configured `alsoAllow` list is missing an entry required by policy.             |
-| `policy/tools-also-allow-unexpected`              | A configured `alsoAllow` list includes an entry not expected by policy.           |
-| `policy/tools-required-deny-missing`              | A global or per-agent tool deny list does not include a required denied tool.     |
-| `policy/sandbox-mode-unapproved`                  | Sandbox mode is outside the policy allowlist.                                     |
-| `policy/sandbox-backend-unapproved`               | Sandbox backend is outside the policy allowlist.                                  |
-| `policy/sandbox-container-posture-unobservable`   | A container posture rule is enabled for a backend that cannot observe it.         |
-| `policy/sandbox-container-host-network-denied`    | A container-backed sandbox or browser uses host network mode.                     |
-| `policy/sandbox-container-namespace-join-denied`  | A container-backed sandbox or browser joins another container namespace.          |
-| `policy/sandbox-container-mount-mode-required`    | A container-backed sandbox or browser mount is not read-only.                     |
-| `policy/sandbox-container-runtime-socket-mount`   | A container-backed sandbox or browser mount exposes the container runtime socket. |
-| `policy/sandbox-container-unconfined-profile`     | Container sandbox profile is unconfined when policy denies it.                    |
-| `policy/sandbox-browser-cdp-source-range-missing` | Sandbox browser CDP source range is missing when policy requires one.             |
-| `policy/secrets-unmanaged-provider`               | A config SecretRef references a provider not declared under `secrets.providers`.  |
-| `policy/secrets-denied-provider-source`           | A config secret provider or SecretRef uses a source denied by policy.             |
-| `policy/secrets-insecure-provider`                | A secret provider opts into insecure posture when policy denies it.               |
-| `policy/auth-profile-invalid-metadata`            | A config auth profile is missing valid provider or mode metadata.                 |
-| `policy/auth-profile-unapproved-mode`             | A config auth profile mode is outside the policy allowlist.                       |
-| `policy/tools-missing-risk-level`                 | A governed tool declaration is missing risk metadata.                             |
-| `policy/tools-unknown-risk-level`                 | A governed tool declaration uses an unknown risk value.                           |
-| `policy/tools-missing-sensitivity-token`          | A governed tool declaration is missing sensitivity metadata.                      |
-| `policy/tools-missing-owner`                      | A governed tool declaration is missing owner metadata.                            |
-| `policy/tools-unknown-sensitivity-token`          | A governed tool declaration uses an unknown sensitivity value.                    |
+| Check id                                                 | Finding                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`                            | Policy is enabled but `policy.jsonc` is missing.                                  |
+| `policy/policy-jsonc-invalid`                            | Policy cannot be parsed or contains malformed rule entries.                       |
+| `policy/policy-hash-mismatch`                            | Policy does not match configured `expectedHash`.                                  |
+| `policy/attestation-hash-mismatch`                       | Current policy evidence no longer matches the accepted attestation.               |
+| `policy/policy-conformance-invalid`                      | A baseline or checked policy file has invalid comparison syntax.                  |
+| `policy/policy-conformance-missing`                      | A checked policy file is missing a rule required by the baseline policy file.     |
+| `policy/policy-conformance-weaker`                       | A checked policy file has a weaker value than the baseline policy file.           |
+| `policy/channels-denied-provider`                        | An enabled channel matches a channel deny rule.                                   |
+| `policy/mcp-denied-server`                               | A configured MCP server is denied by policy.                                      |
+| `policy/mcp-unapproved-server`                           | A configured MCP server is outside the allowlist.                                 |
+| `policy/models-denied-provider`                          | A configured model provider or model ref uses a denied provider.                  |
+| `policy/models-unapproved-provider`                      | A configured model provider or model ref is outside the allowlist.                |
+| `policy/network-private-access-enabled`                  | A private-network SSRF escape hatch is enabled when policy denies it.             |
+| `policy/ingress-dm-policy-unapproved`                    | A channel DM policy is outside the policy allowlist.                              |
+| `policy/ingress-dm-scope-unapproved`                     | `session.dmScope` does not match the policy-required DM isolation scope.          |
+| `policy/ingress-open-groups-denied`                      | A channel group policy is `open` while policy denies open group ingress.          |
+| `policy/ingress-group-mention-required`                  | A channel or group entry disables mention gates while policy requires them.       |
+| `policy/gateway-non-loopback-bind`                       | Gateway bind posture permits non-loopback exposure when policy denies it.         |
+| `policy/gateway-auth-disabled`                           | Gateway authentication is disabled when policy requires auth.                     |
+| `policy/gateway-rate-limit-missing`                      | Gateway auth rate-limit posture is not explicit when policy requires it.          |
+| `policy/gateway-control-ui-insecure`                     | Gateway Control UI insecure exposure toggles are enabled.                         |
+| `policy/gateway-tailscale-funnel`                        | Gateway Tailscale Funnel exposure is enabled when policy denies it.               |
+| `policy/gateway-remote-enabled`                          | Gateway remote mode is active when policy denies it.                              |
+| `policy/gateway-http-endpoint-enabled`                   | A Gateway HTTP API endpoint is enabled while denied by policy.                    |
+| `policy/gateway-http-url-fetch-unrestricted`             | Gateway HTTP URL-fetch input lacks a required URL allowlist.                      |
+| `policy/agents-workspace-access-denied`                  | Agent sandbox mode or workspace access is outside the policy allowlist.           |
+| `policy/agents-tool-not-denied`                          | An agent or default config does not deny a tool required by policy.               |
+| `policy/tools-profile-unapproved`                        | A configured global or per-agent tool profile is outside the allowlist.           |
+| `policy/tools-fs-workspace-only-required`                | Filesystem tools are not configured with workspace-only path posture.             |
+| `policy/tools-exec-security-unapproved`                  | Exec security mode is outside the policy allowlist.                               |
+| `policy/tools-exec-ask-unapproved`                       | Exec ask mode is outside the policy allowlist.                                    |
+| `policy/tools-exec-host-unapproved`                      | Exec host routing is outside the policy allowlist.                                |
+| `policy/tools-elevated-enabled`                          | Elevated tool mode is enabled when policy denies it.                              |
+| `policy/tools-also-allow-missing`                        | A configured `alsoAllow` list is missing an entry required by policy.             |
+| `policy/tools-also-allow-unexpected`                     | A configured `alsoAllow` list includes an entry not expected by policy.           |
+| `policy/tools-required-deny-missing`                     | A global or per-agent tool deny list does not include a required denied tool.     |
+| `policy/sandbox-mode-unapproved`                         | Sandbox mode is outside the policy allowlist.                                     |
+| `policy/sandbox-backend-unapproved`                      | Sandbox backend is outside the policy allowlist.                                  |
+| `policy/sandbox-container-posture-unobservable`          | A container posture rule is enabled for a backend that cannot observe it.         |
+| `policy/sandbox-container-host-network-denied`           | A container-backed sandbox or browser uses host network mode.                     |
+| `policy/sandbox-container-namespace-join-denied`         | A container-backed sandbox or browser joins another container namespace.          |
+| `policy/sandbox-container-mount-mode-required`           | A container-backed sandbox or browser mount is not read-only.                     |
+| `policy/sandbox-container-runtime-socket-mount`          | A container-backed sandbox or browser mount exposes the container runtime socket. |
+| `policy/sandbox-container-unconfined-profile`            | Container sandbox profile is unconfined when policy denies it.                    |
+| `policy/sandbox-browser-cdp-source-range-missing`        | Sandbox browser CDP source range is missing when policy requires one.             |
+| `policy/data-handling-redaction-disabled`                | Sensitive logging redaction is disabled when policy requires it.                  |
+| `policy/data-handling-telemetry-content-capture`         | Telemetry content capture is enabled when policy denies it.                       |
+| `policy/data-handling-session-retention-not-enforced`    | Session retention maintenance is not enforced when policy requires it.            |
+| `policy/data-handling-session-transcript-memory-enabled` | Session transcript memory indexing is enabled when policy denies it.              |
+| `policy/secrets-unmanaged-provider`                      | A config SecretRef references a provider not declared under `secrets.providers`.  |
+| `policy/secrets-denied-provider-source`                  | A config secret provider or SecretRef uses a source denied by policy.             |
+| `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
+| `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
+| `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
+| `policy/tools-missing-risk-level`                        | A governed tool declaration is missing risk metadata.                             |
+| `policy/tools-unknown-risk-level`                        | A governed tool declaration uses an unknown risk value.                           |
+| `policy/tools-missing-sensitivity-token`                 | A governed tool declaration is missing sensitivity metadata.                      |
+| `policy/tools-missing-owner`                             | A governed tool declaration is missing owner metadata.                            |
+| `policy/tools-unknown-sensitivity-token`                 | A governed tool declaration uses an unknown sensitivity value.                    |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
@@ -32487,9 +32531,8 @@ This is for cooperative/shared inbox hardening. A single Gateway shared by mutua
 It also emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules), and reminds you that OpenClaw is a personal-assistant trust model by default.
 For intentional shared-user setups, the audit guidance is to sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
 It also warns when small models (`<=300B`) are used without sandboxing and with web/browser tools enabled.
-For webhook ingress, it warns when:
+For webhook ingress, startup logs a non-fatal security warning and audit flags `hooks.token` reuse of active Gateway shared-secret auth values, including `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` and `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`. It also warns when:
 
-- `hooks.token` reuses an active Gateway shared-secret auth value (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`)
 - `hooks.token` is short
 - `hooks.path="/"`
 - `hooks.defaultSessionKey` is unset
@@ -32498,7 +32541,7 @@ For webhook ingress, it warns when:
 - overrides are enabled without `hooks.allowedSessionKeyPrefixes`
 
 If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
-Password-mode reuse is an audit finding for compatibility; rotate one of the secrets instead of expecting Gateway startup to reject that configuration.
+Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 
 It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
 It also flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured) and `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
@@ -41908,10 +41951,12 @@ OpenClaw resolves that behavior by conversation type:
   `message(action=send)`.
 - Internal orchestration allows silence by default.
 
-OpenClaw also uses silent replies for internal runner failures that happen
-before any assistant reply in non-direct chats, so groups/channels do not see
-gateway error boilerplate. Direct chats show compact failure copy by default;
-raw runner details are shown only when `/verbose full` is enabled.
+OpenClaw also uses silent replies for generic internal runner failures in
+non-direct chats, so groups/channels do not see gateway error boilerplate.
+Classified failures with user-facing recovery copy, such as missing auth,
+rate-limit, or overload notices, can still be delivered. Direct chats show
+compact failure copy by default; raw runner details are shown only when
+`/verbose full` is enabled.
 
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply`
 can override group/internal policy per surface.
@@ -47196,8 +47241,8 @@ writes.
 ## Session maintenance
 
 OpenClaw automatically bounds session storage over time. By default, it runs
-in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
-to `"enforce"` for automatic cleanup:
+in `enforce` mode and applies cleanup during maintenance. Set
+`session.maintenance.mode` to `"warn"` to report what would be cleaned without mutating the store/files:
 
 ```json5
 {
@@ -51363,7 +51408,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     maintenance: {
-      mode: "warn", // warn | enforce
+      mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
       maxEntries: 500,
       resetArchiveRetention: "30d", // duration or false
@@ -51402,7 +51447,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`-`20`, default: `5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
-  - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
+  - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of entries in `sessions.json` (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
   - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
@@ -54818,8 +54863,8 @@ Query-string hook tokens are rejected.
 Validation and safety notes:
 
 - `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be distinct from `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`; reusing the Gateway token fails startup validation.
-- `openclaw security audit` also flags `hooks.token` reuse of active Gateway password auth (`gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, or `--auth password --password <password>`) as a critical finding; password-mode reuse stays startup-compatible and should be repaired by rotating one of the secrets.
+- `hooks.token` should be distinct from active Gateway shared-secret auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`); startup logs a non-fatal security warning when it detects reuse.
+- `openclaw security audit` flags hook/Gateway auth reuse as a critical finding, including Gateway password auth supplied only at audit time (`--auth password --password <password>`). Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
@@ -94544,6 +94589,7 @@ observation-only.
 
 - **`before_tool_call`** - rewrite tool params, block execution, or require approval
 - `after_tool_call` - observe tool results, errors, and duration
+- `resolve_exec_env` - contribute plugin-owned environment variables to `exec`
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
 
@@ -94656,6 +94702,28 @@ with `api.registerTrustedToolPolicy(...)`. These run before ordinary
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety. External plugins should use normal `before_tool_call`
 hooks.
+
+### Exec environment hook
+
+`resolve_exec_env` lets plugins contribute environment variables to `exec`
+tool invocations after the base exec environment is built and before the
+command runs. It receives:
+
+- `event.sessionKey`
+- `event.toolName`, currently always `"exec"`
+- `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
+- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+  `ctx.messageProvider`, and `ctx.channelId`
+
+Return a `Record<string, string>` to merge into the exec environment. Handlers
+run in priority order, and later hook results override earlier hook results for
+the same key.
+
+Hook output is filtered through the host exec environment key policy before it
+is merged. Invalid keys, `PATH`, and dangerous host override keys such as
+`LD_*`, `DYLD_*`, `NODE_OPTIONS`, proxy variables, and TLS override variables
+are dropped. The filtered plugin env is included in gateway approval/audit
+metadata and forwarded to node-host execution requests.
 
 ### Tool result persistence
 
@@ -102531,7 +102599,7 @@ API key auth, and dynamic model resolution.
     | --- | --- | --- |
     | `openai-compatible` | Shared OpenAI-style replay policy for OpenAI-compatible transports, including tool-call-id sanitation, assistant-first ordering fixes, and generic Gemini-turn validation where the transport needs it | `moonshot`, `ollama`, `xai`, `zai` |
     | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id | `amazon-bedrock`, `anthropic-vertex` |
-    | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation and tagged reasoning-output mode | `google`, `google-gemini-cli` |
+    | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation. The shared family keeps the text-output Gemini CLI on tagged reasoning; the direct `google` provider overrides `resolveReasoningOutputMode` to `native` because Gemini API thinking arrives as native thought parts. | `google`, `google-gemini-cli` |
     | `passthrough-gemini` | Gemini thought-signature sanitation for Gemini models running through OpenAI-compatible proxy transports; does not enable native Gemini replay validation or bootstrap rewrites | `openrouter`, `kilocode`, `opencode`, `opencode-go` |
     | `hybrid-anthropic-openai` | Hybrid policy for providers that mix Anthropic-message and OpenAI-compatible model surfaces in one plugin; optional Claude-only thinking-block dropping stays scoped to the Anthropic side | `minimax` |
 
@@ -102553,6 +102621,13 @@ API key auth, and dynamic model resolution.
       - `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
       - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
       - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "openai")`, and underlying provider schema helpers.
+
+      For Gemini-family providers, keep the reasoning-output mode aligned with
+      the transport. Direct Google Gemini API providers should use `native`
+      reasoning output so OpenClaw consumes native thought parts without adding
+      `<think>` / `<final>` prompt directives. Text-only Gemini CLI-style
+      backends that parse a final JSON/text response can keep the shared
+      `google-gemini` tagged contract.
 
       Some stream helpers stay provider-local on purpose. `@openclaw/anthropic-provider` keeps `wrapAnthropicProviderStream`, `resolveAnthropicBetas`, `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level Anthropic wrapper builders in its own public `api.ts` / `contract-api.ts` seam because they encode Claude OAuth beta handling and `context1m` gating. The xAI plugin similarly keeps native xAI Responses shaping in its own `wrapStreamFn` (`/fast` aliases, default `tool_stream`, unsupported strict-tool cleanup, xAI-specific reasoning-payload removal).
 
@@ -106955,7 +107030,8 @@ Workboard stops auto-moving that card until you move it back to `todo` or
 2. Create a card with a title, notes, priority, labels, optional agent, and
    optional linked session.
 3. Or open Sessions and choose Add to Workboard for an existing session.
-4. Drag the card between columns or use the column controls.
+4. Drag the card between columns or focus the compact status control on the card
+   and use its menu or ArrowLeft/ArrowRight.
 5. Start work from the card to create or reuse a dashboard session.
 6. Open the linked session from the card while the agent works.
 7. Let lifecycle sync move running work into review or blocked, then manually
@@ -109508,7 +109584,7 @@ settings and governed workspace declarations. Policy currently covers channel
 conformance, governed tool metadata, MCP server posture, model-provider posture,
 private-network access posture, Gateway exposure posture, agent workspace/tool
 posture, configured global/per-agent tool posture, configured sandbox runtime
-posture, ingress/channel access posture, and OpenClaw config secret
+posture, ingress/channel access posture, data-handling posture, and OpenClaw config secret
 provider/auth profile posture.
 
 Policy stores authored requirements in `policy.jsonc`, observes existing
@@ -109536,9 +109612,16 @@ and require sandbox browser CDP source ranges.
 These checks observe config conformance only; they do not read runtime approval
 state, inspect live containers, or add runtime enforcement.
 
+Data-handling rules can require sensitive logging redaction, deny telemetry
+content capture, require session retention maintenance, and deny session
+transcript memory indexing. These checks observe config conformance only; they
+do not inspect raw logs, telemetry exports, transcripts, memory files, secrets,
+or personal data.
+
 Named policy scopes under `scopes.<scopeName>` can add stricter normal policy
 sections for the selector they list. `agentIds` supports `tools`,
-`agents.workspace`, and `sandbox`; `channelIds` supports `ingress.channels`.
+`agents.workspace`, `sandbox`, and `dataHandling.memory`; `channelIds` supports
+`ingress.channels`.
 Runtime agent ids that are not explicitly listed in `agents.list[]` are checked
 against inherited global/default posture rather than silently passing with no
 evidence. Every scope present in `policy.jsonc` must be valid and enforceable
@@ -132678,7 +132761,7 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 
 - Prompt caching is automatic on supported recent models. OpenClaw does not need to inject block-level cache markers.
 - OpenClaw uses `prompt_cache_key` to keep cache routing stable across turns. Direct OpenAI hosts use `prompt_cache_retention: "24h"` when `cacheRetention: "long"` is selected.
-- OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`; with that same opt-in, explicit `cacheRetention: "long"` also forwards `prompt_cache_retention: "24h"`, and `cacheRetention: "none"` suppresses both fields.
+- OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`. Long-retention forwarding is a separate capability: explicit `cacheRetention: "long"` sends `prompt_cache_retention: "24h"` only when that compat entry also supports long cache retention. Providers such as Mistral can opt into cache keys while setting `compat.supportsLongCacheRetention: false` to suppress the long-retention field. `cacheRetention: "none"` suppresses both fields.
 - OpenAI responses expose cached prompt tokens via `usage.prompt_tokens_details.cached_tokens` (or `input_tokens_details.cached_tokens` on Responses API events). OpenClaw maps that to `cacheRead`.
 - OpenAI does not expose a separate cache-write token counter, so `cacheWrite` stays `0` on OpenAI paths even when the provider is warming a cache.
 - OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.
@@ -133716,7 +133799,7 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
-- `mode`: `warn` (default) or `enforce`
+- `mode`: `enforce` (default) or `warn`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
