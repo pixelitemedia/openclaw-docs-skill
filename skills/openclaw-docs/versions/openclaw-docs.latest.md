@@ -28974,17 +28974,6 @@ Target-side auth-required installs are reported on the affected plugin item with
 Their explicit config entries are written disabled until you reauthorize and
 enable them. Other install failures are item-scoped `error` results.
 
-The native Codex plugin config also accepts first-party `openai-bundled` and
-`openai-primary-runtime` marketplace identities, but migration does not
-auto-discover or install them from source state.
-
-OpenAI-side app/plugin availability still comes from the signed-in Codex
-account and workspace app controls. See
-[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
-for OpenAI's account and workspace-control overview, then use
-[Native Codex plugins](/plugins/codex-native-plugins#manual-first-party-marketplace-entries)
-for manual first-party marketplace entries.
-
 If Codex app-server plugin inventory is unavailable during planning, migration
 falls back to cached bundle advisory items instead of failing the whole
 migration.
@@ -30624,13 +30613,11 @@ is available, then fall back to `latest`.
     `--pin` applies to npm installs only. It is not supported with `git:` installs; use an explicit git ref such as `git:github.com/acme/plugin@v1.2.3` when you want a pinned source. It is not supported with `--marketplace`, because marketplace installs persist marketplace source metadata instead of an npm spec.
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install">
-    `--dangerously-force-unsafe-install` is a break-glass option for false positives in the built-in dangerous-code scanner. It allows the install to continue even when the built-in scanner reports `critical` findings, but it does **not** bypass plugin `before_install` hook policy blocks and does **not** bypass scan failures.
+    `--dangerously-force-unsafe-install` is deprecated and is now a no-op. OpenClaw no longer runs built-in install-time dangerous-code blocking for plugin installs.
 
-    Install scans ignore common test files and directories such as `tests/`, `__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks; declared plugin runtime entrypoints are still scanned even if they use one of those names.
+    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks and `security.installPolicy` can still block installs.
 
-    This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
-
-    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
+    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -30652,7 +30639,7 @@ is available, then fall back to `latest`.
   <Accordion title="Git repositories">
     Use `git:<repo>` to install directly from a git repository. Supported forms include `git:github.com/owner/repo`, `git:owner/repo`, full `https://`, `ssh://`, `git://`, `file://`, and `git@host:owner/repo.git` clone URLs. Add `@<ref>` or `#<ref>` to check out a branch, tag, or commit before install.
 
-    Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer. That means manifest validation, dangerous-code scanning, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
+    Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer. That means manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
 
     After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, execute that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
 
@@ -30734,6 +30721,10 @@ For local paths and archives, OpenClaw auto-detects:
 - Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude component layout)
 - Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
 
+Managed local installs must be plugin directories or archives. Standalone `.js`,
+`.mjs`, `.cjs`, and `.ts` plugin files are not copied into the managed plugin
+root by `plugins install`; list them explicitly in `plugins.load.paths` instead.
+
 <Note>
 Compatible bundles install into the normal plugin root and participate in the same list/info/enable/disable flow. Today, bundle skills, Claude command-skills, Claude `settings.json` defaults, Claude `.lsp.json` / manifest-declared `lspServers` defaults, Cursor command-skills, and compatible Codex hook directories are supported; other detected bundle capabilities are shown in diagnostics/info but are not yet wired into runtime execution.
 </Note>
@@ -30787,13 +30778,17 @@ For runtime hook debugging:
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
 - Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
-Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
+Use `--link` to avoid copying a local plugin directory (adds to `plugins.load.paths`):
 
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
 
-Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
+Standalone plugin files must be listed in `plugins.load.paths` rather than
+installed with `plugins install` or placed directly in `~/.openclaw/extensions`
+or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin
+package or bundle directories, while top-level script files are treated as local
+helpers and skipped.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not
@@ -30866,7 +30861,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
-    `--dangerously-force-unsafe-install` is also available on `plugins update` as a break-glass override for built-in dangerous-code scan false positives during plugin updates. It still does not bypass plugin `before_install` policy blocks or scan-failure blocking, and it only applies to plugin updates, not hook-pack updates.
+    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` and plugin `before_install` hooks can still block updates.
   </Accordion>
 </AccordionGroup>
 
@@ -35641,7 +35636,7 @@ These run inside the agent loop or gateway pipeline:
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
-- **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
+- **`before_install`**: inspect install context and optionally block skill or plugin installs after operator install policy runs.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
@@ -38367,8 +38362,8 @@ title: "Features"
   <Card title="Media" icon="image" href="/nodes/images">
     Images, audio, video, documents, and image/video generation.
   </Card>
-  <Card title="Apps and UI" icon="monitor" href="/web/control-ui">
-    Web Control UI and macOS companion app.
+  <Card title="Apps and UI" icon="monitor" href="/platforms">
+    Windows Hub, Web Control UI, macOS app, and mobile nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.
@@ -42086,10 +42081,10 @@ These notices are operational messages, not assistant content. They are delivere
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
-- Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
-- Runtime auth-routing state lives in `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
+- Secrets and runtime auth-routing state live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
-- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
+- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into the per-agent auth store on first use).
+- Legacy `auth-profiles.json`, `auth-state.json`, and per-agent `auth.json` files are imported by `openclaw doctor --fix`.
 
 More detail: [OAuth](/concepts/oauth)
 
@@ -42105,7 +42100,7 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
-Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
+Profiles live in the per-agent `openclaw-agent.sqlite` auth profile store.
 
 ## Rotation order
 
@@ -42119,7 +42114,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
     `auth.profiles` filtered by provider.
   </Step>
   <Step title="Stored profiles">
-    Entries in `auth-profiles.json` for the provider.
+    Per-agent SQLite auth profile entries for the provider.
   </Step>
 </Steps>
 
@@ -42207,7 +42202,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in `auth-state.json` under `usageStats`:
+State is stored in the per-agent SQLite auth state under `usageStats`:
 
 ```json
 {
@@ -42231,7 +42226,7 @@ Not every billing-shaped response is `402`, and not every HTTP `402` lands here.
 Meanwhile temporary `402` usage-window and organization/workspace spend-limit errors are classified as `rate_limit` when the message looks retryable (for example `weekly usage limit exhausted`, `daily limit reached, resets tomorrow`, or `organization spending limit exceeded`). Those stay on the short cooldown/failover path instead of the long billing-disable path.
 </Note>
 
-State is stored in `auth-state.json`:
+State is stored in the per-agent SQLite auth state:
 
 ```json
 {
@@ -44135,9 +44130,17 @@ is now:
   told us this usage is allowed again
 
 OpenAI Codex OAuth is explicitly supported for use in external tools like
-OpenClaw. This page explains:
+OpenClaw.
+
+OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
+canonical provider id `openai`. Older `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries are legacy state repaired by
+`openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
+new config.
 
 For Anthropic in production, API key auth is the safer recommended path.
+
+This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -44239,6 +44242,18 @@ Flow shape:
 ### OpenAI Codex (ChatGPT OAuth)
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
+
+The login command still uses the canonical OpenAI provider id:
+
+```bash
+openclaw models auth login --provider openai
+```
+
+Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
+one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+that older prefix to a collision-free `openai:*` profile id; run
+`openclaw models auth list --provider openai` after repair before copying
+profile ids into `auth.order` or `/model ...@<profileId>`.
 
 Flow shape (PKCE):
 
@@ -48921,13 +48936,13 @@ This is a two-step setup:
 If `claude` is not on `PATH`, either install Claude Code first or set
 `agents.defaults.cliBackends.claude-cli.command` to the real binary path.
 
-Manual token entry (any provider; writes `auth-profiles.json` + updates config):
+Manual token entry (any provider; writes the per-agent SQLite auth store + updates config):
 
 ```bash
 openclaw models auth paste-token --provider openrouter
 ```
 
-`auth-profiles.json` stores credentials only. The canonical shape is:
+The auth profile store keeps credentials only. Legacy `auth-profiles.json` files used this canonical shape:
 
 ```json
 {
@@ -48942,9 +48957,9 @@ openclaw models auth paste-token --provider openrouter
 }
 ```
 
-OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in `auth-profiles.json`.
+OpenClaw now reads auth profiles from each agent's `openclaw-agent.sqlite`. If an older install still has `auth-profiles.json`, `auth-state.json`, or a flat auth profile file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to import it into SQLite; doctor keeps timestamped backups beside the original JSON files. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 
-External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into `auth-profiles.json`. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
+External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into the auth profile store. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
 
 Auth profile refs are also supported for static credentials:
 
@@ -49027,6 +49042,25 @@ key in the provider dashboard when you need provider-side invalidation.
 
 ## Controlling which credential is used
 
+### OpenAI and legacy `openai-codex` ids
+
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical
+provider id `openai`. New config should use `openai:*` profile ids and
+`auth.order.openai`.
+
+If you see `openai-codex` in older config, auth profile ids, or
+`auth.order.openai-codex`, treat it as legacy migration input. Do not create new
+`openai-codex` profiles. Run:
+
+```bash
+openclaw doctor --fix
+openclaw models auth list --provider openai
+```
+
+Doctor rewrites legacy `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries to the canonical `openai` auth route. For
+OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+
 ### During login (CLI)
 
 Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
@@ -49059,7 +49093,7 @@ Use `/model` (or `/model list`) for a compact picker; use `/model status` for th
 
 ### Per-agent (CLI override)
 
-Set an explicit auth profile order override for an agent (stored in that agent's `auth-state.json`):
+Set an explicit auth profile order override for an agent (stored in that agent's SQLite auth state):
 
 ```bash
 openclaw models auth order get --provider anthropic
@@ -54449,10 +54483,7 @@ conversation bindings, or any non-Codex harness.
   migrated plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
-  stable marketplace identity. V1 supports `"openai-curated"`,
-  `"openai-bundled"`, and `"openai-primary-runtime"`. See
-  [Native Codex plugins](/plugins/codex-native-plugins#manual-first-party-marketplace-entries)
-  for manual bundled and primary-runtime examples.
+  stable marketplace identity. V1 only supports `"openai-curated"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
   Codex plugin identity from migration, for example `"google-calendar"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
@@ -61916,8 +61947,11 @@ terminal summary, and sanitized error text.
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
+    Older clients may still send `dangerouslyForceUnsafeInstall`; this field is
+    deprecated, accepted only for protocol compatibility, and ignored. Use
+    `security.installPolicy` for operator-owned install decisions.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.
@@ -66864,9 +66898,10 @@ The agent-facing `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
-fail-closed by default: only a narrow set of prompt, model, and mention-gating
-paths are agent-tunable. New sensitive config trees are therefore protected
-unless they are deliberately added to the allowlist.
+fail-closed by default: only a narrow set of low-risk runtime tuning,
+mention-gating, and visible-reply paths are agent-tunable. Global model defaults
+and prompt overlays stay operator-controlled. New sensitive config trees are
+therefore protected unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -66890,11 +66925,11 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Restart the Gateway after plugin changes.
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
-  - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
+  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained plugin packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
-  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
-  - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
+  - `--dangerously-force-unsafe-install` is deprecated and no longer changes plugin install/update behavior.
+  - Configure `security.installPolicy` when operators need a trusted local command to make host-specific allow/block decisions for skill and plugin installs. This policy runs after source material is staged but before installation continues, applies to ClawHub skills too, and is not bypassed by deprecated unsafe flags.
 
 Details: [Plugins](/tools/plugin)
 
@@ -68875,7 +68910,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
     - Close and reopen PowerShell after updating PATH.
 
-    If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
+    For desktop setup, use the native **Windows Hub** app. For terminal-only
+    setup, the PowerShell installer and WSL2 Gateway paths are both supported.
     Docs: [Windows](/platforms/windows).
 
   </Accordion>
@@ -69343,7 +69379,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Recommended:** 2GB RAM or more if you run multiple channels, browser automation, or media tools.
     - **OS:** Ubuntu LTS or another modern Debian/Ubuntu.
 
-    If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
+    If you are on Windows, use **Windows Hub** for desktop setup, or WSL2 when
+    you specifically want a Linux-style Gateway VM with broad tooling
     compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
     If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 
@@ -71577,9 +71614,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title="I closed my terminal on Windows - how do I restart OpenClaw?">
-    There are **two Windows install modes**:
+    There are **three Windows install modes**:
 
-    **1) WSL2 (recommended):** the Gateway runs inside Linux.
+    **1) Windows Hub local setup:** the native app manages a local app-owned WSL Gateway.
+
+    Open **OpenClaw Companion** from the Start menu or tray, then use
+    **Gateway Setup** or the Connections tab.
+
+    **2) Manual WSL2 Gateway:** the Gateway runs inside Linux.
 
     Open PowerShell, enter WSL, then restart:
 
@@ -71595,7 +71637,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    **2) Native Windows (not recommended):** the Gateway runs directly in Windows.
+    **3) Native Windows CLI/Gateway:** the Gateway runs directly in Windows.
 
     Open PowerShell and run:
 
@@ -71610,7 +71652,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
+    Docs: [Windows](/platforms/windows), [Gateway service runbook](/gateway).
 
   </Accordion>
 
@@ -71833,9 +71875,10 @@ lives on the [Models FAQ](/help/faq-models).
 
   <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
     Treat third-party skills and plugins as code you are choosing to trust.
-    ClawHub skill pages expose scan state before install, and OpenClaw plugin
-    install/update flows run built-in dangerous-code checks, but scans are not a
-    complete security boundary.
+    ClawHub skill pages expose scan state before install, but scans are not a
+    complete security boundary. OpenClaw does not run built-in local
+    dangerous-code blocking during plugin or skill install/update flows; use
+    operator-owned `security.installPolicy` for local allow/block decisions.
 
     Safer pattern:
 
@@ -74126,6 +74169,57 @@ Example:
 ```
 
 Reference: [Plugin architecture](/plugins/architecture)
+
+## Install policy blocks plugin installs or updates
+
+If an update finishes but plugins are stale, disabled, or show messages such as
+`blocked by install policy`, `install policy failed closed`, or
+`Disabled "<plugin>" after plugin update failure`, check
+`security.installPolicy`.
+
+Install policy runs on plugin installs and updates. OpenClaw-owned plugin
+versions normally move with the OpenClaw release, so an OpenClaw update can
+also need matching `@openclaw/*` plugin updates during post-update sync.
+
+Avoid these broad policy shapes unless you also maintain the matching upgrade
+rule:
+
+- Freezing OpenClaw-owned plugins to one exact old version, such as allowing
+  only `@openclaw/*@2026.5.3`.
+- Blocking by source kind alone, such as every npm, network, or
+  `request.mode: "update"` plugin request.
+- Treating the policy command as optional. When `security.installPolicy` is
+  enabled, a missing, slow, unreadable, or permission-blocked policy executable
+  fails closed.
+- Approving plugin versions without considering the policy request's
+  `openclawVersion` and the plugin candidate metadata.
+
+Safer policy rules allow trusted OpenClaw-owned plugin updates when the
+candidate is compatible with the current OpenClaw host, instead of pinning a
+single release forever. If you block npm by default, make a narrow exception
+for the trusted `@openclaw/*` plugin packages or plugin ids you use. If you
+differentiate install and update requests, apply the same trust rule to
+`request.mode: "update"`.
+
+Recovery:
+
+```bash
+openclaw doctor --deep
+openclaw plugins update --all
+openclaw status --all
+```
+
+If the policy is intentionally strict, relax it for the trusted OpenClaw upgrade
+window, rerun `openclaw plugins update --all`, then restore the stricter rule.
+If a plugin was disabled after update failure, inspect it and re-enable it only
+after the update succeeds:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+openclaw plugins enable <plugin-id>
+```
+
+Reference: [Operator install policy](/tools/skills-config#operator-install-policy-securityinstallpolicy)
 
 ## Plugin present but blocked by suspicious ownership
 
@@ -77836,12 +77930,16 @@ title: "Install"
 ## System requirements
 
 - **Node 24** (recommended) or Node 22.19+ - the installer script handles this automatically
-- **macOS, Linux, or Windows** - both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
+- **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source
 
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
+
+<Note>
+Windows desktop users can also install the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
+</Note>
 
 <Tabs>
   <Tab title="macOS / Linux / WSL2">
@@ -81696,7 +81794,9 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
+- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
+- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 
 ## Photos + videos (node camera)
 
@@ -84008,12 +84108,12 @@ openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params
 Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__openclaw__/canvas/`.
 
 This server injects a live-reload client into HTML and reloads on file changes.
-The A2UI host lives at `http://<gateway-host>:18789/__openclaw__/a2ui/`.
+The Gateway also serves `/__openclaw__/a2ui/`, but the Android app treats remote A2UI pages as render-only. Action-capable A2UI commands use the bundled app-owned A2UI page before applying messages.
 
 Canvas commands (foreground only):
 
 - `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).
-- A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)
+- A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias). These commands use the bundled app-owned A2UI page for action-capable rendering.
 
 Camera commands (foreground only; permission-gated):
 
@@ -84242,9 +84342,11 @@ OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway — known issues with WhatsApp and
 Telegram channels; see [Bun (experimental)](/install/bun) for details.
 
-Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
-Linux companion apps are planned, but the Gateway is fully supported today.
-Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
+Companion apps exist for Windows Hub, macOS (menu bar app), and mobile nodes
+(iOS/Android). Linux companion apps are planned, but the Gateway is fully
+supported today. On Windows, choose Windows Hub for the desktop app, native
+PowerShell install for terminal-first use, or WSL2 for the most
+Linux-compatible Gateway runtime.
 
 ## Choose your OS
 
@@ -84267,6 +84369,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 ## Common links
 
 - Install guide: [Getting Started](/start/getting-started)
+- Windows Hub: [Windows](/platforms/windows)
 - Gateway runbook: [Gateway](/gateway)
 - Gateway configuration: [Configuration](/gateway/configuration)
 - Service status: `openclaw gateway status`
@@ -84289,6 +84392,7 @@ The service target depends on OS:
 ## Related
 
 - [Install overview](/install)
+- [Windows Hub](/platforms/windows)
 - [macOS app](/platforms/macos)
 - [iOS app](/platforms/ios)
 
@@ -84536,7 +84640,8 @@ Notes:
 
 - The Gateway canvas host serves `/__openclaw__/canvas/` and `/__openclaw__/a2ui/`.
 - It is served from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-- The iOS node auto-navigates to A2UI on connect when a canvas host URL is advertised.
+- The iOS node keeps the built-in scaffold as the connected default view. `canvas.a2ui.push` and `canvas.a2ui.reset` use the bundled app-owned A2UI page.
+- Remote Gateway A2UI pages are render-only on iOS; native A2UI button actions are accepted only from bundled app-owned pages.
 - Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
 
 ## Computer Use relationship
@@ -84573,7 +84678,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Common errors
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise the Canvas plugin surface URL; check `plugins.entries.canvas.config.host` in [Gateway configuration](/gateway/configuration).
+- `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 
@@ -85002,120 +85107,194 @@ This page has moved to [Raspberry Pi](/install/raspberry-pi).
 # Section: platforms/windows.md
 
 ---
-summary: "Windows support: native and WSL2 install paths, daemon, and current caveats"
+summary: "Windows support: Windows Hub, native CLI and Gateway, WSL2 gateway setup, node mode, and troubleshooting"
 read_when:
   - Installing OpenClaw on Windows
-  - Choosing between native Windows and WSL2
-  - Looking for Windows companion app status
+  - Choosing between Windows Hub, native Windows, and WSL2
+  - Setting up the Windows companion app or Windows node mode
 title: "Windows"
 ---
 
-OpenClaw supports both **native Windows** and **WSL2**. WSL2 is the more
-stable path and recommended for the full experience — the CLI, Gateway, and
-tooling run inside Linux with full compatibility. Native Windows works for
-core CLI and Gateway use, with some caveats noted below.
+OpenClaw ships a native **Windows Hub** companion app plus Windows CLI support.
+Use Windows Hub when you want a desktop app with setup, tray status, chat,
+Command Center diagnostics, and Windows node capabilities. Use the PowerShell
+installer when you want the CLI/Gateway directly. Use WSL2 when you want the
+most Linux-compatible Gateway runtime.
 
-Native Windows companion apps are planned.
+## Recommended: Windows Hub
 
-## WSL2 (recommended)
+Windows Hub is the native WinUI companion app for Windows 10 20H2+ and Windows 11. It installs without administrator privileges and is published with signed
+x64 and ARM64 installers on OpenClaw releases.
 
-- [Getting Started](/start/getting-started) (use inside WSL)
-- [Install & updates](/install/updating)
-- Official WSL2 guide (Microsoft): [https://learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install)
+Download the latest stable installer:
 
-## Native Windows status
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
+- [Checksums](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-SHA256SUMS.txt)
 
-Native Windows CLI flows are improving, but WSL2 is still the recommended path.
+After install, launch **OpenClaw Companion** from the Start menu or the system
+tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,
+Check for Updates, and uninstall.
 
-What works well on native Windows today:
+### What Windows Hub includes
 
-- website installer via `install.ps1`
-- local CLI use such as `openclaw --version`, `openclaw doctor`, and `openclaw plugins list --json`
-- embedded local-agent/provider smoke such as:
+- system tray status and launch-at-login
+- first-run setup for a local app-owned WSL Gateway
+- connection settings for local, remote, and SSH-tunneled Gateways
+- native chat window plus access to the browser Control UI
+- Command Center diagnostics for sessions, usage, channels, nodes, pairing, and
+  repair commands
+- Windows node mode for agent-controlled canvas, screen, camera, notifications,
+  device status, text-to-speech, speech-to-text, and controlled `system.run`
+- local MCP server mode for MCP clients such as Claude Desktop, Claude Code, and
+  Cursor
+
+### First launch
+
+On first launch, Windows Hub opens setup when there is no usable saved Gateway.
+The fastest path is **Set up locally**, which provisions an app-owned
+`OpenClawGateway` WSL distro, installs the Gateway inside it, and pairs the app.
+This does not export or mutate your existing Ubuntu distro.
+
+Choose **Advanced setup** or open the Connections tab when you already have a
+Gateway. You can connect to:
+
+- a local Gateway on this PC
+- a WSL Gateway on this PC
+- a remote Gateway by URL and token or setup code
+- a Gateway reached through an SSH tunnel
+
+When setup finishes, the tray icon turns green. Open **Command Center** from the
+tray to confirm connection, pairing, node status, and channel health.
+
+## Windows node mode
+
+Windows Hub can register as a first-class OpenClaw node. The agent can then use
+declared Windows-native capabilities through the Gateway.
+
+Common commands include:
+
+- `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`,
+  `canvas.snapshot`
+- `screen.snapshot` and, with explicit opt-in, `screen.record`
+- `camera.list` and, with explicit opt-in, `camera.snap`, `camera.clip`
+- `system.notify`, `system.run`, `system.run.prepare`, `system.which`
+- `location.get`, `device.info`, `device.status`
+- `stt.transcribe`, `tts.speak`
+
+Node mode requires Gateway pairing. If the app shows a pairing request, approve
+it from the Gateway host:
 
 ```powershell
-openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOWS-HATCH-OK."
+openclaw devices list
+openclaw devices approve <request-id>
+openclaw nodes status
 ```
 
-Current caveats:
+The Gateway only forwards commands that the node declares and server policy
+allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`, and
+`camera.clip` require explicit `gateway.nodes.allowCommands` opt-in.
 
-- `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
-- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
-- if Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately
-- if `schtasks` itself wedges or stops responding, OpenClaw now aborts that path quickly and falls back instead of hanging forever
-- Scheduled Tasks are still preferred when available because they provide better supervisor status
+## Local MCP mode
 
-If you want the native CLI only, without gateway service install, use one of these:
+Windows Hub can expose the same Windows-native capability registry as a local
+MCP server on loopback. This is useful when you want local MCP clients to drive
+Windows capabilities without a running OpenClaw Gateway.
+
+Enable it in Windows Hub Settings under the developer/advanced section. The app
+shows the loopback endpoint and bearer token after the server is enabled.
+
+Mode matrix:
+
+| Node mode | MCP server | Behavior                           |
+| --------- | ---------- | ---------------------------------- |
+| off       | off        | Operator-only desktop app          |
+| on        | off        | Gateway-connected Windows node     |
+| off       | on         | Local MCP server only              |
+| on        | on         | Gateway node plus local MCP server |
+
+## Native Windows CLI and Gateway
+
+For terminal-first use, install OpenClaw from PowerShell:
 
 ```powershell
-openclaw onboard --non-interactive --skip-health
-openclaw gateway run
+iwr -useb https://openclaw.ai/install.ps1 | iex
 ```
 
-If you do want managed startup on native Windows:
+Verify:
+
+```powershell
+openclaw --version
+openclaw doctor
+openclaw gateway status --json
+```
+
+Native Windows CLI and Gateway flows are supported and continue to improve.
+Managed startup uses Windows Scheduled Tasks when available and falls back to a
+per-user Startup-folder login item if task creation is denied.
+
+To install the Gateway service:
 
 ```powershell
 openclaw gateway install
 openclaw gateway status --json
 ```
 
-If Scheduled Task creation is blocked, the fallback service mode still auto-starts after login through the current user's Startup folder.
+If you only want CLI use without a managed Gateway service:
 
-## Gateway
-
-- [Gateway runbook](/gateway)
-- [Configuration](/gateway/configuration)
-
-## Gateway service install (CLI)
-
-Inside WSL2:
-
-```
-openclaw onboard --install-daemon
+```powershell
+openclaw onboard --non-interactive --skip-health
+openclaw gateway run
 ```
 
-Or:
+## WSL2 Gateway
 
+WSL2 remains the most Linux-compatible Gateway runtime on Windows. Windows Hub
+can set up an app-owned WSL Gateway for you, or you can install manually inside
+your own distro.
+
+Manual setup:
+
+```powershell
+wsl --install
+# Or pick a distro explicitly:
+wsl --list --online
+wsl --install -d Ubuntu-24.04
 ```
-openclaw gateway install
+
+Enable systemd inside WSL:
+
+```bash
+sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+[boot]
+systemd=true
+EOF
 ```
 
-Or:
+Restart WSL from PowerShell:
 
+```powershell
+wsl --shutdown
 ```
-openclaw configure
-```
 
-Select **Gateway service** when prompted.
+Then install OpenClaw inside WSL with the Linux quickstart:
 
-Repair/migrate:
-
-```
-openclaw doctor
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+openclaw gateway status
 ```
 
 ## Gateway auto-start before Windows login
 
-For headless setups, ensure the full boot chain runs even when no one logs into
-Windows.
-
-### 1) Keep user services running without login
+For headless WSL setups, ensure the full boot chain runs even when no one logs
+into Windows.
 
 Inside WSL:
 
 ```bash
 sudo loginctl enable-linger "$(whoami)"
-```
-
-### 2) Install the OpenClaw gateway user service
-
-Inside WSL:
-
-```bash
 openclaw gateway install
 ```
-
-### 3) Start WSL automatically at Windows boot
 
 In PowerShell as Administrator:
 
@@ -85129,23 +85308,20 @@ Replace `Ubuntu` with your distro name from:
 wsl --list --verbose
 ```
 
-### Verify startup chain
-
-After a reboot (before Windows sign-in), check from WSL:
+After reboot, verify from WSL:
 
 ```bash
 systemctl --user is-enabled openclaw-gateway.service
 systemctl --user status openclaw-gateway.service --no-pager
 ```
 
-## Advanced: expose WSL services over LAN (portproxy)
+## Expose WSL services over LAN
 
-WSL has its own virtual network. If another machine needs to reach a service
-running **inside WSL** (SSH, a local TTS server, or the Gateway), you must
-forward a Windows port to the current WSL IP. The WSL IP changes after restarts,
-so you may need to refresh the forwarding rule.
+WSL has its own virtual network. If another machine must reach a service inside
+WSL, forward a Windows port to the current WSL IP. The WSL IP can change after
+restarts, so refresh the forwarding rule when needed.
 
-Example (PowerShell **as Administrator**):
+Example in PowerShell as Administrator:
 
 ```powershell
 $Distro = "Ubuntu-24.04"
@@ -85157,112 +85333,67 @@ if (-not $WslIp) { throw "WSL IP not found." }
 
 netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=$ListenPort `
   connectaddress=$WslIp connectport=$TargetPort
-```
 
-Allow the port through Windows Firewall (one-time):
-
-```powershell
 New-NetFirewallRule -DisplayName "WSL SSH $ListenPort" -Direction Inbound `
   -Protocol TCP -LocalPort $ListenPort -Action Allow
 ```
 
-Refresh the portproxy after WSL restarts:
-
-```powershell
-netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 | Out-Null
-netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 `
-  connectaddress=$WslIp connectport=$TargetPort | Out-Null
-```
-
 Notes:
 
-- SSH from another machine targets the **Windows host IP** (example: `ssh user@windows-host -p 2222`).
-- Remote nodes must point at a **reachable** Gateway URL (not `127.0.0.1`); use
-  `openclaw status --all` to confirm.
-- Use `listenaddress=0.0.0.0` for LAN access; `127.0.0.1` keeps it local only.
-- If you want this automatic, register a Scheduled Task to run the refresh
-  step at login.
+- SSH from another machine targets the Windows host IP, for example
+  `ssh user@windows-host -p 2222`.
+- Remote nodes must point at a reachable Gateway URL, not `127.0.0.1`.
+- Use `listenaddress=0.0.0.0` for LAN access. Use `127.0.0.1` for local-only
+  access.
 
-## Step-by-step WSL2 install
+## Troubleshooting
 
-### 1) Install WSL2 + Ubuntu
+### The tray icon does not appear
 
-Open PowerShell (Admin):
+Check Task Manager for `OpenClaw.Tray.WinUI.exe`. If it is running, open the
+hidden tray-icons area and pin it. If it is not running, launch **OpenClaw
+Companion** from the Start menu.
 
-```powershell
-wsl --install
-# Or pick a distro explicitly:
-wsl --list --online
-wsl --install -d Ubuntu-24.04
-```
+### Local setup fails
 
-Reboot if Windows asks.
-
-### 2) Enable systemd (required for gateway install)
-
-In your WSL terminal:
-
-```bash
-sudo tee /etc/wsl.conf >/dev/null <<'EOF'
-[boot]
-systemd=true
-EOF
-```
-
-Then from PowerShell:
+Open the setup log from Windows Hub or inspect:
 
 ```powershell
-wsl --shutdown
+notepad "$env:LOCALAPPDATA\OpenClawTray\Logs\Setup\easy-setup-latest.txt"
 ```
 
-Re-open Ubuntu, then verify:
+Common causes are disabled WSL, blocked virtualization, stale app-owned WSL
+state, or a network failure while installing the Gateway package.
 
-```bash
-systemctl --user status
+### The app says pairing is required
+
+Approve the operator or node request from the Gateway:
+
+```powershell
+openclaw devices list
+openclaw devices approve <request-id>
 ```
 
-### 3) Install OpenClaw (inside WSL)
+If the device already had a token, reconnect from the Connections tab after
+approval.
 
-For a normal first-time setup inside WSL, follow the Linux Getting Started flow:
+### Web chat cannot reach a remote Gateway
 
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-pnpm install
-pnpm build
-pnpm ui:build
-pnpm openclaw onboard --install-daemon
-```
+Remote web chat needs HTTPS or localhost. For self-signed certificates, trust
+the certificate in Windows, or use an SSH tunnel to a localhost URL.
 
-If you are developing from source instead of doing first-time onboarding, use the
-source dev loop from [Setup](/start/setup):
+### `screen.snapshot`, camera, or audio commands fail
 
-```bash
-pnpm install
-# First run only (or after resetting local OpenClaw config/workspace)
-pnpm openclaw setup
-pnpm gateway:watch
-```
+Confirm Windows permissions for camera, microphone, screen capture, and
+notifications. Packaged installs declare the protected capabilities, but Windows
+may still prompt the first time a command uses them.
 
-Full guide: [Getting Started](/start/getting-started)
+### Git or GitHub connectivity fails
 
-## Windows companion app
+Some networks block or throttle HTTPS to GitHub. If `git clone` or `gh auth
+login` fails, try another network, a VPN, or an HTTP/HTTPS proxy.
 
-We do not have a Windows companion app yet. Contributions are welcome if you want to
-help make it happen.
-
-## Git and GitHub connectivity (contributors)
-
-Some networks block or throttle HTTPS to GitHub. If `git clone` fails with timeouts
-or connection resets, try another network, a VPN, or an HTTP/HTTPS proxy your
-organization provides.
-
-If `gh auth login` fails during the browser device flow (for example a timeout
-reaching `github.com:443`), authenticate with a personal access token instead:
-
-1. Create a token with at least the `repo` scope (classic PAT) or equivalent
-   fine-grained access.
-2. In PowerShell for the current session:
+For token-based `gh` auth in the current session:
 
 ```powershell
 $env:GH_TOKEN="<your-token>"
@@ -85270,23 +85401,15 @@ gh auth status
 gh auth setup-git
 ```
 
-3. If `gh auth status` warns about missing `read:org`, mint a token that includes
-   that scope and re-assign the variable:
-
-```powershell
-$env:GH_TOKEN="<your-token-with-repo-and-read:org>"
-gh auth status
-```
-
-`gh auth refresh -s read:org` only applies when you authenticated via `gh auth login`
-and have stored credentials to refresh (not when using `GH_TOKEN`).
-
 Never commit tokens or paste them into issues or pull requests.
 
 ## Related
 
 - [Install overview](/install)
-- [Platforms](/platforms)
+- [Node.js setup](/install/node)
+- [Nodes](/nodes)
+- [Control UI](/web/control-ui)
+- [Gateway configuration](/gateway/configuration)
 
 
 
@@ -86337,7 +86460,9 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 
 - `metadata.openclaw.install` defines install options (brew/node/go/uv).
 - The app calls `skills.install` to run installers on the gateway host.
-- Built-in dangerous-code `critical` findings block `skills.install` by default; suspicious findings still warn only. The dangerous override exists on the gateway request, but the default app flow stays fail-closed.
+- Operator-owned `security.installPolicy` can block gateway-backed skill
+  installs before installer metadata runs. Install-time built-in dangerous-code
+  blocking is not part of the skill install flow.
 - If every install option is `download`, the gateway surfaces all download
   choices.
 - Otherwise, the gateway picks one preferred installer using the current
@@ -90078,14 +90203,14 @@ All Codex harness settings live under `plugins.entries.codex.config`.
 
 Supported top-level fields:
 
-| Field                      | Default                  | Meaning                                                                                                                              |
-| -------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                          |
-| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings.                                                                   |
-| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                             |
-| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                          |
-| `codexPlugins`             | disabled                 | Native Codex plugin/app support for configured first-party Codex plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
-| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                     |
+| Field                      | Default                  | Meaning                                                                                                                                   |
+| -------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                               |
+| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings.                                                                        |
+| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                  |
+| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                               |
+| `codexPlugins`             | disabled                 | Native Codex plugin/app support for migrated source-installed curated plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
+| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                          |
 
 ## App-server transport
 
@@ -91320,7 +91445,7 @@ Supported top-level Codex plugin fields:
 | -------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
 | `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
 | `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
-| `codexPlugins`             | disabled       | Native Codex plugin/app support for configured first-party Codex plugins.                |
+| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
 
 Supported `appServer` fields:
 
@@ -91597,7 +91722,7 @@ summary: "Configure migrated native Codex plugins for Codex-mode OpenClaw agents
 title: "Native Codex plugins"
 read_when:
   - You want Codex-mode OpenClaw agents to use native Codex plugins
-  - You are configuring first-party Codex plugin marketplaces
+  - You are migrating source-installed openai-curated Codex plugins
   - You are troubleshooting codexPlugins, app inventory, destructive actions, or plugin app diagnostics
 ---
 
@@ -91616,9 +91741,7 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 - The selected OpenClaw agent runtime must be the native Codex harness.
 - `plugins.entries.codex.enabled` must be true.
 - `plugins.entries.codex.config.codexPlugins.enabled` must be true.
-- V1 supports first-party Codex plugin marketplaces: `openai-curated`,
-  `openai-bundled`, and `openai-primary-runtime`.
-- Migration only auto-discovers `openai-curated` plugins that it observed as
+- V1 supports only `openai-curated` plugins that migration observed as
   source-installed in the source Codex home.
 - The target Codex app-server must be able to see the expected marketplace,
   plugin, and app inventory.
@@ -91652,11 +91775,9 @@ Apply the migration when the plan looks right:
 openclaw migrate apply codex --yes
 ```
 
-Migration writes explicit `codexPlugins` entries for eligible curated plugins
-and calls Codex app-server `plugin/install` for selected plugins. Explicit
-config may also reference Codex's bundled and primary-runtime first-party
-marketplaces when the target app-server inventory exposes those plugin apps. A
-typical migrated config looks like this:
+Migration writes explicit `codexPlugins` entries for eligible plugins and calls
+Codex app-server `plugin/install` for selected plugins. A typical migrated
+config looks like this:
 
 ```json5
 {
@@ -91686,49 +91807,6 @@ typical migrated config looks like this:
 After changing `codexPlugins`, new Codex conversations pick up the updated app
 set automatically. Use `/new` or `/reset` to refresh the current conversation.
 A gateway restart is not required for plugin enable or disable changes.
-
-## Manual first-party marketplace entries
-
-Migration writes `openai-curated` entries for eligible source-installed plugins.
-For first-party plugins that live in Codex's bundled or primary-runtime
-marketplaces, add explicit entries after confirming the target Codex app-server
-inventory exposes that marketplace and plugin.
-
-Use the same config shape for every first-party marketplace:
-
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              chrome: {
-                enabled: true,
-                marketplaceName: "openai-bundled",
-                pluginName: "chrome",
-              },
-              documents: {
-                enabled: true,
-                marketplaceName: "openai-primary-runtime",
-                pluginName: "documents",
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-The key under `plugins` is OpenClaw's local config key. `pluginName` and
-`marketplaceName` must match the Codex app-server inventory exactly. If the
-plugin is not listed in `/codex plugins list` or Codex app diagnostics, OpenClaw
-keeps the entry configured but cannot expose its apps to Codex turns.
 
 ## Manage plugins from chat
 
@@ -91791,10 +91869,8 @@ up the updated app set.
 
 V1 is intentionally narrow:
 
-- Runtime config accepts `openai-curated`, `openai-bundled`, and
-  `openai-primary-runtime` plugin identities.
 - Only `openai-curated` plugins that were already installed in the source Codex
-  app-server inventory are migration-eligible for automatic migration.
+  app-server inventory are migration-eligible.
 - App-backed source plugins must pass the migration-time subscription gate.
   `--verify-plugin-apps` adds the source app-inventory gate. Subscription-gated
   accounts plus, in verification mode, inaccessible, disabled, missing source
@@ -91807,9 +91883,7 @@ V1 is intentionally narrow:
 - There is no `plugins["*"]` wildcard and no config key that grants arbitrary
   install authority.
 - Unsupported marketplaces, cached plugin bundles, hooks, and Codex config files
-  are preserved in the migration report for manual review. Bundled and
-  primary-runtime first-party plugins can still be added manually through
-  explicit `codexPlugins` config.
+  are preserved in the migration report for manual review.
 
 ## App inventory and ownership
 
@@ -91897,10 +91971,8 @@ app-server auth or rerun with `--verify-plugin-apps` if you want source app
 inventory to decide eligibility when account lookup fails.
 
 **`marketplace_missing` or `plugin_missing`:** the target Codex app-server
-cannot see the expected first-party marketplace or plugin. Rerun migration
-against the target runtime, inspect Codex app-server plugin status, or confirm
-the explicit `marketplaceName` is one of `openai-curated`, `openai-bundled`, or
-`openai-primary-runtime`.
+cannot see the expected `openai-curated` marketplace or plugin. Rerun migration
+against the target runtime or inspect Codex app-server plugin status.
 
 **`app_inventory_missing` or `app_inventory_stale`:** app readiness came from an
 empty or stale cache. OpenClaw schedules an async refresh and excludes plugin
@@ -94621,7 +94693,7 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install scans and optionally block
+- **`before_install`** - inspect skill or plugin install context and optionally block
 
 ## Debug runtime hooks
 
@@ -94921,11 +94993,14 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
+`before_install` runs after the operator-owned `security.installPolicy` check
+when one is configured. The `builtinScan` field remains in the event payload for
+compatibility, but OpenClaw no longer runs built-in install-time dangerous-code
+blocking, so it is an empty `ok` result. Return additional findings or
+`{ block: true, blockReason }` to stop the install.
 
 `block: true` is terminal. `block: false` is treated as no decision.
+Handler failures block the install fail-closed.
 
 ## Gateway lifecycle
 
@@ -95227,6 +95302,10 @@ the install instead.
 | local path  | You are developing or testing a plugin on the same machine                  | `openclaw plugins install --link ./my-plugin`                  |
 | npm pack    | You are proving a local package artifact through npm install semantics      | `openclaw plugins install npm-pack:<path.tgz>`                 |
 | marketplace | You are installing a Claude-compatible marketplace plugin                   | `openclaw plugins install <plugin> --marketplace <source>`     |
+
+Managed local path installs must be plugin directories or archives. Put
+standalone plugin files in `plugins.load.paths` instead of installing them with
+`plugins install`.
 
 ## Publish plugins
 
@@ -129069,9 +129148,10 @@ OpenClaw has three public release lanes:
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- Every stable OpenClaw release ships the npm package and macOS app together;
-  beta releases normally validate and publish the npm/package path first, with
-  mac app build/sign/notarize reserved for stable unless explicitly requested
+- Every stable OpenClaw release ships the npm package, macOS app, and signed
+  Windows Hub installers together; beta releases normally validate and publish
+  the npm/package path first, with native app build/sign/notarize/promote
+  reserved for stable unless explicitly requested
 
 ## Release cadence
 
@@ -129163,7 +129243,12 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
     packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
     The macOS publish workflow publishes the signed appcast to public `main`
     automatically after release assets verify; if branch protection blocks the
-    direct push, it opens or updates an appcast PR.
+    direct push, it opens or updates an appcast PR. Stable Windows Hub
+    readiness requires the signed `OpenClawCompanion-Setup-x64.exe`,
+    `OpenClawCompanion-Setup-arm64.exe`, and
+    `OpenClawCompanion-SHA256SUMS.txt` assets on the OpenClaw GitHub release;
+    promote them with the `Windows Node Release` workflow after the matching
+    `openclaw/openclaw-windows-node` release has passed its signing workflow.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
@@ -129276,6 +129361,15 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw
   npm publish so the core package is not published before its externalized
   plugins.
+- Run the manual `Windows Node Release` workflow for stable releases after the
+  matching `openclaw/openclaw-windows-node` release exists. It downloads the
+  signed Windows Hub installers from the companion repo, verifies their
+  Authenticode signatures on a Windows runner, writes a SHA-256 manifest, and
+  uploads the installers plus manifest onto the canonical OpenClaw GitHub
+  release. Website download links should target exact OpenClaw release asset
+  URLs for the current stable release, or `releases/latest/download/...` only
+  after verifying GitHub's latest redirect points at that same release; do not
+  link only to the companion repo release page.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
 - `OpenClaw Release Checks` also runs the QA Lab mock parity lane plus the fast
@@ -137840,7 +137934,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [macOS app](/platforms/macos)
 - [iOS app](/platforms/ios)
 - [Android app](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [Windows Hub](/platforms/windows)
 - [Linux app](/platforms/linux)
 
 ## Operations and safety
@@ -137880,8 +137974,8 @@ and a working chat session.
 
 <Tip>
 Check your Node version with `node --version`.
-**Windows users:** both native Windows and WSL2 are supported. WSL2 is more
-stable and recommended for the full experience. See [Windows](/platforms/windows).
+**Windows users:** the native Windows Hub app is the easiest desktop path. The
+PowerShell installer and WSL2 Gateway paths are also supported. See [Windows](/platforms/windows).
 Need to install Node? See [Node setup](/install/node).
 </Tip>
 
@@ -138155,7 +138249,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS](/platforms/macos)
 - [iOS](/platforms/ios)
 - [Android](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [Windows Hub](/platforms/windows)
 - [Linux](/platforms/linux)
 - [Web surfaces](/web)
 
@@ -138869,7 +138963,7 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - macOS menu bar companion: [OpenClaw macOS app](/platforms/macos)
 - iOS node app: [iOS app](/platforms/ios)
 - Android node app: [Android app](/platforms/android)
-- Windows status: [Windows (WSL2)](/platforms/windows)
+- Windows Hub: [Windows](/platforms/windows)
 - Linux status: [Linux app](/platforms/linux)
 - Security: [Security](/gateway/security)
 
@@ -140054,8 +140148,9 @@ title: "Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
 ---
 
-CLI onboarding is the **recommended** way to set up OpenClaw on macOS,
-Linux, or Windows (via WSL2; strongly recommended).
+CLI onboarding is the **recommended** terminal setup path for OpenClaw on
+macOS, Linux, or Windows. Windows desktop users can also start with
+[Windows Hub](/platforms/windows).
 It configures a local Gateway or a remote Gateway connection, plus channels, skills,
 and workspace defaults in one guided flow.
 
@@ -146024,9 +146119,15 @@ when set at the narrower session or agent scope.
 ### `exec.ask`
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
-  - `off` - never prompt.
-  - `on-miss` - prompt only when the allowlist does not match.
-  - `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
+  Configured ask policy for host exec. Controls the baseline approval
+  prompt behavior from `tools.exec.ask` and host approvals defaults. The
+  per-call `ask` tool parameter (see [Exec tool](/tools/exec#parameters))
+  can only harden that baseline, and channel-origin model calls ignore it
+  when the effective host ask is `off`.
+
+- `off` - never prompt.
+- `on-miss` - prompt only when the allowlist does not match.
+- `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
 
 </ParamField>
 
@@ -146440,7 +146541,11 @@ force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Approval prompt behavior for `gateway` / `node` execution.
+The baseline ask mode comes from `tools.exec.ask` and host approvals.
+For channel-origin model calls, per-call `ask` is ignored when the
+effective host ask is `off`; otherwise it can only harden to a stricter
+mode. Trusted internal/API callers that construct exec tools with an
+explicit `ask` value are unchanged.
 </ParamField>
 
 <ParamField path="node" type="string">
@@ -150701,6 +150806,19 @@ current latest release declares a newer `openclaw.compat.pluginApi` or
 and installs the newest one that fits. Exact versions and explicit channel tags
 such as `@beta` stay pinned to the selected package and fail when incompatible.
 
+### Operator install policy
+
+Configure `security.installPolicy` to run a trusted local policy command before
+plugin install or update proceeds. The policy receives metadata plus the staged
+source path and can allow or block the install. It runs before plugin
+`before_install` hooks. The deprecated `--dangerously-force-unsafe-install`
+flag is accepted for compatibility but does not bypass install policy, hooks, or
+OpenClaw's built-in plugin dependency denylist.
+
+See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+for the shared `security.installPolicy` exec schema used by both skills and
+plugins.
+
 ### Configure plugin policy
 
 The common plugin config shape is:
@@ -150730,7 +150848,9 @@ Key policy rules:
   allowlist stay unavailable, even when `tools.allow` includes `"*"`.
 - `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
   config.
-- `plugins.load.paths` adds explicit local plugin files or directories.
+- `plugins.load.paths` adds explicit local plugin files or directories. Managed
+  `plugins install` local paths must be plugin directories or archives; use
+  `plugins.load.paths` for standalone plugin files.
 - Workspace-origin plugins are disabled by default; explicitly enable or
   allowlist them before using local workspace code.
 - Bundled plugins follow their built-in default-on/default-off metadata unless
@@ -151544,6 +151664,167 @@ Most skills configuration lives under `skills` in
   need this setting.
 </ParamField>
 
+## Operator Install Policy (`security.installPolicy`)
+
+Use `security.installPolicy` when operators need a trusted local command to
+approve or block skill and plugin installs with host-specific policy. The policy
+runs after OpenClaw has staged source material and before the install or update
+continues. It applies to ClawHub skills, uploaded skills, Git/local skills,
+skill dependency installers, and plugin install/update sources.
+
+```json5
+{
+  security: {
+    installPolicy: {
+      enabled: true,
+      // Omit targets to cover every supported target.
+      targets: ["skill", "plugin"],
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        args: ["--json"],
+        timeoutMs: 10000,
+        noOutputTimeoutMs: 10000,
+        maxOutputBytes: 1048576,
+        passEnv: ["OPENCLAW_STATE_DIR", "PATH"],
+        env: { POLICY_MODE: "strict" },
+        trustedDirs: ["/usr/local/bin"],
+      },
+    },
+  },
+}
+```
+
+<ParamField path="security.installPolicy.enabled" type="boolean" default="false">
+  Enables operator-owned install policy. When enabled without a valid `exec`
+  command, installs fail closed.
+</ParamField>
+
+<ParamField path="security.installPolicy.targets" type='("skill" | "plugin")[]'>
+  Optional target filter. When omitted, policy applies to every supported target
+  so new installs do not unexpectedly fail open.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.command" type="string">
+  Absolute path to the trusted policy executable. OpenClaw runs it without a
+  shell and validates the path before use.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.args" type="string[]">
+  Static arguments passed after `command`.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.timeoutMs" type="number" default="10000">
+  Maximum wall-clock runtime for one policy decision.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.noOutputTimeoutMs" type="number" default="timeoutMs">
+  Maximum time without stdout or stderr output before the policy fails closed.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.maxOutputBytes" type="number" default="1048576">
+  Maximum combined stdout and stderr bytes accepted from the policy process.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.env" type="Record<string, string>">
+  Literal environment variables provided to the policy process.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.passEnv" type="string[]">
+  Environment variable names copied from the OpenClaw process into the policy
+  process. Only named variables are passed.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.trustedDirs" type="string[]">
+  Optional allowlist of directories that may contain the policy executable.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
+  Bypasses command path ownership and permission checks. Use only when the path
+  is protected by another mechanism.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
+  Allows the configured command path to be a symlink. The resolved target must
+  still satisfy the other path checks. Interpreter script arguments must be
+  direct regular files, not symlinks.
+</ParamField>
+
+The policy receives one JSON object on stdin with `protocolVersion: 1`,
+`openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
+optional structured `source`, structured `origin`, and `request`. It must write
+one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }` or
+`{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
+exit, timeout, malformed JSON, missing fields, or unsupported protocol versions
+fail closed.
+
+OpenClaw does not execute install policy during normal Gateway startup. Installs
+and updates fail closed when policy is enabled but unavailable. `openclaw doctor`
+performs static validation, and `openclaw doctor --deep` executes a synthetic
+install probe against the configured command.
+
+Bulk updates apply policy per target: a blocked skill or plugin update fails
+that target without disabling the policy or skipping later targets in the batch.
+
+Example stdin:
+
+```json
+{
+  "protocolVersion": 1,
+  "openclawVersion": "2026.6.1",
+  "targetType": "skill",
+  "targetName": "weather",
+  "sourcePath": "/var/folders/.../openclaw-skill-clawhub/root",
+  "sourcePathKind": "directory",
+  "source": {
+    "kind": "clawhub",
+    "authority": "openclaw",
+    "mutable": false,
+    "network": true
+  },
+  "origin": {
+    "type": "clawhub",
+    "registry": "https://clawhub.openclaw.ai",
+    "slug": "weather",
+    "version": "1.0.0"
+  },
+  "request": {
+    "kind": "skill-install",
+    "mode": "install",
+    "requestedSpecifier": "clawhub:weather@1.0.0"
+  },
+  "skill": {
+    "installId": "clawhub"
+  }
+}
+```
+
+Minimal policy command:
+
+```js
+#!/usr/bin/env node
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const request = JSON.parse(input);
+  if (request.targetType === "plugin" && request.source?.kind === "local-path") {
+    process.stdout.write(
+      JSON.stringify({
+        protocolVersion: 1,
+        decision: "block",
+        reason: "local plugin paths are not approved on this host",
+      }),
+    );
+    return;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+});
+```
+
 ## Bundled skill allowlist
 
 <ParamField path="skills.allowBundled" type="string[]">
@@ -151933,12 +152214,12 @@ publish and sync.
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
   </Accordion>
-  <Accordion title="Scan and scan overrides">
-    Gateway-backed skill installs (onboarding, Skills settings UI) run the
-    built-in dangerous-code scanner before executing installer metadata.
-    `critical` findings block by default; `suspicious` findings warn only.
-    `openclaw skills install <slug>` downloads a ClawHub skill folder directly
-    and does not use the installer-metadata scanner.
+  <Accordion title="Operator install policy">
+    Configure `security.installPolicy` to run a trusted local policy command
+    before skill installs continue. The policy receives metadata and the staged
+    source path, applies to ClawHub, uploaded, Git, local, update, and
+    dependency-installer paths, and fails closed when the command cannot return
+    a valid decision.
   </Accordion>
   <Accordion title="Secret injection scope">
     `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the
@@ -156927,7 +157208,7 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
-    - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
+    - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
