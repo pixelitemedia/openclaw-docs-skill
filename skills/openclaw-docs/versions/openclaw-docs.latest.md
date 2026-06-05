@@ -685,7 +685,7 @@ Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`, planner 
 | `OPENCLAW_DOCKER_ALL_PARALLELISM`      | 10      | Main-pool slot count for normal lanes.                                                        |
 | `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM` | 10      | Provider-sensitive tail-pool slot count.                                                      |
 | `OPENCLAW_DOCKER_ALL_LIVE_LIMIT`       | 9       | Concurrent live lane cap so providers do not throttle.                                        |
-| `OPENCLAW_DOCKER_ALL_NPM_LIMIT`        | 10      | Concurrent npm install lane cap.                                                              |
+| `OPENCLAW_DOCKER_ALL_NPM_LIMIT`        | 5       | Concurrent npm install lane cap.                                                              |
 | `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT`    | 7       | Concurrent multi-service lane cap.                                                            |
 | `OPENCLAW_DOCKER_ALL_START_STAGGER_MS` | 2000    | Stagger between lane starts to avoid Docker daemon create storms; set `0` for no stagger.     |
 | `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`  | 7200000 | Per-lane fallback timeout (120 minutes); selected live/tail lanes use tighter caps.           |
@@ -8144,6 +8144,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
 5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app's user name.
+6. When an exec or plugin approval request starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native Google Chat approval card in the originating space or thread. The card buttons use opaque callback tokens, and the manual `/approve <id> <decision>` prompt is only shown when native approval delivery is unavailable.
 
 ## Targets
 
@@ -8196,8 +8197,9 @@ Notes:
 - Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
+- Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `dm.allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.
-- `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
+- `typingIndicator` supports `message` (default), `none`, and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 - Bot-authored Google Chat messages are ignored by default. If you intentionally set `allowBots: true`, accepted bot-authored messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection` when one space needs a different budget.
 
@@ -13771,7 +13773,7 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 
 - CLI: `openclaw message poll --channel msteams --target conversation:<id> ...`
 - Votes are recorded by the gateway in OpenClaw plugin-state SQLite under `state/openclaw.sqlite`.
-- Existing `msteams-polls.json` files are imported once when the MSTeams plugin starts.
+- Existing `msteams-polls.json` files are imported by `openclaw doctor --fix`, not by the running plugin.
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries yet, and there is no supported poll-results CLI yet.
 
@@ -39939,6 +39941,10 @@ present.
   `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
   vector readiness probes and embedding maintenance in that mode. If a mode
   fails, OpenClaw retries with `qmd query`.
+- When `searchMode` is `query`, set `memory.qmd.rerank` to `false` to use QMD's
+  hybrid query path without the reranker. OpenClaw passes `--no-rerank` to the
+  direct QMD CLI path and `rerank: false` to QMD's MCP query tool. This option
+  requires QMD 2.1 or newer.
 - With QMD releases that advertise multi-collection filters, OpenClaw groups
   same-source collections into one QMD search invocation. Older QMD releases
   keep the compatible per-collection fallback.
@@ -42689,7 +42695,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M3`                                       |
 | Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                             |
 | Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                                       |
-| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`                 |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
 | NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                         |
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                                   |
 | OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                          |
@@ -57817,7 +57823,7 @@ On normal runs, `HEARTBEAT.md` is only injected when heartbeat guidance is enabl
 
 On the native Codex harness, `HEARTBEAT.md` content is not injected into the turn. If the file exists and has non-whitespace content, the heartbeat collaboration-mode instructions point Codex at the file and tell it to read before proceeding.
 
-If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
@@ -65358,7 +65364,7 @@ Look for:
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
     - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
     - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
@@ -68590,7 +68596,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
-    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
 
@@ -71312,8 +71318,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
-    headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+    If `HEARTBEAT.md` exists but is effectively empty (only blank lines,
+    Markdown/HTML comments, Markdown headings like `# Heading`, fence markers,
+    or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
     If the file is missing, the heartbeat still runs and the model decides what to do.
 
     Per-agent overrides use `agents.list[].heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
@@ -73829,7 +73836,7 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Set `OPENCLAW_LIVE_MAX_MODELS`
   or the gateway env vars when you explicitly want a smaller cap or larger scan.
-- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
 - `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full`. See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
 - Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if pre-dispatch startup imports package dependencies such as Commander, prompt UI, undici, or logging before command dispatch; it also keeps the bundled gateway run chunk under budget and rejects static imports of known cold gateway paths. Packaged CLI smoke also covers root help, onboard help, doctor help, status, config schema, and a model-list command.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
@@ -74429,7 +74436,7 @@ flowchart TD
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding.
     - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
     - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
     - `requests-in-flight` → main lane busy; heartbeat wake was deferred.
@@ -118383,12 +118390,15 @@ summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
 read_when:
   - You want to use open models in OpenClaw for free
   - You need NVIDIA_API_KEY setup
+  - You want to use Nemotron 3 Ultra through NVIDIA
 title: "NVIDIA"
 ---
 
 NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for
 open models for free. Authenticate with an API key from
-[build.nvidia.com](https://build.nvidia.com/settings/api-keys).
+[build.nvidia.com](https://build.nvidia.com/settings/api-keys). OpenClaw
+defaults the NVIDIA provider to Nemotron 3 Ultra, NVIDIA's 550B total / 55B
+active reasoning model for long-context agentic work.
 
 ## Getting started
 
@@ -118404,7 +118414,7 @@ open models for free. Authenticate with an API key from
   </Step>
   <Step title="Set an NVIDIA model">
     ```bash
-    openclaw models set nvidia/nvidia/nemotron-3-super-120b-a12b
+    openclaw models set nvidia/nvidia/nemotron-3-ultra-550b-a55b
     ```
   </Step>
 </Steps>
@@ -118436,7 +118446,7 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
   },
   agents: {
     defaults: {
-      model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
+      model: { primary: "nvidia/nvidia/nemotron-3-ultra-550b-a55b" },
     },
   },
 }
@@ -118449,22 +118459,39 @@ try NVIDIA's public featured-model catalog from
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
 caches the ranked result for 24 hours. New featured models from build.nvidia.com
 therefore appear in setup and model-selection surfaces without waiting for an
-OpenClaw release.
+OpenClaw release. When the live feed is available, the first returned model is
+the default option shown during NVIDIA setup.
 
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if that public catalog is unavailable or
-malformed, OpenClaw falls back to the bundled catalog below.
+malformed, OpenClaw falls back to the bundled catalog and bundled default below.
+
+## Nemotron 3 Ultra
+
+Nemotron 3 Ultra is the default NVIDIA model in OpenClaw. NVIDIA's build page for
+[`nvidia/nemotron-3-ultra-550b-a55b`](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b)
+lists it as an available free endpoint with a 1M-token context specification.
+The bundled catalog records a 16,384-token max output to match NVIDIA's current
+OpenAI-compatible sample request for the hosted endpoint.
+
+Use Ultra for the highest-capability NVIDIA default. Keep Super selected when
+you want the smaller Nemotron 3 option, or choose one of the third-party models
+hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
+The bundled Ultra row sends `chat_template_kwargs.enable_thinking: false` and
+`force_nonempty_content: true` by default so normal chat output stays in the
+visible answer instead of exposing reasoning text.
 
 ## Bundled fallback catalog
 
-| Model ref                                  | Name                         | Context | Max output | Notes                             |
-| ------------------------------------------ | ---------------------------- | ------- | ---------- | --------------------------------- |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144 | 8,192      | Featured fallback                 |
-| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      | Featured fallback                 |
-| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608 | 8,192      | Featured fallback                 |
-| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752 | 8,192      | Featured fallback                 |
-| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608 | 8,192      | Deprecated, upgrade compatibility |
-| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752 | 8,192      | Deprecated, upgrade compatibility |
+| Model ref                                  | Name                         | Context   | Max output | Notes                             |
+| ------------------------------------------ | ---------------------------- | --------- | ---------- | --------------------------------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default                           |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144   | 8,192      | Featured fallback                 |
+| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      | Featured fallback                 |
+| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      | Featured fallback                 |
+| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752   | 8,192      | Featured fallback                 |
+| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608   | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752   | 8,192      | Deprecated, upgrade compatibility |
 
 ## Advanced configuration
 
@@ -118477,14 +118504,44 @@ malformed, OpenClaw falls back to the bundled catalog below.
   <Accordion title="Catalog and pricing">
     OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
     configured and caches it for 24 hours. The bundled fallback catalog is static
-    and keeps deprecated shipped refs for upgrade compatibility. Costs default to
-    `0` in source since NVIDIA currently offers free API access for the listed
-    models.
+    and keeps deprecated shipped refs for upgrade compatibility. Costs default
+    to `0` in source since NVIDIA currently offers free API access for the
+    listed models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">
     NVIDIA uses the standard `/v1` completions endpoint. Any OpenAI-compatible
     tooling should work out of the box with the NVIDIA base URL.
+  </Accordion>
+
+  <Accordion title="Nemotron 3 Ultra reasoning params">
+    NVIDIA's Ultra sample request uses `chat_template_kwargs.enable_thinking`
+    and `reasoning_budget` for reasoning output. OpenClaw's bundled Ultra row
+    disables template thinking by default for normal chat use. If you need to
+    opt into NVIDIA reasoning output or force other NVIDIA-specific request
+    fields, set per-model params and keep provider-specific overrides scoped to
+    the NVIDIA model:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "nvidia/nvidia/nemotron-3-ultra-550b-a55b": {
+              params: {
+                chat_template_kwargs: { enable_thinking: true },
+                extra_body: { reasoning_budget: 16384 },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    `params.extra_body` is the final OpenAI-compatible request-body override, so
+    use it only for fields NVIDIA documents for the selected endpoint.
+
   </Accordion>
 
   <Accordion title="Slow custom provider responses">
@@ -127373,10 +127430,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - The generic plugin SDK persistent-dedupe helper no longer exposes file-shaped
   options. Callers provide SQLite scope keys and durable dedupe rows live in
   shared plugin state.
-- Microsoft Teams SSO and delegated OAuth tokens moved from locked JSON files
-  to SQLite plugin state. Doctor imports `msteams-sso-tokens.json` and
-  `msteams-delegated.json`, rebuilds canonical SSO token keys from payloads,
-  and removes the source files.
+- Microsoft Teams SSO tokens moved from locked JSON files to SQLite plugin
+  state. Doctor imports `msteams-sso-tokens.json`, rebuilds canonical SSO token
+  keys from payloads, and removes the source file. Delegated OAuth tokens stay
+  on their existing private credential-file boundary.
 - Matrix sync cache state moved from `bot-storage.json` to SQLite plugin
   state. Doctor imports legacy raw or wrapped sync payloads and removes the
   source file. Active Matrix and QA Matrix clients pass a SQLite sync-store root
@@ -127984,13 +128041,13 @@ Move these into the global database:
   `reply-cache`, `sent-echoes`) instead of `imessage/catchup/*.json`,
   `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl`; the iMessage
   doctor/setup migration imports and removes the legacy files.
-- Microsoft Teams conversations, polls, delegated tokens, pending uploads, and
-  feedback learnings now use SQLite plugin state/blob namespaces
-  (`conversations`, `polls`, `delegated-tokens`, `pending-uploads`,
+- Microsoft Teams conversations, polls, SSO tokens, and feedback learnings now
+  use SQLite plugin state namespaces (`conversations`, `polls`, `sso-tokens`,
   `feedback-learnings`) instead of `msteams-conversations.json`,
-  `msteams-polls.json`, `msteams-delegated.json`,
-  `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
-  doctor/setup migration imports and removes the legacy files.
+  `msteams-polls.json`, `msteams-sso-tokens.json`, and `*.learnings.json`; the
+  Microsoft Teams doctor/setup migration imports and archives the legacy files.
+  Pending uploads are a short-lived SQLite cache and old JSON cache files are
+  not migrated.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
   startup verification cooldown state, credentials, recovery keys, and SDK
   IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
@@ -128562,8 +128619,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Microsoft Teams `msteams-conversations.json`
 - Microsoft Teams `msteams-polls.json`
 - Microsoft Teams `msteams-sso-tokens.json`
-- Microsoft Teams `msteams-delegated.json`
-- Microsoft Teams `msteams-pending-uploads.json`
 - Microsoft Teams `*.learnings.json`
 - Matrix `bot-storage.json`
 - Matrix `sync-store.json`
@@ -132198,6 +132253,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
 | `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
 | `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
 | `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
 | `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
 | `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
@@ -132205,6 +132261,8 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+`rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
 
 OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 
@@ -134318,6 +134376,7 @@ title: "Tests"
 - `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs are full-suite proof: they use fixed shard groups, expand to leaf configs for local parallel execution, and print the expected local shard fanout before starting. The extension group always expands to the per-extension shard configs instead of one giant root-project process.
 - Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary. Vitest's own duration line stays the per-shard detail.
 - Shared OpenClaw test state: use `src/test-utils/openclaw-test-state.ts` from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
+- `pnpm test:env-mutations:report`: non-blocking report of tests and harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related OpenClaw env keys directly. Use it to find candidates for migration to the shared test-state helper.
 - Control UI mocked E2E: use `pnpm test:ui:e2e` for the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks and controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. In Codex worktrees, prefer `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` for tiny targeted proof after dependencies are installed, or Testbox/Crabbox for broader GUI proof.
 - Process E2E helpers: use `test/helpers/openclaw-test-instance.ts` when a Vitest process-level E2E test needs a running Gateway, CLI env, log capture, and cleanup in one place.
 - TUI PTY tests: use `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` for the fast fake-backend PTY lane. Use `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` for the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
@@ -134342,7 +134401,7 @@ title: "Tests"
 - `pnpm test:e2e`: Runs the repo E2E aggregate: gateway end-to-end smoke tests plus the Control UI mocked browser E2E lane.
 - `pnpm test:e2e:gateway`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
-- `pnpm test:docker:all`: Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` through a weighted scheduler. The bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`) is used for installer/update/plugin-dependency lanes; those lanes mount the prebuilt tarball instead of using copied repo sources. The functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`) is used for normal built-app functionality lanes. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan for selected lanes, image kinds, package/live-image needs, state scenarios, and credential checks without building or running Docker. `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>` controls process slots and defaults to 10; `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM=<n>` controls the provider-sensitive tail pool and defaults to 10. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; provider caps default to one heavy lane per provider via `OPENCLAW_DOCKER_ALL_LIVE_CLAUDE_LIMIT=4`, `OPENCLAW_DOCKER_ALL_LIVE_CODEX_LIMIT=4`, and `OPENCLAW_DOCKER_ALL_LIVE_GEMINI_LIMIT=4`. Use `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` for larger hosts. If one lane exceeds the effective weight or resource cap on a low-parallelism host, it can still start from an empty pool and will run alone until it releases capacity. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=<ms>`. The runner preflights Docker by default, cleans stale OpenClaw E2E containers, emits active-lane status every 30 seconds, shares provider CLI tool caches between compatible lanes, retries transient live-provider failures once by default (`OPENCLAW_DOCKER_ALL_LIVE_RETRIES=<n>`), and stores lane timings in `.artifacts/docker-tests/lane-timings.json` for longest-first ordering on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the lane manifest without running Docker, `OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS=<ms>` to tune status output, or `OPENCLAW_DOCKER_ALL_TIMINGS=0` to disable timing reuse. Use `OPENCLAW_DOCKER_ALL_LIVE_MODE=skip` for deterministic/local lanes only or `OPENCLAW_DOCKER_ALL_LIVE_MODE=only` for live-provider lanes only; package aliases are `pnpm test:docker:local:all` and `pnpm test:docker:live:all`. Live-only mode merges main and tail live lanes into one longest-first pool so provider buckets can pack Claude, Codex, and Gemini work together. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute fallback timeout overridable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. CLI backend Docker setup commands have their own timeout via `OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS` (default 180). Per-lane logs, `summary.json`, `failures.json`, and phase timings are written under `.artifacts/docker-tests/<run-id>/`; use `pnpm test:docker:timings <summary.json>` to inspect slow lanes and `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands.
+- `pnpm test:docker:all`: Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` through a weighted scheduler. The bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`) is used for installer/update/plugin-dependency lanes; those lanes mount the prebuilt tarball instead of using copied repo sources. The functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`) is used for normal built-app functionality lanes. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan for selected lanes, image kinds, package/live-image needs, state scenarios, and credential checks without building or running Docker. `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>` controls process slots and defaults to 10; `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM=<n>` controls the provider-sensitive tail pool and defaults to 10. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; provider caps default to one heavy lane per provider via `OPENCLAW_DOCKER_ALL_LIVE_CLAUDE_LIMIT=4`, `OPENCLAW_DOCKER_ALL_LIVE_CODEX_LIMIT=4`, and `OPENCLAW_DOCKER_ALL_LIVE_GEMINI_LIMIT=4`. Use `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` for larger hosts. If one lane exceeds the effective weight or resource cap on a low-parallelism host, it can still start from an empty pool and will run alone until it releases capacity. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=<ms>`. The runner preflights Docker by default, cleans stale OpenClaw E2E containers, emits active-lane status every 30 seconds, shares provider CLI tool caches between compatible lanes, retries transient live-provider failures once by default (`OPENCLAW_DOCKER_ALL_LIVE_RETRIES=<n>`), and stores lane timings in `.artifacts/docker-tests/lane-timings.json` for longest-first ordering on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the lane manifest without running Docker, `OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS=<ms>` to tune status output, or `OPENCLAW_DOCKER_ALL_TIMINGS=0` to disable timing reuse. Use `OPENCLAW_DOCKER_ALL_LIVE_MODE=skip` for deterministic/local lanes only or `OPENCLAW_DOCKER_ALL_LIVE_MODE=only` for live-provider lanes only; package aliases are `pnpm test:docker:local:all` and `pnpm test:docker:live:all`. Live-only mode merges main and tail live lanes into one longest-first pool so provider buckets can pack Claude, Codex, and Gemini work together. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute fallback timeout overridable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. CLI backend Docker setup commands have their own timeout via `OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS` (default 180). Per-lane logs, `summary.json`, `failures.json`, and phase timings are written under `.artifacts/docker-tests/<run-id>/`; use `pnpm test:docker:timings <summary.json>` to inspect slow lanes and `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands.
 - `pnpm test:docker:browser-cdp-snapshot`: Builds a Chromium-backed source E2E container, starts raw CDP plus an isolated Gateway, runs `browser doctor --deep`, and verifies CDP role snapshots include link URLs, cursor-promoted clickables, iframe refs, and frame metadata.
 - `pnpm test:docker:skill-install`: Installs the packed OpenClaw tarball in a bare Docker runner, disables `skills.install.allowUploadedArchives`, resolves a current skill slug from live ClawHub search, installs it through `openclaw skills install`, and verifies `SKILL.md`, `.clawhub/origin.json`, `.clawhub/lock.json`, and `skills info --json`.
 - CLI backend live Docker probes can be run as focused lanes, for example `pnpm test:docker:live-cli-backend:claude`, `pnpm test:docker:live-cli-backend:claude:resume`, or `pnpm test:docker:live-cli-backend:claude:mcp`. Gemini has matching `:resume` and `:mcp` aliases.
@@ -134947,6 +135006,13 @@ inter-session user turns that only have provenance metadata.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
 - Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
   payloads when thinking is enabled, including Cloudflare AI Gateway routes.
+- Pre-compaction assistant thinking signatures are stripped before provider
+  replay when a session has been compacted. Thinking signatures are
+  cryptographically bound to the conversation prefix at generation time; after
+  compaction the prefix changes (summarized content is replaced by a compaction
+  summary), so replaying the original signatures causes Anthropic to reject the
+  request with "Invalid signature in thinking block". The thinking text is
+  preserved as an unsigned block and is then handled by the rule below.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.
@@ -134962,6 +135028,9 @@ inter-session user turns that only have provenance metadata.
   repaired on disk before load.
 - Assistant stream-error turns that contain only blank text blocks are dropped
   from the in-memory replay copy instead of replaying an invalid blank block.
+- Pre-compaction assistant thinking signatures are stripped before Converse
+  replay when a session has been compacted, for the same reason as Anthropic
+  above.
 - Claude thinking blocks with missing, empty, or blank replay signatures are
   stripped before Converse replay. If that empties an assistant turn, OpenClaw
   keeps turn shape with non-empty omitted-reasoning text.
@@ -138900,7 +138969,7 @@ By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
-- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+- If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
@@ -141518,6 +141587,11 @@ Two ways to start an ACP session:
   requester session as system events. Accepted responses include
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+  Parent progress streams show assistant commentary and ACP status progress by
+  default unless `streaming.progress.commentary=false`. Discord also defaults
+  parent previews to progress mode when no stream mode is configured. Status
+  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
+  remain hidden unless explicitly enabled.
 </ParamField>
 
 ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds` for
@@ -145808,6 +145882,9 @@ Generic model:
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
+- Google Chat native approval cards handle exec and plugin approvals that originate from Google
+  Chat spaces or threads when stable `users/<id>` approvers resolve from `dm.allowFrom` or
+  `defaultTo`; they do not use reaction events for decisions
 - WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
   `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
 
@@ -145827,6 +145904,8 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
+- Google Chat: configure stable approvers with `channels.googlechat.dm.allowFrom` or
+  `channels.googlechat.defaultTo`; no `execApprovals` block is required
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
 - Signal: use `approvals.exec` and `approvals.plugin` to route approval prompts to Signal
 
@@ -145846,6 +145925,9 @@ Shared behavior:
   routing, not Slack exec approvers
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
+- Google Chat native cards preserve the manual `/approve` fallback in message text but card button
+  callbacks carry only opaque action tokens; approval id and decision are recovered from server-side
+  pending state
 - WhatsApp emoji approvals handle both exec and plugin prompts only when the matching top-level
   forwarding family is enabled and routes to WhatsApp; target-only WhatsApp forwarding stays on
   the shared forwarding path unless it matches the same native origin target
