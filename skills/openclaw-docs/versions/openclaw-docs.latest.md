@@ -11616,6 +11616,20 @@ Notes:
 - Tool-progress preview updates are enabled by default when Matrix preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming: "off"` if you want the most conservative rate-limit profile.
 
+## Voice messages
+
+Inbound Matrix voice notes are transcribed before the room mention gate. This lets a voice note that says the bot name trigger the agent in a `requireMention: true` room, and it gives the agent the transcript instead of only an audio attachment placeholder.
+
+Matrix uses the shared audio media provider configured under `tools.media.audio`, such as OpenAI `gpt-4o-mini-transcribe`. See [Media tools overview](/tools/media-overview) for provider setup and limits.
+
+Behavior details:
+
+- `m.audio` events and `m.file` events with an `audio/*` MIME type are eligible.
+- In encrypted rooms, OpenClaw decrypts the attachment through the existing Matrix media path before transcription.
+- The transcript is marked as machine-generated and untrusted in the agent prompt.
+- The attachment is marked as already transcribed so downstream media tools do not transcribe the same voice note again.
+- Set `tools.media.audio.enabled: false` to disable audio transcription globally.
+
 ## Approval metadata
 
 Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific custom event content under `com.openclaw.approval`. Matrix permits custom event-content keys, so stock clients still render the text body while OpenClaw-aware clients can read the structured approval id, kind, state, available decisions, and exec/plugin details.
@@ -25898,7 +25912,7 @@ If you pass `--url`, that explicit target is added ahead of both. Human output l
 - `Local loopback`
 
 <Note>
-If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+If multiple probe targets are reachable, it prints all of them. An SSH tunnel, TLS/proxy URL, and configured remote URL can all point at the same gateway even when their transport ports differ; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Multiple gateways are supported when you use isolated profiles (e.g., a rescue bot), but most installs still run a single gateway.
 </Note>
 
 ```bash
@@ -25943,7 +25957,7 @@ openclaw gateway probe --json
   </Accordion>
   <Accordion title="Common warning codes">
     - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
-    - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+    - `multiple_gateways`: distinct gateway identities were reachable, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway does not trigger this warning.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 
@@ -58106,8 +58120,10 @@ What to expect:
 
 - `gateway status --deep` can report `Other gateway-like services detected (best effort)`
   and print cleanup hints when stale launchd/systemd/schtasks installs are still around.
-- `gateway probe` can warn about `multiple reachable gateways` when more than one target
-  answers.
+- `gateway probe` can warn about `multiple reachable gateway identities` when distinct
+  gateways answer, or when OpenClaw cannot prove reachable targets are the same gateway.
+  An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one
+  gateway with multiple transports, even when transport ports differ.
 - If that is intentional, isolate ports, config/state, and workspace roots per gateway.
 
 Checklist per instance:
@@ -59220,7 +59236,7 @@ openclaw --profile rescue browser status
 Interpretation:
 
 - `gateway status --deep` helps catch stale launchd/systemd/schtasks services from older installs.
-- `gateway probe` warning text such as `multiple reachable gateways detected` is expected only when you intentionally run more than one isolated gateway.
+- `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected only when you intentionally run more than one isolated gateway, or when OpenClaw cannot prove reachable probe targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
 
 ## Related
 
@@ -65298,7 +65314,7 @@ Look for:
 Common signatures:
 
 - `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
-- `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
+- `multiple reachable gateway identities detected` → distinct gateways answered, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is treated as one gateway with multiple transports, even when transport ports differ.
 - `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
 - `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed` → connect worked, but the full diagnostic RPC set timed out or failed. Treat this as a reachable Gateway with degraded diagnostics; compare `connect.ok` and `connect.rpcOk` in `--json` output.
 - `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
@@ -80570,7 +80586,13 @@ openclaw uninstall
 
 When using the CLI, state removal preserves configured workspace directories unless you also select `--workspace`.
 
-Non-interactive (automation / npx):
+Preview what will be removed (safe):
+
+```bash
+openclaw uninstall --dry-run --all
+```
+
+Non-interactive (automation / npx). Use with caution and only after confirming scopes:
 
 ```bash
 openclaw uninstall --all --yes --non-interactive
@@ -90519,11 +90541,15 @@ the session lane. Replay-safe stdio app-server failures, including
 turn-completion idle timeouts without assistant, tool, active-item, or
 side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
-session lane. They also clear the stale native thread binding and surface a
-recoverable timeout message for user or maintainer judgment instead of being
-replayed automatically. Timeout diagnostics include the last app-server
-notification method and, for raw assistant response items, the item type, role,
-id, and a bounded assistant text preview.
+session lane. They also clear the stale native thread binding instead of being
+replayed automatically. Completion-watch timeouts surface Codex-specific timeout
+text: replay-safe cases say the response may be incomplete, while unsafe cases
+tell the user to verify current state before retrying. Public timeout diagnostics
+include structural fields such as the last app-server notification method,
+raw assistant response item id/type/role, active request/item counts, and armed
+watch state. When the last notification is a raw assistant response item, they
+also include a bounded assistant text preview. They do not include raw prompt or
+tool content.
 
 ## Model discovery
 
@@ -91514,11 +91540,15 @@ releases the session lane. Replay-safe stdio app-server failures, including
 turn-completion idle timeouts without assistant, tool, active-item, or
 side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
-session lane. They also clear the stale native thread binding and surface a
-recoverable timeout message for user or maintainer judgment instead of being
-replayed automatically. Timeout diagnostics include the last app-server
-notification method and, for raw assistant response items, the item type, role,
-id, and a bounded assistant text preview.
+session lane. They also clear the stale native thread binding instead of being
+replayed automatically. Completion-watch timeouts surface Codex-specific timeout
+text: replay-safe cases say the response may be incomplete, while unsafe cases
+tell the user to verify current state before retrying. Public timeout diagnostics
+include structural fields such as the last app-server notification method,
+raw assistant response item id/type/role, active request/item counts, and armed
+watch state. When the last notification is a raw assistant response item, they
+also include a bounded assistant text preview. They do not include raw prompt or
+tool content.
 
 Environment overrides remain available for local testing:
 
@@ -133757,6 +133787,7 @@ Scope intent:
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
+- `plugins.entries.parallel.config.webSearch.apiKey`
 - `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
@@ -150182,6 +150213,138 @@ Direct hosted Ollama Web Search:
 
 
 
+# Section: tools/parallel-search.md
+
+---
+summary: "Parallel Search -- LLM-optimized dense excerpts from web sources"
+read_when:
+  - You want to use Parallel for web_search
+  - You need a PARALLEL_API_KEY
+  - You want dense excerpts ranked for LLM context efficiency
+title: "Parallel search"
+---
+
+OpenClaw supports [Parallel](https://parallel.ai/) as a `web_search` provider.
+Parallel returns ranked, LLM-optimized dense excerpts from a web index
+purpose-built for AI agents.
+
+## Get an API key
+
+<Steps>
+  <Step title="Create an account">
+    Sign up at [platform.parallel.ai](https://platform.parallel.ai) and
+    generate an API key from your dashboard.
+  </Step>
+  <Step title="Store the key">
+    Set `PARALLEL_API_KEY` in the Gateway environment, or configure via:
+
+    ```bash
+    openclaw configure --section web
+    ```
+
+  </Step>
+</Steps>
+
+## Config
+
+```json5
+{
+  plugins: {
+    entries: {
+      parallel: {
+        config: {
+          webSearch: {
+            apiKey: "par-...", // optional if PARALLEL_API_KEY is set
+            baseUrl: "https://api.parallel.ai", // optional; OpenClaw appends /v1/search
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "parallel",
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `PARALLEL_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
+## Base URL override
+
+Set `plugins.entries.parallel.config.webSearch.baseUrl` when Parallel requests
+should go through a compatible proxy or alternate Parallel endpoint (for
+example, the Cloudflare AI Gateway). OpenClaw normalizes bare hosts by
+prepending `https://` and appends `/v1/search` unless the path already ends
+there. The resolved endpoint is included in the search cache key, so results
+from different Parallel endpoints are not shared.
+
+## Tool parameters
+
+OpenClaw exposes Parallel's native search shape so the model can fill in both
+the natural-language goal and a few short keyword queries — the pairing
+Parallel [recommends](https://docs.parallel.ai/search/best-practices) for
+best results.
+
+<ParamField path="objective" type="string" required>
+Natural-language description of the underlying question or goal (max 5000
+chars). Should be self-contained.
+</ParamField>
+
+<ParamField path="search_queries" type="string[]" required>
+Concise keyword search queries, 3-6 words each (1-5 entries, max 200 chars
+each). Provide 2-3 diverse queries for best results.
+</ParamField>
+
+<ParamField path="count" type="number">
+Results to return (1-40).
+</ParamField>
+
+<ParamField path="session_id" type="string">
+Optional Parallel session id (max 1000 chars). Pass the `sessionId` from a
+previous Parallel result on follow-up searches that are part of the same task
+so Parallel can group related calls and improve subsequent results.
+</ParamField>
+
+<ParamField path="client_model" type="string">
+Optional identifier of the model making the call (e.g. `claude-opus-4-7`,
+`gpt-5.5`). Lets Parallel tailor default settings for your model's
+capabilities. Pass the exact active model slug; do not shorten to a family
+alias.
+</ParamField>
+
+## Notes
+
+- Parallel ranks and compresses results based on LLM reasoning utility, not
+  human click-through; expect dense excerpts in each result rather than
+  full-page content
+- Result excerpts come back as the `excerpts` array and are also joined into
+  the `description` field for compatibility with the generic `web_search`
+  contract
+- Parallel returns a `session_id` on every response; OpenClaw surfaces it as
+  `sessionId` in the tool payload so callers can group follow-up searches
+- `searchId`, `warnings`, and `usage` from Parallel are passed through when
+  present
+- OpenClaw always forwards a resolved result count to Parallel as
+  `advanced_settings.max_results`. The caller's `count` arg wins, then the
+  top-level `tools.web.search.maxResults` setting, otherwise OpenClaw's
+  generic `web_search` default (5). This keeps result volume consistent
+  when switching between providers; Parallel on its own defaults to 10
+- Results are cached for 15 minutes by default (configurable via
+  `cacheTtlMinutes`)
+
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Exa search](/tools/exa-search) -- neural search with content extraction
+- [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering
+
+
+
 # Section: tools/pdf.md
 
 ---
@@ -156728,6 +156891,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
     Search via a signed-in local Ollama host or the hosted Ollama API.
   </Card>
+  <Card title="Parallel" icon="layer-group" href="/tools/parallel-search">
+    LLM-optimized dense excerpts from a web index purpose-built for AI agents.
+  </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
   </Card>
@@ -156752,6 +156918,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Kimi](/tools/kimi-search)                | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
 | [MiniMax Search](/tools/minimax-search)   | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search) | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
+| [Parallel](/tools/parallel-search)        | Dense excerpts ranked for LLM context                          | --                                               | `PARALLEL_API_KEY`                                                                      |
 | [Perplexity](/tools/perplexity-search)    | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
 | [SearXNG](/tools/searxng-search)          | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
 | [Tavily](/tools/tavily)                   | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
@@ -156828,12 +156995,13 @@ API-backed providers first:
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
+10. **Parallel** -- `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the Parallel endpoint (order 75)
 
 Key-free fallbacks after that:
 
-10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+11. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
+12. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
+13. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
@@ -156842,7 +157010,7 @@ error prompting you to configure one).
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
   bundled API-backed web search providers, including Brave, Exa, Firecrawl,
-  Gemini, Grok, Kimi, MiniMax, Perplexity, and Tavily,
+  Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
   selected provider key -- non-selected SecretRefs stay inactive, so you can
