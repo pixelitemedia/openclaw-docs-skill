@@ -2392,6 +2392,33 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   </Accordion>
 </AccordionGroup>
 
+### Command payloads
+
+Use command payloads for deterministic scripts that should run inside the Gateway scheduler without starting a model-backed isolated agent turn. Command jobs execute on the Gateway host, capture stdout/stderr, record the run in cron history, and reuse the same `announce`, `webhook`, and `none` delivery modes as isolated jobs.
+
+<Note>
+Command cron is an operator-admin Gateway automation surface, not an agent
+`tools.exec` call. Creating, updating, removing, or manually running cron jobs
+requires `operator.admin`; scheduled command runs later execute inside the
+Gateway process as that admin-authored automation. Agent exec policy such as
+`tools.exec.mode`, approval prompts, and per-agent tool allowlists governs
+model-visible exec tools, not command cron payloads.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` when you want exact argv execution without shell parsing. Optional `--command-env KEY=VALUE`, `--command-input`, `--timeout-seconds`, `--no-output-timeout-seconds`, and `--output-max-bytes` fields control the process environment, stdin, and output bounds.
+
+If stdout is non-empty, that text is the delivered result. If stdout is empty and stderr is non-empty, stderr is delivered. If both streams are present, cron delivers a small `stdout:` / `stderr:` block. A zero exit code records the run as `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+
 ### Payload options for isolated jobs
 
 <ParamField path="--message" type="string" required>
@@ -2514,6 +2541,17 @@ Failure notifications follow a separate destination path:
       "Summarize today's deploys as JSON." \
       --name "Deploy digest" \
       --webhook "https://example.invalid/openclaw/cron"
+    ```
+  </Tab>
+  <Tab title="Command output">
+    ```bash
+    openclaw cron create "*/15 * * * *" \
+      --name "Queue depth probe" \
+      --command "scripts/check-queue.sh" \
+      --command-cwd "/srv/app" \
+      --announce \
+      --channel telegram \
+      --to "-1001234567890"
     ```
   </Tab>
 </Tabs>
@@ -8374,7 +8412,7 @@ Only the owner number (from `channels.whatsapp.allowFrom`, or the bot's own E.16
 # Section: channels/groups.md
 
 ---
-summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/Signal/Slack/Telegram/WhatsApp/Zalo)"
+summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/QQBot/Signal/Slack/Telegram/WhatsApp/Zalo)"
 read_when:
   - Changing group chat behavior or mention gating
   - Scoping mentionPatterns to specific group conversations
@@ -8382,7 +8420,7 @@ title: "Groups"
 sidebarTitle: "Groups"
 ---
 
-OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
+OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
 
@@ -9211,22 +9249,22 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
 
 ## Action parity at a glance
 
-| Action                                                     | legacy BlueBubbles                  | bundled iMessage                                                                                                        |
-| ---------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                                                      |
-| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                                                      |
-| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))                                                 |
-| Tapback (`react`)                                          | ✅                                  | ✅                                                                                                                      |
-| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                                                      |
-| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))                                           |
-| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                                                            |
-| Rename group / set group icon                              | ✅                                  | ✅                                                                                                                      |
-| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                                                      |
-| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                                                         |
-| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                                                      |
-| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | ✅ (opt-in via `channels.imessage.catchup.enabled`; closes [#78649](https://github.com/openclaw/openclaw/issues/78649)) |
+| Action                                              | legacy BlueBubbles                  | bundled iMessage                                                              |
+| --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| Send text / SMS fallback                            | ✅                                  | ✅                                                                            |
+| Send media (photo, video, file, voice)              | ✅                                  | ✅                                                                            |
+| Threaded reply (`reply_to_guid`)                    | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))       |
+| Tapback (`react`)                                   | ✅                                  | ✅                                                                            |
+| Edit / unsend (macOS 13+ recipients)                | ✅                                  | ✅                                                                            |
+| Send with screen effect                             | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394)) |
+| Rich text bold / italic / underline / strikethrough | ✅                                  | ✅ (typed-run formatting via attributedBody)                                  |
+| Rename group / set group icon                       | ✅                                  | ✅                                                                            |
+| Add / remove participant, leave group               | ✅                                  | ✅                                                                            |
+| Read receipts and typing indicator                  | ✅                                  | ✅ (gated on private API probe)                                               |
+| Same-sender DM coalescing                           | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)            |
+| Inbound recovery after a restart                    | ✅ (webhook replay + history fetch) | ✅ (automatic: replay missed via since_rowid + dedupe; wider window on local) |
 
-iMessage catchup is now available as an opt-in feature on the bundled plugin. On gateway startup, if `channels.imessage.catchup.enabled` is `true`, the gateway runs one `chats.list` + per-chat `messages.history` pass against the same JSON-RPC client used by `imsg watch`, replays each missed inbound row through the live dispatch path (allowlists, group policy, debouncer, echo cache), and persists a per-account cursor so subsequent startups pick up where they left off. See [Catching up after gateway downtime](/channels/imessage#catching-up-after-gateway-downtime) for tuning.
+iMessage recovers messages missed while the gateway was down: on startup it replays from the last dispatched rowid via `imsg watch.subscribe` `since_rowid` and dedupes by GUID, while a stale-backlog age fence suppresses the Push-flush "backlog bomb". This runs over the `imsg` RPC connection, so it works for remote SSH `cliPath` setups too; local setups get a wider recovery window because they can read `chat.db`. See [Inbound recovery after a bridge or gateway restart](/channels/imessage#inbound-recovery-after-a-bridge-or-gateway-restart).
 
 ## Pairing, sessions, and ACP bindings
 
@@ -9263,7 +9301,7 @@ title: "iMessage"
 <Note>
 For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
 
-**Gateway-downtime catchup is opt-in.** When enabled (`channels.imessage.catchup.enabled: true`), the gateway replays inbound messages that landed in `chat.db` while it was offline (crash, restart, Mac sleep) on next startup. Disabled by default — see [Catching up after gateway downtime](#catching-up-after-gateway-downtime). Closes [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
+**Inbound recovery is automatic.** After a bridge or gateway restart, iMessage replays the messages missed while it was down and suppresses the stale "backlog bomb" Apple can flush after a Push recovery, deduping so nothing is dispatched twice. There is no config to enable — see [Inbound recovery after a bridge or gateway restart](#inbound-recovery-after-a-bridge-or-gateway-restart).
 </Note>
 
 <Warning>
@@ -9908,14 +9946,14 @@ When a user types a command and a URL together — e.g. `Dump https://example.co
 
 The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into merging consecutive same-sender rows into a single agent turn. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
+`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
 
 <Tabs>
   <Tab title="When to enable">
     Enable when:
 
     - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-    - Your users paste URLs, images, or long content alongside commands.
+    - Your users paste URLs alongside commands.
     - You can accept the added DM turn latency (see below).
 
     Leave disabled when:
@@ -9956,7 +9994,8 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
   </Tab>
   <Tab title="Trade-offs">
-    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a payload row is coming. Group-chat messages keep instant dispatch.
+    - **Precise merging needs current `imsg` payload metadata.** When the URL row includes `balloon_bundle_id`, only that real split-send merges and other buffered rows stay separate. On older `imsg` builds that expose no balloon metadata, OpenClaw falls back to merging the buffered bucket so `Dump <url>` split-sends are not regressed into two turns (interim back-compat, removed once `imsg` coalesces split-sends upstream).
+    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
     - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
     - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
     - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
@@ -9966,77 +10005,39 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
 ### Scenarios and what the agent sees
 
-| User composes                                                      | `chat.db` produces    | Flag off (default)                      | Flag on + 2500 ms window                                                |
-| ------------------------------------------------------------------ | --------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart     | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                        |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows                | Two turns (attachment dropped on merge) | One turn: text + image preserved                                        |
-| `/status` (standalone command)                                     | 1 row                 | Instant dispatch                        | **Wait up to window, then dispatch**                                    |
-| URL pasted alone                                                   | 1 row                 | Instant dispatch                        | Instant dispatch (only one entry in bucket)                             |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window | Two turns                               | Two turns (window expires between them)                                 |
-| Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
-| Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
+The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
 
-## Catching up after gateway downtime
+| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)   |
+| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | ------------------------------------------------ |
+| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com` |
+| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns (legacy merge on metadata-less builds) |
+| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**             |
+| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                 |
+| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)          |
+| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns (legacy merge on metadata-less builds)   |
+| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced         |
 
-When the gateway is offline (crash, restart, Mac sleep, machine off), `imsg watch` resumes from the current `chat.db` state once the gateway comes back up — anything that arrived during the gap is, by default, never seen. Catchup replays those messages on the next startup so the agent does not silently miss inbound traffic.
+## Inbound recovery after a bridge or gateway restart
 
-Catchup is **disabled by default**. Enable it per channel:
+iMessage recovers messages missed while the gateway was down, and at the same time suppresses the stale "backlog bomb" Apple can flush after a Push recovery. The default behavior is always on, built on the inbound dedupe.
 
-```ts
-channels: {
-  imessage: {
-    catchup: {
-      enabled: true,             // master switch (default: false)
-      maxAgeMinutes: 120,        // skip rows older than now - 2h (default: 120, clamp 1..720)
-      perRunLimit: 50,           // max rows replayed per startup (default: 50, clamp 1..500)
-      firstRunLookbackMinutes: 30, // first run with no cursor: look back 30 min (default: 30)
-      maxFailureRetries: 10,     // give up on a wedged guid after 10 dispatch failures (default: 10)
-    },
-  },
-}
-```
+- **Replay dedupe.** Every dispatched inbound message is recorded by its Apple GUID in persistent plugin state (`imessage.inbound-dedupe`), claimed at ingestion and committed after handling (released on a transient failure so it can retry). Anything already handled is dropped instead of dispatched twice. This is what lets recovery replay aggressively without per-message bookkeeping.
+- **Downtime recovery.** On startup the monitor remembers the last dispatched `chat.db` rowid (a persisted per-account cursor) and passes it to `imsg watch.subscribe` as `since_rowid`, so imsg replays the rows that landed while the gateway was down, then tails live. Replay is bounded to the most recent rows and to messages up to ~2 hours old, and the dedupe drops anything already handled.
+- **Stale-backlog age fence.** Rows above the startup boundary are genuinely live; one whose send date is more than ~15 minutes older than its arrival is the Push-flush backlog and is suppressed. Replayed rows (at or below the boundary) use the wider recovery window instead, so a recently-missed message is delivered while ancient history is not.
 
-### How it runs
+Recovery works over both local and remote `cliPath` setups, because `since_rowid` replay runs over the same `imsg` RPC connection. The difference is the window: when the gateway can read `chat.db` (local), it anchors the startup rowid boundary, caps the replay span, and delivers missed messages up to a couple of hours old. Over a remote SSH `cliPath` it cannot read the database, so the replay is uncapped and every row uses the live age fence — it still recovers recently-missed messages and still suppresses old backlog, just with the narrower live window. Run the gateway on the Messages Mac for the wider recovery window.
 
-One pass per `monitorIMessageProvider` startup, sequenced as `imsg launch` ready → `watch.subscribe` → `performIMessageCatchup` → live dispatch loop. Catchup itself uses `chats.list` + per-chat `messages.history` against the same JSON-RPC client used by `imsg watch`. Anything that arrives during the catchup pass flows through live dispatch normally; the existing inbound-dedupe cache absorbs any overlap with replayed rows.
+### Operator-visible signal
 
-Each replayed row is fed through the live dispatch path (`evaluateIMessageInbound` + `dispatchInboundMessage`), so allowlists, group policy, debouncer, echo cache, and read receipts behave identically on replayed and live messages.
-
-### Cursor and retry semantics
-
-Catchup keeps a per-account cursor in SQLite plugin state:
-
-```json
-{
-  "lastSeenMs": 1717900800000,
-  "lastSeenRowid": 482910,
-  "updatedAt": 1717900801234,
-  "failureRetries": { "<guid>": 1 }
-}
-```
-
-- The cursor advances on each successful dispatch and is held when a row's dispatch throws — the next startup retries the same row from the held cursor.
-- After the startup catchup query succeeds, later live-handled rows also advance the same cursor so a gateway restart does not replay messages that were already handled live. Live cursor writes do not jump past catchup failures that are still below `maxFailureRetries`.
-- After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
-- Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
-- `openclaw doctor --fix` imports legacy `<openclawStateDir>/imessage/catchup/*.json` cursor files into SQLite plugin state and archives the old files.
-
-### Operator-visible signals
+Suppressed backlog is logged at the default level, never silently dropped (the `recovery` flag shows which window applied):
 
 ```
-imessage catchup: replayed=N skippedFromMe=… skippedGivenUp=… failed=… givenUp=… fetchedCount=…
-imessage catchup: giving up on guid=<guid> after <N> failures; advancing cursor past it
-imessage catchup: fetched <X> rows across chats, capped to perRunLimit=<Y>
+imessage: suppressed stale inbound backlog account=<id> sent=<iso> recovery=<bool> (<N> suppressed since start)
 ```
 
-A `WARN ... capped to perRunLimit` line means a single startup did not drain the full backlog. Raise `perRunLimit` (max 500) if your gaps regularly exceed the default 50-row pass.
+### Migration
 
-### When to leave it off
-
-- Gateway runs continuously with watchdog auto-restart and gaps are always < a few seconds — the default of off is fine.
-- DM volume is low and missed messages would not change agent behavior — the `firstRunLookbackMinutes` initial window can dispatch surprising old context on first enable.
-
-When you turn catchup on, the first startup with no cursor only looks back `firstRunLookbackMinutes` (30 min default), not the full `maxAgeMinutes` window — this avoids replaying a long history of pre-enable messages.
+`channels.imessage.catchup.*` is deprecated — downtime recovery is now automatic and needs no config for new setups. Existing configs with `catchup.enabled: true` remain honored as a compatibility profile for the recovery replay window. Disabled catchup blocks (`enabled: false` or no `enabled: true`) are retired; `openclaw doctor --fix` removes those.
 
 ## Troubleshooting
 
@@ -14898,7 +14899,7 @@ to a group, then mention it or configure the group to run without a mention.
         "*": {
           requireMention: true,
           historyLimit: 50,
-          toolPolicy: "restricted",
+          tools: { deny: ["exec", "read", "write"] },
         },
         GROUP_OPENID: {
           name: "Release room",
@@ -14920,9 +14921,12 @@ settings include:
 - `requireMention`: require an @mention before the bot replies. Default: `true`.
 - `ignoreOtherMentions`: drop messages that mention someone else but not the bot.
 - `historyLimit`: keep recent non-mention group messages as context for the next mentioned turn. Set `0` to disable.
-- `toolPolicy`: `full`, `restricted`, or `none` for group-scoped tools.
+- `tools`: allow/deny tools for the whole group.
+- `toolsBySender`: per-sender group tool overrides; see [Groups](/channels/groups#groupchannel-tool-restrictions-optional).
 - `name`: friendly label used in logs and group context.
 - `prompt`: per-group behavior prompt appended to the agent context.
+
+Old QQBot `toolPolicy` entries are retired. Run `openclaw doctor --fix` to migrate them to `tools`.
 
 Activation modes are `mention` and `always`. `requireMention: true` maps to
 `mention`; `requireMention: false` maps to `always`. A session-level activation
@@ -24448,6 +24452,27 @@ openclaw cron create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
+Use `--command` for deterministic shell-style jobs that should run inside OpenClaw cron without starting an isolated agent/model run:
+
+<Note>
+Command cron jobs are admin-authored Gateway automation. Creating, editing,
+removing, or manually running them requires `operator.admin`; the scheduled run
+later executes in the Gateway process, not as an agent `tools.exec` tool call.
+`tools.exec.*` and exec approvals still govern model-visible exec tools.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal cron history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -24505,6 +24530,10 @@ Main-session jobs may only use `delivery.failureDestination` when primary delive
 Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
+
+Command cron jobs do not start an isolated agent turn. A zero exit code records
+`ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and
+can trigger the same failure notification path.
 
 If an isolated run times out before the first model request, `openclaw cron show`
 and `openclaw cron runs` include a phase-specific error such as
@@ -24665,6 +24694,21 @@ openclaw cron create "0 7 * * *" \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Create a command job with exact argv, cwd, env, stdin, and output limits:
+
+```bash
+openclaw cron create "*/30 * * * *" \
+  --name "Position export" \
+  --command-argv '["node","scripts/export-position.mjs"]' \
+  --command-cwd "/srv/app" \
+  --command-env "NODE_ENV=production" \
+  --command-input '{"mode":"summary"}' \
+  --timeout-seconds 120 \
+  --no-output-timeout-seconds 30 \
+  --output-max-bytes 65536 \
+  --webhook "https://example.invalid/openclaw/cron"
+```
 
 ## Common admin commands
 
@@ -38289,7 +38333,7 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. It also defaults that run to structured Tool Search controls when `tools.toolSearch` is not explicitly configured, so larger plugin, MCP, or client tool catalogs stay behind `tool_search`, `tool_describe`, and `tool_call` instead of being dumped into the prompt. Runs that require direct `message` delivery keep that tool direct instead of enabling the lean-mode Tool Search default. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -38299,7 +38343,7 @@ These three tools have the largest descriptions and the most parameter shapes in
 - The model picking the right tool vs. emitting malformed tool calls because there are too many similar-looking schemas.
 - The Chat Completions adapter staying inside the server's structured-output limits vs. tripping a 400 on tool-call payload size.
 
-Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available.
+Removing them does not silently rewire OpenClaw — it just makes the direct tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available. Extra catalogs remain callable through Tool Search unless you explicitly set `tools.toolSearch: false`.
 
 ### When to turn it on
 
@@ -38314,6 +38358,8 @@ Enable lean mode when you have already proved the model can talk to the Gateway 
 If your backend handles the full default runtime cleanly, leave this off. Lean mode is a workaround, not a default. It exists because some local stacks need a smaller tool surface to behave; hosted models and well-resourced local rigs do not.
 
 Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or the model `compat.supportsTools: false` escape hatch. If you need a permanent narrower tool surface for a specific agent, prefer those stable knobs over the experimental flag.
+
+If you already tune Tool Search globally, OpenClaw leaves that operator config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
 ### Enable
 
@@ -38353,7 +38399,7 @@ Restart the Gateway after changing the flag, then confirm the trimmed tool list 
 openclaw status --deep
 ```
 
-The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on.
+The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on unless the current delivery mode forces direct `message` replies.
 
 ## Experimental does not mean hidden
 
@@ -45498,6 +45544,7 @@ script aliases; both forms are supported.
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                              |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                       |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                               |
+| `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                                 |
 | `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
 
 ## Operator flow
@@ -45618,15 +45665,16 @@ decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
 
-For transport-real Telegram, Discord, and Slack smoke lanes:
+For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
 ```bash
 pnpm openclaw qa telegram
 pnpm openclaw qa discord
 pnpm openclaw qa slack
+pnpm openclaw qa whatsapp
 ```
 
-They target a pre-existing real channel with two bots (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, and Slack QA reference](#telegram-discord-and-slack-qa-reference) below.
+They target a pre-existing real channel with two bots or accounts (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, Slack, and WhatsApp QA reference](#telegram-discord-slack-and-whatsapp-qa-reference) below.
 
 For a full Slack desktop VM run with VNC rescue, run:
 
@@ -45726,10 +45774,10 @@ coverage helpers, and scenario-selection helper from
 | Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
 | Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
 | Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
+| WhatsApp | x      | x              |            | x               | x               | x              |                  |                  | x                    | x            |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
-Telegram, and future live transports share one explicit transport-contract
-checklist.
+Telegram, and other live transports share one explicit transport-contract checklist.
 
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
@@ -45758,25 +45806,25 @@ guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
 can write back through the mounted workspace.
 
-## Telegram, Discord, and Slack QA reference
+## Telegram, Discord, Slack, and WhatsApp QA reference
 
-Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram, Discord, and Slack are smaller - a handful of scenarios each, no profile system, against pre-existing real channels - so their reference lives here.
+Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram, Discord, Slack, and WhatsApp run against pre-existing real transports, so their reference lives here.
 
 ### Shared CLI flags
 
 These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                                         | Description                                                                                                           |
-| ------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                               | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/{telegram,discord,slack}-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                                 | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                                           | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                                 | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                                | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                             | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                                           | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                              | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                            | Description                                                                                                           |
+| ------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                   |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                     |
+| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                    |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                         |
+| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                   |
+| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                          |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 
@@ -46138,22 +46186,52 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables `whatsapp-mention-gating`.
+- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables group scenarios such as
+  `whatsapp-mention-gating` and `whatsapp-group-allowlist-block`.
 - `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
   observed-message artifacts.
 
-Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
 
-- `whatsapp-canary`
-- `whatsapp-pairing-block`
-- `whatsapp-mention-gating`
-- `whatsapp-approval-exec-native` - opt-in native WhatsApp exec approval
-  scenario. Requests an exec approval through the gateway, verifies the
-  WhatsApp message has native reaction approval affordances, resolves it, and
-  verifies the resolved WhatsApp follow-up.
-- `whatsapp-approval-plugin-native` - opt-in native WhatsApp plugin approval
-  scenario. Enables exec and plugin approval forwarding together, then verifies
-  the same pending/resolved native WhatsApp path.
+- Baseline and group gating: `whatsapp-canary`, `whatsapp-pairing-block`,
+  `whatsapp-mention-gating`, `whatsapp-top-level-reply-shape`,
+  `whatsapp-restart-resume`, `whatsapp-group-allowlist-block`.
+- Native commands: `whatsapp-help-command`, `whatsapp-status-command`,
+  `whatsapp-commands-command`, `whatsapp-tools-compact-command`,
+  `whatsapp-whoami-command`, `whatsapp-context-command`,
+  `whatsapp-native-new-command`.
+- Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
+  `whatsapp-reply-to-message`, `whatsapp-reply-context-isolation`,
+  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+- Inbound media and structured messages: `whatsapp-inbound-image-caption`,
+  `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
+  `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
+  document, location, contact, and sticker events through the driver.
+- Outbound Gateway and message action coverage:
+  `whatsapp-outbound-media-matrix`,
+  `whatsapp-outbound-document-preserves-filename`, `whatsapp-outbound-poll`,
+  `whatsapp-message-actions`.
+- Access-control coverage: `whatsapp-access-control-dm-open`,
+  `whatsapp-access-control-dm-disabled`, `whatsapp-access-control-group-open`,
+  `whatsapp-access-control-group-disabled`, `whatsapp-group-allowlist-block`.
+- Native approvals: `whatsapp-approval-exec-deny-native`,
+  `whatsapp-approval-exec-native`, `whatsapp-approval-exec-reaction-native`,
+  `whatsapp-approval-plugin-native`.
+- Status reactions: `whatsapp-status-reactions`.
+
+The catalog currently contains 35 scenarios. The `live-frontier` default lane is
+kept small at 8 scenarios for fast smoke coverage. The `mock-openai` default
+lane runs 29 deterministic scenarios through the real WhatsApp transport while
+mocking only model output. Approval scenarios and a few heavier/blocking checks
+remain explicit by scenario id.
+
+The WhatsApp QA driver observes structured live events (`text`, `media`,
+`location`, `reaction`, and `poll`) and can actively send media, polls,
+contacts, locations, and stickers. QA Lab imports that driver through the
+`@openclaw/whatsapp/api.js` package surface instead of reaching into private
+WhatsApp runtime files. Message content is redacted by default. Outbound
+poll and upload-file coverage run through deterministic gateway `poll` and
+`message.action` calls instead of model-prompt-only tool invocation.
 
 Output artifacts:
 
@@ -52366,9 +52444,6 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
         sendWithEffect: true,
         sendAttachment: true,
       },
-      catchup: {
-        enabled: false,
-      },
     },
   },
 }
@@ -52384,7 +52459,7 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
 - `channels.imessage.includeAttachments` is off by default; set it to `true` before expecting inbound media in agent turns.
-- `channels.imessage.catchup.enabled`: opt in to replaying inbound messages that arrived while the Gateway was down.
+- Inbound recovery after a bridge/gateway restart is automatic (GUID dedupe plus a stale-backlog age fence). Existing `channels.imessage.catchup.enabled: true` configs are still honored as a deprecated compatibility profile.
 - `channels.imessage.groups`: group registry and per-group settings. With `groupPolicy: "allowlist"`, configure either explicit `chat_id` keys or a `"*"` wildcard entry so group messages can pass the registry gate.
 - Top-level `bindings[]` entries with `type: "acp"` can bind iMessage conversations to persistent ACP sessions. Use a normalized handle or explicit chat target (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 
@@ -54752,7 +54827,7 @@ See [Inferred commitments](/concepts/commitments).
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
-      // Remove tools from the default HTTP deny list
+      // Remove tools from the default HTTP deny list for owner/admin callers
       allow: ["gateway"],
     },
     push: {
@@ -54820,7 +54895,10 @@ See [Inferred commitments](/concepts/commitments).
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, and `screen.record`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
-- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list for
+  owner/admin callers. This does not upgrade identity-bearing `operator.write`
+  callers into owner/admin access; `cron`, `gateway`, and `nodes` remain
+  unavailable to non-owner callers even when allowlisted.
 
 </Accordion>
 
@@ -58891,7 +58969,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
+3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) and defaults larger tool catalogs behind structured Tool Search controls, except for runs that must keep direct `message` delivery semantics. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
 
 4. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
 
@@ -61960,6 +62038,9 @@ terminal summary, and sanitized error text.
     `idempotencyKey` are optional.
   - If both `sessionKey` and `agentId` are present, the resolved session agent must match
     `agentId`.
+  - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
+    owner/admin identity (`operator.admin`) even though the `tools.invoke`
+    method itself is `operator.write`.
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
     `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
     bypassing the gateway tool policy pipeline.
@@ -63146,7 +63227,7 @@ With the OpenShell backend:
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 <Note>
-**Skills note:** the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`.
+**Skills note:** the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 </Note>
 
 ## Custom bind mounts
@@ -64666,12 +64747,18 @@ You can customize this deny list via `gateway.tools`:
     tools: {
       // Additional tools to block over HTTP /tools/invoke
       deny: ["browser"],
-      // Remove tools from the default deny list
+      // Remove tools from the default deny list for owner/admin callers
       allow: ["gateway"],
     },
   },
 }
 ```
+
+`gateway.tools.allow` is an exposure override, not a scope upgrade. In
+identity-bearing HTTP modes, `cron`, `gateway`, and `nodes` remain unavailable
+to callers that do not have owner/admin identity (`operator.admin`) even when
+they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
+the full trusted-operator rule above.
 
 To help group policies resolve context, you can optionally set:
 
@@ -66121,7 +66208,7 @@ exhaustive):
 | `gateway.trusted_proxies_missing`                             | warn          | Reverse-proxy headers are present but not trusted                                    | `gateway.trustedProxies`                                                                             | no       |
 | `gateway.http.no_auth`                                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                                  | `gateway.auth.mode`, `gateway.http.endpoints.*`, `plugins.entries.admin-http-rpc`                    | no       |
 | `gateway.http.session_key_override_enabled`                   | info          | HTTP API callers can override `sessionKey`                                           | `gateway.http.allowSessionKeyOverride`                                                               | no       |
-| `gateway.tools_invoke_http.dangerous_allow`                   | warn/critical | Re-enables dangerous tools over HTTP API                                             | `gateway.tools.allow`                                                                                | no       |
+| `gateway.tools_invoke_http.dangerous_allow`                   | warn/critical | Re-enables dangerous tools over HTTP API for owner/admin callers                     | `gateway.tools.allow`                                                                                | no       |
 | `gateway.nodes.allow_commands_dangerous`                      | warn/critical | Enables high-impact node commands (camera/screen/contacts/calendar/SMS)              | `gateway.nodes.allowCommands`                                                                        | no       |
 | `gateway.nodes.deny_commands_ineffective`                     | warn          | Pattern-like deny entries do not match shell text or groups                          | `gateway.nodes.denyCommands`                                                                         | no       |
 | `gateway.tailscale_funnel`                                    | critical      | Public internet exposure                                                             | `gateway.tailscale.mode`                                                                             | no       |
@@ -102602,6 +102689,143 @@ API key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    ### Live model discovery
+
+    If your provider exposes a `/models`-style API, keep the provider-specific
+    endpoint and row projection in your plugin and use
+    `openclaw/plugin-sdk/provider-catalog-live-runtime` for the shared fetch
+    lifecycle. The helper gives you guarded HTTP fetches, provider-auth headers,
+    structured HTTP errors, TTL caching, and static fallback behavior without
+    putting provider policy in OpenClaw core.
+
+    Use `buildLiveModelProviderConfig` when the live API only tells you which
+    provider-owned static catalog rows are currently available:
+
+    ```typescript index.ts
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+    import {
+      buildLiveModelProviderConfig,
+      type LiveModelCatalogFetchGuard,
+    } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+
+    const STATIC_MODELS = [
+      {
+        id: "acme-large",
+        name: "Acme Large",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      {
+        id: "acme-small",
+        name: "Acme Small",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    ] as const;
+
+    async function buildAcmeLiveProvider(params: {
+      apiKey: string;
+      discoveryApiKey?: string;
+      fetchGuard?: LiveModelCatalogFetchGuard;
+    }) {
+      return await buildLiveModelProviderConfig({
+        providerId: "acme-ai",
+        endpoint: "https://api.acme-ai.com/v1/models",
+        providerConfig: {
+          baseUrl: "https://api.acme-ai.com/v1",
+          api: "openai-completions",
+        },
+        models: STATIC_MODELS,
+        apiKey: params.apiKey,
+        discoveryApiKey: params.discoveryApiKey,
+        fetchGuard: params.fetchGuard,
+        ttlMs: 60_000,
+        auditContext: "acme-ai-model-discovery",
+      });
+    }
+
+    export default definePluginEntry({
+      id: "acme-ai",
+      name: "Acme AI",
+      register(api) {
+        api.registerProvider({
+          id: "acme-ai",
+          label: "Acme AI",
+          catalog: {
+            order: "simple",
+            run: async (ctx) => {
+              const auth = ctx.resolveProviderAuth("acme-ai");
+              const apiKey =
+                auth.apiKey ?? ctx.resolveProviderApiKey("acme-ai").apiKey;
+              if (!apiKey) return null;
+              return {
+                provider: await buildAcmeLiveProvider({
+                  apiKey,
+                  discoveryApiKey: auth.discoveryApiKey,
+                }),
+              };
+            },
+          },
+          staticCatalog: {
+            order: "simple",
+            run: async () => ({
+              provider: {
+                baseUrl: "https://api.acme-ai.com/v1",
+                api: "openai-completions",
+                models: [...STATIC_MODELS],
+              },
+            }),
+          },
+        });
+      },
+    });
+    ```
+
+    Use `getCachedLiveProviderModelRows` when the provider API returns richer
+    metadata and the plugin needs to project rows into OpenClaw model
+    definitions itself:
+
+    ```typescript index.ts
+    import {
+      getCachedLiveProviderModelRows,
+      LiveModelCatalogHttpError,
+    } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+
+    async function discoverAcmeModels(apiKey: string) {
+      try {
+        const rows = await getCachedLiveProviderModelRows({
+          providerId: "acme-ai",
+          endpoint: "https://api.acme-ai.com/v1/models",
+          apiKey,
+          ttlMs: 60_000,
+          auditContext: "acme-ai-model-discovery",
+        });
+        return rows
+          .map((row) => projectAcmeModel(row))
+          .filter((model) => model !== null);
+      } catch (error) {
+        if (error instanceof LiveModelCatalogHttpError) {
+          return STATIC_MODELS;
+        }
+        throw error;
+      }
+    }
+    ```
+
+    `run` should stay auth-gated and return `null` when no usable credential is
+    available. Keep an offline `staticRun` or static fallback so setup, docs,
+    tests, and picker surfaces do not depend on live network access. Use a TTL
+    appropriate for model-list freshness, avoid request-time filesystem polling,
+    and pass a provider-specific `readRows` / `readModelId` only when the
+    upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
+    shape.
+
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
 
@@ -102688,6 +102912,10 @@ API key auth, and dynamic model resolution.
     `applyProviderNativeStreamingUsageCompat(...)` detect support from the
     endpoint capability map, so native Moonshot/DashScope-style endpoints still
     opt in even when a plugin is using a custom provider id.
+
+    The live discovery examples above cover `/models`-style provider APIs. Keep
+    that discovery inside `catalog.run`, gated on usable auth, and keep
+    `staticRun` network-free for offline catalog generation.
 
   </Step>
 
@@ -104667,6 +104895,7 @@ and pairing-path families.
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-catalog-live-runtime` | Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
@@ -104761,7 +104990,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), target discovery, legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |
@@ -119479,7 +119708,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
-    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
+    `localModelLean` removes the browser, cron, and message tools from the direct agent surface and defaults larger catalogs behind structured Tool Search controls except when a run must keep direct message delivery semantics, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>
@@ -154159,10 +154388,12 @@ tombstoned sessions.
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.
-Internal `sessions_spawn` coordination should connect as
-`client.id: "gateway-client"` with `client.mode: "backend"` over direct
-loopback shared-token/password auth; that path does not depend on the
-CLI's paired-device scope baseline. Remote callers, explicit
+Internal `sessions_spawn` coordination dispatches in process when the
+caller is already running inside the gateway request context, so it does
+not open a loopback WebSocket or depend on the CLI's paired-device scope
+baseline. Callers outside the gateway process still use the WebSocket
+fallback as `client.id: "gateway-client"` with `client.mode: "backend"`
+over direct loopback shared-token/password auth. Remote callers, explicit
 `deviceIdentity`, explicit device-token paths, and browser/node clients
 still need normal device approval for scope upgrades.
 </Note>
