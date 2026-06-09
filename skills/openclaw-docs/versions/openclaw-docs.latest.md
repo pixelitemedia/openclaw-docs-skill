@@ -2740,6 +2740,7 @@ Model override note:
 - `openclaw cron add|edit --model ...` changes the job's selected model.
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
 - If it is not allowed or cannot be resolved, cron fails the run with an explicit validation error.
+- API `cron.update` payload patches can set `model: null` to clear a stored job model override.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
 - Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
@@ -23031,11 +23032,14 @@ openclaw browser select <ref> OptionA OptionB
 openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
 openclaw browser wait --text "Done"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
+openclaw browser evaluate --fn 'const title = document.title; return title;'
 openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 ```
 
-Use `evaluate --timeout-ms <ms>` when the page-side function may need longer
-than the default evaluate timeout.
+`evaluate --fn` accepts a function source, an expression, or a statement body.
+Statement bodies are wrapped as async functions, so use `return` for the value
+you want back. Use `evaluate --timeout-ms <ms>` when the page-side function may
+need longer than the default evaluate timeout.
 
 Action responses return the current raw `targetId` after action-triggered page
 replacement when OpenClaw can prove the replacement tab. Scripts should still
@@ -37512,7 +37516,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 - `/status` → quick "how full is my window?" view + session settings.
 - `/context list` → what's injected + rough sizes (per file + totals).
-- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
@@ -37670,7 +37674,7 @@ pluggable interface, lifecycle hooks, and configuration.
 - `System prompt (run)` = captured from the last embedded (tool-capable) run and persisted in the session store.
 - `System prompt (estimate)` = computed on the fly when no run report exists (or when running via a CLI backend that doesn't generate the report).
 
-Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.
+Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas. In detailed mode, it also compares the session transcript with the same real-conversation message predicate used by compaction, so high prompt/cache usage is easier to distinguish from compactable conversation history.
 
 ## Related
 
@@ -39683,9 +39687,12 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force the built-in local embedding provider, install the optional
-`node-llama-cpp` runtime package next to OpenClaw, then point `local.modelPath`
-at a GGUF file:
+To force local GGUF embeddings, install the official llama.cpp provider plugin,
+then point `local.modelPath` at a GGUF file:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
 
 ```json5
 {
@@ -39711,7 +39718,7 @@ at a GGUF file:
 | DeepInfra         | `deepinfra`         | Default: `BAAI/bge-m3`              |
 | Gemini            | `gemini`            | Supports multimodal (image + audio) |
 | GitHub Copilot    | `github-copilot`    | Uses Copilot subscription           |
-| Local             | `local`             | Optional `node-llama-cpp` runtime   |
+| Local             | `local`             | `@openclaw/llama-cpp-provider`      |
 | Mistral           | `mistral`           |                                     |
 | Ollama            | `ollama`            | Local/self-hosted                   |
 | OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
@@ -39961,7 +39968,7 @@ binary, and can index content beyond your workspace memory files.
 - **Reranking and query expansion** for better recall.
 - **Index extra directories** -- project docs, team notes, anything on disk.
 - **Index session transcripts** -- recall earlier conversations.
-- **Fully local** -- runs with the optional node-llama-cpp runtime package and
+- **Fully local** -- runs with the official llama.cpp provider plugin and
   auto-downloads GGUF models.
 - **Automatic fallback** -- if QMD is unavailable, OpenClaw falls back to the
   builtin engine seamlessly.
@@ -40258,7 +40265,8 @@ For multi-endpoint setups with memory-specific providers, `provider` can also
 be a custom `models.providers.<id>` entry, such as `ollama-5080`, when that
 provider sets `api: "ollama"` or another memory embedding adapter owner.
 
-For local embeddings with no API key, set `provider: "local"`. Source checkouts
+For local embeddings with no API key, install
+`@openclaw/llama-cpp-provider` and set `provider: "local"`. Source checkouts
 may still require native build approval: `pnpm approve-builds` then
 `pnpm rebuild node-llama-cpp`.
 
@@ -44420,334 +44428,6 @@ Related docs:
 
 
 
-# Section: concepts/openclaw-sdk.md
-
----
-summary: "Public OpenClaw App SDK for external apps, scripts, dashboards, CI jobs, and IDE extensions"
-title: "OpenClaw App SDK"
-sidebarTitle: "App SDK"
-read_when:
-  - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
-  - You are choosing between the App SDK and the Plugin SDK
-  - You are integrating with Gateway agent runs, sessions, events, approvals, models, or tools
----
-
-The **OpenClaw App SDK** is the public client API for apps outside the
-OpenClaw process. Use `@openclaw/sdk` when a script, dashboard, CI job, IDE
-extension, or other external app wants to connect to the Gateway, start agent
-runs, stream events, wait for results, cancel work, or inspect Gateway
-resources.
-
-<Note>
-  The App SDK is different from the [Plugin SDK](/plugins/sdk-overview).
-  `@openclaw/sdk` talks to the Gateway from outside OpenClaw.
-  `openclaw/plugin-sdk/*` is only for plugins that run inside OpenClaw and
-  register providers, channels, tools, hooks, or trusted runtimes.
-</Note>
-
-## What ships today
-
-`@openclaw/sdk` ships with:
-
-| Surface                   | Status  | What it does                                                                      |
-| ------------------------- | ------- | --------------------------------------------------------------------------------- |
-| `OpenClaw`                | Ready   | Main client entry point. Owns transport, connection, requests, and events.        |
-| `GatewayClientTransport`  | Ready   | WebSocket transport backed by the Gateway client.                                 |
-| `oc.agents`               | Ready   | Lists, creates, updates, deletes, and gets agent handles.                         |
-| `Agent.run()`             | Ready   | Starts a Gateway `agent` run and returns a `Run`.                                 |
-| `oc.runs`                 | Ready   | Creates, gets, waits for, cancels, and streams runs.                              |
-| `Run.events()`            | Ready   | Streams normalized per-run events with replay for fast runs.                      |
-| `Run.wait()`              | Ready   | Calls `agent.wait` and returns a stable `RunResult`.                              |
-| `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.                |
-| `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.         |
-| `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                        |
-| `oc.tasks`                | Ready   | Lists, reads, and cancels Gateway task ledger entries.                            |
-| `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.               |
-| `oc.tools`                | Ready   | Lists, scopes, and invokes Gateway tools through the policy pipeline.             |
-| `oc.artifacts`            | Ready   | Lists, gets, and downloads Gateway transcript artifacts.                          |
-| `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.                  |
-| `oc.environments`         | Partial | Lists Gateway-local and node environment candidates; create/delete are not wired. |
-| `oc.rawEvents()`          | Ready   | Exposes raw Gateway events for advanced consumers.                                |
-| `normalizeGatewayEvent()` | Ready   | Converts raw Gateway events into the stable SDK event shape.                      |
-
-The SDK also exports the core types used by those surfaces:
-`AgentRunParams`, `RunResult`, `RunStatus`, `OpenClawEvent`,
-`OpenClawEventType`, `GatewayEvent`, `OpenClawTransport`,
-`GatewayRequestOptions`, `SessionCreateParams`, `SessionSendParams`,
-`ArtifactSummary`, `ArtifactQuery`, `ArtifactsListResult`,
-`ArtifactsGetResult`, `ArtifactsDownloadResult`,
-`TaskSummary`, `TaskStatus`, `TasksListParams`, `TasksListResult`,
-`TasksGetResult`, `TasksCancelResult`, `RuntimeSelection`,
-`EnvironmentSelection`, `WorkspaceSelection`, `ApprovalMode`, and related
-result types.
-
-## Connect to a Gateway
-
-Create a client with an explicit Gateway URL, or inject a custom transport for
-tests and embedded app runtimes.
-
-```typescript
-import { OpenClaw } from "@openclaw/sdk";
-
-const oc = new OpenClaw({
-  url: "ws://127.0.0.1:18789",
-  token: process.env.OPENCLAW_GATEWAY_TOKEN,
-  requestTimeoutMs: 30_000,
-});
-
-await oc.connect();
-```
-
-`new OpenClaw({ gateway: "ws://..." })` is equivalent to `url`. The
-`gateway: "auto"` option is accepted by the constructor, but automatic Gateway
-discovery is not a separate SDK feature yet; pass `url` when the app does not
-already know how to discover the Gateway.
-
-For tests, pass an object that implements `OpenClawTransport`:
-
-```typescript
-const oc = new OpenClaw({
-  transport: {
-    async request(method, params) {
-      return { method, params };
-    },
-    async *events() {},
-  },
-});
-```
-
-## Run an agent
-
-Use `oc.agents.get(id)` when the app wants an agent handle, then call
-`agent.run()`.
-
-```typescript
-const agent = await oc.agents.get("main");
-
-const run = await agent.run({
-  input: "Review this pull request and suggest the smallest safe fix.",
-  model: "openai/gpt-5.5",
-  sessionKey: "main",
-  timeoutMs: 30_000,
-});
-
-for await (const event of run.events()) {
-  const data = event.data as { delta?: unknown };
-  if (event.type === "assistant.delta" && typeof data.delta === "string") {
-    process.stdout.write(data.delta);
-  }
-}
-
-const result = await run.wait({ timeoutMs: 120_000 });
-console.log(result.status);
-```
-
-Provider-qualified model refs such as `openai/gpt-5.5` are split into Gateway
-`provider` and `model` overrides. `timeoutMs` stays milliseconds in the SDK and
-is converted to Gateway timeout seconds for the `agent` RPC.
-
-`run.wait()` uses the Gateway `agent.wait` RPC. A wait deadline that expires
-while the run is still active returns `status: "accepted"` instead of pretending
-the run itself timed out. Runtime timeouts, aborted runs, and cancelled runs are
-normalized into `timed_out` or `cancelled`.
-
-## Create and reuse sessions
-
-Use sessions when the app wants durable transcript state.
-
-```typescript
-const session = await oc.sessions.create({
-  agentId: "main",
-  label: "release-review",
-});
-
-const run = await session.send("Prepare release notes from the current diff.");
-await run.wait();
-```
-
-`Session.send()` calls `sessions.send` and returns a `Run`. Session handles also
-support:
-
-```typescript
-await session.abort(run.id);
-await session.patch({ label: "renamed-session" });
-await session.compact({ maxLines: 200 });
-```
-
-## Stream events
-
-The SDK normalizes raw Gateway events into a stable `OpenClawEvent` envelope:
-
-```typescript
-type OpenClawEvent = {
-  version: 1;
-  id: string;
-  ts: number;
-  type: OpenClawEventType;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  taskId?: string;
-  agentId?: string;
-  data: unknown;
-  raw?: GatewayEvent;
-};
-```
-
-Common event types include:
-
-| Event type            | Source Gateway event                        |
-| --------------------- | ------------------------------------------- |
-| `run.started`         | `agent` lifecycle start                     |
-| `run.completed`       | `agent` lifecycle end                       |
-| `run.failed`          | `agent` lifecycle error                     |
-| `run.cancelled`       | Aborted/cancelled lifecycle end             |
-| `run.timed_out`       | Timeout lifecycle end                       |
-| `assistant.delta`     | Assistant streaming delta                   |
-| `assistant.message`   | Assistant message                           |
-| `thinking.delta`      | Thinking or plan stream                     |
-| `tool.call.started`   | Tool/item/command start                     |
-| `tool.call.delta`     | Tool/item/command update                    |
-| `tool.call.completed` | Tool/item/command completion                |
-| `tool.call.failed`    | Tool/item/command failure or blocked status |
-| `approval.requested`  | Exec or plugin approval request             |
-| `approval.resolved`   | Exec or plugin approval resolution          |
-| `session.created`     | `sessions.changed` create                   |
-| `session.updated`     | `sessions.changed` update                   |
-| `session.compacted`   | `sessions.changed` compaction               |
-| `task.updated`        | Task update events                          |
-| `artifact.updated`    | Patch stream events                         |
-| `raw`                 | Any event without a stable SDK mapping yet  |
-
-`Run.events()` filters events to one run id and replays already-seen events for
-fast runs. That means the documented flow is safe:
-
-```typescript
-const run = await agent.run("Summarize the latest session.");
-
-for await (const event of run.events()) {
-  if (event.type === "run.completed") {
-    break;
-  }
-}
-```
-
-For app-wide streams, use `oc.events()`. For raw Gateway frames, use
-`oc.rawEvents()`.
-
-## Models, tools, artifacts, and approvals
-
-Model helpers map to current Gateway methods:
-
-```typescript
-await oc.models.list();
-await oc.models.status({ probe: false }); // calls models.authStatus
-```
-
-Tool helpers expose the Gateway catalog, effective tool view, and direct
-Gateway tool invocation. `oc.tools.invoke()` returns a typed envelope instead
-of throwing for policy or approval refusals.
-
-```typescript
-await oc.tools.list();
-await oc.tools.effective({ sessionKey: "main" });
-await oc.tools.invoke("tool-name", {
-  args: { input: "value" },
-  sessionKey: "main",
-  confirm: false,
-  idempotencyKey: "tool-call-1",
-});
-```
-
-Artifact helpers expose the Gateway artifact projection for session, run, or
-task context. Each call requires one explicit `sessionKey`, `runId`, or
-`taskId` scope:
-
-```typescript
-const { artifacts } = await oc.artifacts.list({ sessionKey: "main" });
-const first = artifacts[0];
-
-if (first) {
-  const { artifact } = await oc.artifacts.get(first.id, { sessionKey: "main" });
-  const download = await oc.artifacts.download(artifact.id, { sessionKey: "main" });
-  console.log(download.encoding, download.url);
-}
-```
-
-Approval helpers use the exec approval RPCs:
-
-```typescript
-const approvals = await oc.approvals.list();
-await oc.approvals.respond("approval-id", { decision: "approve" });
-```
-
-Task helpers use the durable task ledger that also backs `openclaw tasks`:
-
-```typescript
-const tasks = await oc.tasks.list({ status: "running", sessionKey: "agent:main:main" });
-const task = await oc.tasks.get(tasks.tasks[0].id);
-await oc.tasks.cancel(task.task.id, { reason: "user stopped task" });
-```
-
-Environment helpers expose read-only Gateway-local and node discovery:
-
-```typescript
-const { environments } = await oc.environments.list();
-await oc.environments.status(environments[0].id);
-```
-
-## Explicitly unsupported today
-
-The SDK includes names for the product model we want, but it does not silently
-pretend Gateway RPCs exist. These calls currently throw explicit unsupported
-errors:
-
-```typescript
-await oc.environments.create({});
-await oc.environments.delete("environment-id");
-```
-
-Per-run `workspace`, `runtime`, `environment`, and `approvals` fields are typed
-as future shape, but the current Gateway does not support those overrides on
-the `agent` RPC. If callers pass them, the SDK throws before submitting the run
-so work does not accidentally execute with default workspace, runtime,
-environment, or approval behavior.
-
-## App SDK vs Plugin SDK
-
-Use the App SDK when code lives outside OpenClaw:
-
-- Node scripts that start or observe agent runs
-- CI jobs that call a Gateway
-- dashboards and admin panels
-- IDE extensions
-- external bridges that do not need to become channel plugins
-- integration tests with fake or real Gateway transports
-
-Use the Plugin SDK when code runs inside OpenClaw:
-
-- provider plugins
-- channel plugins
-- tool or lifecycle hooks
-- agent harness plugins
-- trusted runtime helpers
-
-App SDK code should import from `@openclaw/sdk`. Plugin code should import from
-documented `openclaw/plugin-sdk/*` subpaths. Do not mix the two contracts.
-
-## Related
-
-- [OpenClaw App SDK API design](/reference/openclaw-sdk-api-design)
-- [Gateway RPC reference](/reference/rpc)
-- [Agent loop](/concepts/agent-loop)
-- [Agent runtimes](/concepts/agent-runtimes)
-- [Sessions](/concepts/session)
-- [Background tasks](/automation/tasks)
-- [ACP agents](/tools/acp-agents)
-- [Plugin SDK overview](/plugins/sdk-overview)
-
-
-
 # Section: concepts/parallel-specialist-lanes.md
 
 ---
@@ -48073,10 +47753,11 @@ See [Date & Time](/date-time) for full behavior details.
 ## Skills
 
 When eligible skills exist, OpenClaw injects a compact **available skills list**
-(`formatSkillsForPrompt`) that includes the **file path** for each skill. The
-prompt instructs the model to use `read` to load the SKILL.md at the listed
-location (workspace, managed, or bundled). If no skills are eligible, the
-Skills section is omitted.
+(`formatSkillsForPrompt`) that includes the **file path** and content-derived
+`<version>` marker for each skill. The prompt instructs the model to use `read`
+to load the SKILL.md at the listed location (workspace, managed, or bundled),
+and to re-read a skill when its `<version>` differs from a previous turn. If no
+skills are eligible, the Skills section is omitted.
 
 Native Codex turns receive this list as turn-scoped collaboration developer
 instructions instead of per-turn user input, except lightweight cron turns that
@@ -48101,6 +47782,7 @@ that guidance directly in every tool description.
     <name>...</name>
     <description>...</description>
     <location>...</location>
+    <version>sha256:...</version>
   </skill>
 </available_skills>
 ```
@@ -52785,12 +52467,12 @@ sidebarTitle: "Tools and custom providers"
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                        |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                           |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
-| `full`      | No restriction (same as unset)                                                                                                  |
+| Profile     | Includes                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                                             |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `skill_workshop`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
+| `full`      | No restriction (same as unset)                                                                                                                    |
 
 ### Tool groups
 
@@ -56330,7 +56012,8 @@ For tooling that writes config over the gateway API, prefer this flow:
   summaries)
 - `config.get` to fetch the current snapshot plus `hash`
 - `config.patch` for partial updates (JSON merge patch: objects merge, `null`
-  deletes, arrays replace)
+  deletes, arrays replace when explicitly confirmed with `replacePaths` if
+  entries would be removed)
 - `config.apply` only when you intend to replace the entire config
 - `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
@@ -56361,6 +56044,14 @@ openclaw gateway call config.patch --params '{
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods when a
 config already exists.
+
+`config.patch` also accepts `replacePaths`, an array of config paths whose array
+replacement is intentional. If a patch would replace or delete an existing array
+with fewer entries, the Gateway rejects the write unless that exact path appears
+in `replacePaths`; nested arrays under array entries use `[]`, such as
+`agents.list[].skills`. This prevents truncated `config.get` snapshots from
+silently clobbering routing or allowlist arrays. Use `config.apply` when you
+intend to replace the full config.
 
 ## Environment variables
 
@@ -57424,6 +57115,97 @@ That stages grounded durable candidates into the short-term dreaming store while
 
 - [Gateway runbook](/gateway)
 - [Gateway troubleshooting](/gateway/troubleshooting)
+
+
+
+# Section: gateway/external-apps.md
+
+---
+summary: "Current integration path for external apps, scripts, dashboards, CI jobs, and IDE extensions"
+title: "Gateway integrations for external apps"
+sidebarTitle: "External apps"
+read_when:
+  - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
+  - You are choosing between Gateway RPC and the Plugin SDK
+  - You are integrating with Gateway agent runs, sessions, events, approvals, models, or tools
+---
+
+External apps should talk to OpenClaw through the Gateway protocol today. Use
+Gateway WebSocket and RPC methods when a script, dashboard, CI job, IDE
+extension, or another process wants to start agent runs, stream events, wait for
+results, cancel work, or inspect Gateway resources.
+
+<Warning>
+  There is no public npm client package yet. Do not add OpenClaw client package
+  names as application dependencies until release notes announce a published
+  package and this page includes install instructions.
+</Warning>
+
+<Note>
+  This page is for code outside the OpenClaw process. Plugin code that runs
+  inside OpenClaw should use documented `openclaw/plugin-sdk/*` subpaths instead.
+</Note>
+
+## What is available today
+
+| Surface                                 | Status | Use it for                                                                                    |
+| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
+| [Gateway protocol](/gateway/protocol)   | Ready  | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc) | Ready  | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)          | Ready  | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)      | Ready  | Sending messages or channel actions from scripts.                                             |
+
+The source tree contains internal package work for a future client library, but
+that is not a public install surface. Treat it as preview implementation detail
+until the packages are published and versioned.
+
+## Recommended path
+
+1. Run or discover a Gateway.
+2. Connect over the [Gateway protocol](/gateway/protocol).
+3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+4. Pin the OpenClaw version you test against.
+5. Recheck the RPC reference when upgrading OpenClaw.
+
+For agent runs, start with the `agent` RPC and pair it with `agent.wait` when
+you need a terminal result. For durable conversation state, use the `sessions.*`
+methods. For UI integrations, subscribe to Gateway events and render only the
+event families your app understands.
+
+## App code vs plugin code
+
+Use Gateway RPC when code lives outside OpenClaw:
+
+- Node scripts that start or observe agent runs
+- CI jobs that call a Gateway
+- dashboards and admin panels
+- IDE extensions
+- external bridges that do not need to become channel plugins
+- integration tests with fake or real Gateway transports
+
+Use the Plugin SDK when code runs inside OpenClaw:
+
+- provider plugins
+- channel plugins
+- tool or lifecycle hooks
+- agent harness plugins
+- trusted runtime helpers
+
+External apps should not import `openclaw/plugin-sdk/*`; those subpaths are for
+plugins loaded by OpenClaw.
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Gateway RPC reference](/reference/rpc)
+- [CLI agent command](/cli/agent)
+- [CLI message command](/cli/message)
+- [Agent loop](/concepts/agent-loop)
+- [Agent runtimes](/concepts/agent-runtimes)
+- [Sessions](/concepts/session)
+- [Background tasks](/automation/tasks)
+- [ACP agents](/tools/acp-agents)
+- [Plugin SDK overview](/plugins/sdk-overview)
 
 
 
@@ -61863,7 +61645,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
     - `config.get` returns the current config snapshot and hash.
     - `config.set` writes a validated config payload.
-    - `config.patch` merges a partial config update.
+    - `config.patch` merges a partial config update. Destructive array
+      replacement requires the affected path in `replacePaths`; nested arrays
+      under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
@@ -84268,7 +84052,7 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 ### 8) Voice + expanded Android command surface
 
 - Voice tab: Android has two explicit capture modes. **Mic** is a manual Voice-tab session that sends each pause as a chat turn and stops when the app leaves the foreground or the user leaves the Voice tab. **Talk** is continuous Talk Mode and keeps listening until toggled off or the node disconnects.
-- Talk Mode promotes the existing foreground service from `dataSync` to `dataSync|microphone` before capture starts, then demotes it when Talk Mode stops. Android 14+ requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
+- Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Voice wake remains disabled in the Android UX/runtime.
@@ -90681,17 +90465,16 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.135.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.137.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
-| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id        | Default | Hidden | Input modalities | Reasoning efforts        |
+| --------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`       | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`       | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`  | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex` | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`       | No      | No     | text, image      | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.
@@ -95299,6 +95082,69 @@ whether the key was present.
 
 
 
+# Section: plugins/llama-cpp.md
+
+---
+summary: "Install the official llama.cpp provider for local GGUF memory embeddings"
+read_when:
+  - You want memory search embeddings from a local GGUF model
+  - You are configuring memorySearch.provider = "local"
+  - You need the OpenClaw plugin that owns the node-llama-cpp runtime
+title: "llama.cpp Provider"
+sidebarTitle: "llama.cpp Provider"
+---
+
+`llama-cpp` is the official external provider plugin for local GGUF embeddings.
+It owns the `node-llama-cpp` runtime dependency used by
+`memorySearch.provider: "local"`.
+
+Install it before using local memory embeddings:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
+
+The main `openclaw` npm package does not include `node-llama-cpp`. Keeping the
+native dependency in this plugin prevents normal OpenClaw npm updates from
+deleting a manually installed runtime inside the OpenClaw package directory.
+
+## Configuration
+
+Set the memory search provider to `local`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        local: {
+          modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    },
+  },
+}
+```
+
+The default model is `embeddinggemma-300m-qat-Q8_0.gguf`. You can also point
+`local.modelPath` at a local `.gguf` file.
+
+## Native Runtime
+
+Use Node 24 for the smoothest native install path. Source checkouts using pnpm
+may need to approve and rebuild the native dependency:
+
+```bash
+pnpm approve-builds
+pnpm rebuild node-llama-cpp
+```
+
+For lower-friction local embeddings, use a local service provider such as
+Ollama or LM Studio instead.
+
+
+
 # Section: plugins/manage-plugins.md
 
 ---
@@ -98709,7 +98555,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - included in OpenClaw. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
-- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds memory embedding provider support. Adds agent-callable tools.
+- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds file-backed memory search tools.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
@@ -98807,7 +98653,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-34 plugins
+35 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -98838,6 +98684,8 @@ Each entry lists the package, distribution route, and description.
 - **[google-meet](/plugins/reference/google-meet)** (`@openclaw/google-meet`) - npm; ClawHub. OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.
 
 - **[googlechat](/plugins/reference/googlechat)** (`@openclaw/googlechat`) - npm; ClawHub. OpenClaw Google Chat channel plugin for spaces and direct messages.
+
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. OpenClaw llama.cpp embedding provider plugin.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
 
@@ -99106,7 +98954,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 126
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 127
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -101982,9 +101830,8 @@ reference for **what to import** and **what you can register**.
 <Note>
   This page is for plugin authors using `openclaw/plugin-sdk/*` inside
   OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
-  that want to run agents through the Gateway, use the
-  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
-  instead.
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
 </Note>
 
 <Tip>
@@ -109128,6 +108975,34 @@ providers: litellm; contracts: imageGenerationProviders
 
 
 
+# Section: plugins/reference/llama-cpp.md
+
+---
+summary: "OpenClaw llama.cpp embedding provider plugin."
+read_when:
+  - You are installing, configuring, or auditing the llama-cpp plugin
+title: "llama-cpp plugin"
+---
+
+# llama-cpp plugin
+
+OpenClaw llama.cpp embedding provider plugin.
+
+## Distribution
+
+- Package: `@openclaw/llama-cpp-provider`
+- Install route: npm; ClawHub
+
+## Surface
+
+contracts: embeddingProviders
+
+## Related docs
+
+- [llama.cpp Provider](/plugins/llama-cpp)
+
+
+
 # Section: plugins/reference/llm-task.md
 
 ---
@@ -109263,7 +109138,7 @@ channels: mattermost
 # Section: plugins/reference/memory-core.md
 
 ---
-summary: "Adds memory embedding provider support. Adds agent-callable tools."
+summary: "Adds file-backed memory search tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
 title: "Memory Core plugin"
@@ -109271,7 +109146,7 @@ title: "Memory Core plugin"
 
 # Memory Core plugin
 
-Adds memory embedding provider support. Adds agent-callable tools.
+Adds file-backed memory search tools.
 
 ## Distribution
 
@@ -109280,7 +109155,7 @@ Adds memory embedding provider support. Adds agent-callable tools.
 
 ## Surface
 
-contracts: memoryEmbeddingProviders, tools
+contracts: tools
 
 
 
@@ -109343,7 +109218,7 @@ contracts: tools; skills
 # Section: plugins/reference/microsoft-foundry.md
 
 ---
-summary: "Adds Microsoft Foundry model provider support to OpenClaw."
+summary: "Use Microsoft Foundry chat and MAI image deployments from OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the microsoft-foundry plugin
 title: "Microsoft Foundry plugin"
@@ -109351,7 +109226,9 @@ title: "Microsoft Foundry plugin"
 
 # Microsoft Foundry plugin
 
-Adds Microsoft Foundry model provider support to OpenClaw.
+Use Microsoft Foundry deployments from OpenClaw with API-key auth or Microsoft
+Entra ID through the Azure CLI. The plugin owns Microsoft Foundry model
+discovery, runtime token refresh, and MAI image generation.
 
 ## Distribution
 
@@ -109360,7 +109237,93 @@ Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Surface
 
-providers: microsoft-foundry
+- Model provider: `microsoft-foundry`
+- Image-generation provider: `microsoft-foundry`
+
+## Requirements
+
+- A Microsoft Foundry or Azure AI Foundry resource with deployments.
+- API-key auth through `AZURE_OPENAI_API_KEY` or a configured provider API key.
+- For Entra ID auth, install the Azure CLI and run `az login` before
+  onboarding. OpenClaw refreshes Microsoft Foundry runtime tokens through
+  `az account get-access-token`.
+
+## Chat models
+
+Microsoft Foundry chat deployments use the provider model ref
+`microsoft-foundry/<deployment-name>`. Onboarding discovers Foundry resources
+and deployments with the Azure CLI, then writes the selected deployment name to
+the model config.
+
+OpenClaw uses the Foundry `/openai/v1` endpoint for supported OpenAI-compatible
+chat APIs:
+
+- GPT, `o*`, `computer-use-preview`, and DeepSeek-V4 model families default to
+  `openai-responses`.
+- MAI-DS-R1 and other chat-completion deployments use `openai-completions`
+  unless an explicit supported API is configured.
+- MAI-DS-R1 is recorded as reasoning-capable through reasoning content, not
+  through `reasoning_effort`. Its context and output token metadata are
+  163,840 tokens.
+
+Anthropic Claude deployments in Microsoft Foundry use the Anthropic Messages
+API shape, not the OpenAI-compatible `/openai/v1` shape. Configure those as a
+custom `anthropic-messages` provider until the Microsoft Foundry plugin grows a
+native Anthropic runtime.
+
+## MAI image generation
+
+The plugin registers `microsoft-foundry` for `image_generate` with the current
+Microsoft AI image models:
+
+- `MAI-Image-2.5-Flash`
+- `MAI-Image-2.5`
+- `MAI-Image-2e`
+- `MAI-Image-2`
+
+Use a deployed MAI image deployment name as the model ref. The provider does
+not declare a default image model because the MAI API requires your deployment
+name in the request `model` field:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "microsoft-foundry/<deployment-name>",
+        timeoutMs: 600000,
+      },
+    },
+  },
+}
+```
+
+Prompt-only generation calls Microsoft Foundry's MAI generations endpoint:
+`/mai/v1/images/generations`. Reference-image edits call
+`/mai/v1/images/edits` and are limited to `MAI-Image-2.5-Flash` and
+`MAI-Image-2.5` deployments.
+
+Prompt-only generation can use a custom deployment name with just the Foundry
+endpoint configured. For image edits with a custom deployment name, select the
+deployment through onboarding or include model metadata so OpenClaw can verify
+that the deployment is backed by `MAI-Image-2.5-Flash` or `MAI-Image-2.5`.
+
+MAI image constraints:
+
+- Output: one PNG image per request.
+- Size: default `1024x1024`; both width and height must be at least 768 px.
+- Total pixels: width × height must be at most 1,048,576.
+- Edits: one PNG or JPEG input image.
+- Unsupported shared hints such as `aspectRatio`, `resolution`, `quality`,
+  `background`, and non-PNG `outputFormat` are not sent to Microsoft Foundry.
+
+## Troubleshooting
+
+- `az: command not found`: install the Azure CLI or use API-key auth.
+- `Microsoft Foundry endpoint missing for MAI image generation`: select a
+  Foundry deployment through onboarding or add `models.providers.microsoft-foundry.baseUrl`.
+- `supports MAI image deployments only`: the selected image model points at a
+  non-MAI deployment. Use a deployed MAI image model for `image_generate`.
 
 
 
@@ -112918,7 +112881,7 @@ The proxy:
 
 <Steps>
   <Step title="Install the proxy">
-    Requires Node.js 20+ and Claude Code CLI.
+    Requires Node.js 22+ and Claude Code CLI.
 
     ```bash
     npm install -g claude-max-api-proxy
@@ -120347,21 +120310,19 @@ explicit runtime config.
   Control UI Talk with `talk.realtime.provider: "openai"`) goes through the
   public **OpenAI Platform Realtime API**, which is billed against OpenAI
   Platform credits rather than Codex/ChatGPT subscription quota. An account
-  with healthy OpenAI OAuth that runs Codex-backed chat models without
-  issue can still hit `insufficient_quota` / "You exceeded your current
-  quota" on the first Realtime turn if the same OpenAI organization has no
-  Platform billing set up.
+  with healthy OpenAI OAuth that runs Codex-backed chat models without issue
+  still needs an OpenAI API-key auth profile or a Platform API key with funded
+  Platform billing for Realtime voice.
 
 Fix: top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
-for the organization backing your realtime credentials. Realtime accepts
-either a Platform `OPENAI_API_KEY` (configured via `talk.realtime.providers.openai.apiKey`
-for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
-for Voice Call) or an `openai` OAuth profile whose underlying
-organization has Platform billing — both routes mint Realtime client secrets
-through the Platform API, so either way the org needs funded Platform
-credits. For chat turns you can still use Codex-backed `openai/*` models against the same
-OpenClaw install; Realtime is the one route that needs Platform billing.
+for the organization backing your realtime credentials. Realtime voice accepts
+the `openai` API-key auth profile created by `openclaw onboard --auth-choice openai-api-key`,
+a Platform `OPENAI_API_KEY` configured via `talk.realtime.providers.openai.apiKey`
+for Control UI Talk, `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
+for Voice Call, or the `OPENAI_API_KEY` environment variable. OpenAI OAuth
+profiles can still run Codex-backed `openai/*` chat models in the same
+OpenClaw install, but they do not configure Realtime voice.
 </Note>
 
 ## Memory embeddings
@@ -120892,7 +120853,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     ```
 
     <Note>
-    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS is still configured through an API key; for OAuth-only live talk-back, use the Realtime voice path instead of agent-mode STT -> TTS speech.
+    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS and Realtime voice are both configured through an OpenAI Platform API key; OAuth-only installs can still use Codex-backed chat models, but not OpenAI live talk-back.
     </Note>
 
   </Accordion>
@@ -120963,7 +120924,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | Prefix padding | `...openai.prefixPaddingMs` | `300` |
     | Reasoning effort | `...openai.reasoningEffort` | (unset) |
-    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth | Browser Talk and non-Azure backend bridges can use OpenAI OAuth |
+    | Auth | `openai` API-key auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OpenAI Platform API key required; OpenAI OAuth does not configure Realtime voice |
 
     Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -120985,10 +120946,10 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     <Note>
     Control UI Talk uses OpenAI browser realtime sessions with a Gateway-minted
     ephemeral client secret and a direct browser WebRTC SDP exchange against the
-    OpenAI Realtime API. When no direct OpenAI API key is configured, the
-    Gateway can mint that client secret with the selected `openai` OAuth
-    profile. Gateway relay and Voice Call backend realtime WebSocket bridges use
-    the same OAuth fallback for native OpenAI endpoints. Maintainer live
+    OpenAI Realtime API. The Gateway mints that client secret with the selected
+    `openai` API-key auth profile or configured OpenAI Platform API key. Gateway
+    relay and Voice Call backend realtime WebSocket bridges use the same
+    API-key-only auth path for native OpenAI endpoints. Maintainer live
     verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser
@@ -129683,13 +129644,15 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
   - `custom`: exact `docker_lanes` selection for a focused rerun
-- Run the manual `CI` workflow directly when you only need full normal CI
-  coverage for the release candidate. Manual CI dispatches bypass changed
+- Run the manual `CI` workflow directly when you only need deterministic normal
+  CI coverage for the release candidate. Manual CI dispatches bypass changed
   scoping and force the Linux Node shards, bundled-plugin shards, plugin and
   channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`,
-  built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-  Android, and Control UI i18n lanes.
-  Example: `gh workflow run ci.yml --ref release/YYYY.M.PATCH`
+  built-artifact smoke checks, docs checks, Python skills, Windows, macOS, and
+  Control UI i18n lanes. Standalone manual CI runs Android only when dispatched
+  with `include_android=true`; `Full Release Validation` passes that input for
+  its CI child.
+  Example with Android: `gh workflow run ci.yml --ref release/YYYY.M.PATCH -f include_android=true`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies trace, metric, and log
   export plus bounded trace attributes and content/identifier redaction without
@@ -129866,9 +129829,10 @@ dispatches standalone package Telegram E2E when `release_profile=full` with
 `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full run is only acceptable when the
-`Full Release Validation`
-summary shows `normal_ci` and `release_checks` as successful. In full/all mode,
+package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
+only acceptable when the `Full Release Validation` summary shows `normal_ci`,
+`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
+intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
 the `npm_telegram` child must also be successful; outside full/all it is skipped
 unless a published `release_package_spec` or `npm_telegram_package_spec` was
 provided. The final
@@ -129975,7 +129939,9 @@ bypasses changed scoping and forces the normal test graph for the release
 candidate: Linux Node shards, bundled-plugin shards, plugin and channel contract
 shards, Node 22 compatibility, `check-*`, `check-additional-*`,
 built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-Android, and Control UI i18n.
+and Control UI i18n. Android is included when `Full Release Validation` runs the
+box because the umbrella passes `include_android=true`; standalone manual CI
+requires `include_android=true` for Android coverage.
 
 Use this box to answer "did the source tree pass the full normal test suite?"
 It is not the same as release-path product validation. Evidence to keep:
@@ -129987,10 +129953,13 @@ It is not the same as release-path product validation. Evidence to keep:
   a run needs performance analysis
 
 Run manual CI directly only when the release needs deterministic normal CI but
-not the Docker, QA Lab, live, cross-OS, or package boxes:
+not the Docker, QA Lab, live, cross-OS, or package boxes. Use the first command
+for non-Android direct CI. Add `include_android=true` when direct
+release-candidate CI must cover Android:
 
 ```bash
 gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH
+gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH -f include_android=true
 ```
 
 ### Docker
@@ -132374,13 +132343,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     ```
 
   </Accordion>
-  <Accordion title="Local (GGUF + node-llama-cpp)">
+  <Accordion title="Local (GGUF + llama.cpp)">
     | Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
     | --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
     | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
     | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
+    Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
     Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
@@ -132727,401 +132697,6 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - [Configuration reference](/gateway/configuration-reference)
 - [Memory overview](/concepts/memory)
 - [Memory search](/concepts/memory-search)
-
-
-
-# Section: reference/openclaw-sdk-api-design.md
-
----
-summary: "Reference design for the public OpenClaw App SDK API, event taxonomy, artifacts, approvals, and package structure"
-title: "OpenClaw App SDK API design"
-sidebarTitle: "App SDK API design"
-read_when:
-  - You are implementing the proposed public OpenClaw app SDK
-  - You need the draft namespace, event, result, artifact, approval, or security contract for the app SDK
-  - You are comparing Gateway protocol resources with the high-level OpenClaw App SDK wrapper
----
-
-This page is the detailed API reference design for the public
-[OpenClaw App SDK](/concepts/openclaw-sdk). It is intentionally separate from
-the [Plugin SDK](/plugins/sdk-overview).
-
-<Note>
-  `@openclaw/sdk` is the external app/client package for talking to the
-  Gateway. `openclaw/plugin-sdk/*` is the in-process plugin authoring contract.
-  Do not import Plugin SDK subpaths from apps that only need to run agents.
-</Note>
-
-The public app SDK should be built in two layers:
-
-1. A low-level generated Gateway client.
-2. A high-level ergonomic wrapper with `OpenClaw`, `Agent`, `Session`, `Run`,
-   `Task`, `Artifact`, `Approval`, and `Environment` objects.
-
-## Namespace design
-
-The low-level namespaces should closely follow Gateway resources:
-
-```typescript
-oc.agents.list();
-oc.agents.get("main");
-oc.agents.create(...);
-oc.agents.update(...);
-
-oc.sessions.list();
-oc.sessions.create(...);
-oc.sessions.resolve(...);
-oc.sessions.send(...);
-oc.sessions.messages(...);
-oc.sessions.fork(...);
-oc.sessions.compact(...);
-oc.sessions.abort(...);
-
-oc.runs.create(...);
-oc.runs.get(runId);
-oc.runs.events(runId, { after });
-oc.runs.wait(runId);
-oc.runs.cancel(runId);
-
-oc.tasks.list({ status: "running" });
-oc.tasks.get(taskId);
-oc.tasks.cancel(taskId, { reason });
-oc.tasks.events(taskId, { after }); // future API
-
-oc.models.list();
-oc.models.status(); // Gateway models.authStatus
-
-oc.tools.list();
-oc.tools.invoke("tool-name", { sessionKey, idempotencyKey });
-
-oc.artifacts.list({ runId });
-oc.artifacts.get(artifactId, { runId });
-oc.artifacts.download(artifactId, { runId });
-
-oc.approvals.list();
-oc.approvals.respond(approvalId, ...);
-
-oc.environments.list();
-oc.environments.create(...); // future API: current SDK throws unsupported
-oc.environments.status(environmentId);
-oc.environments.delete(environmentId); // future API: current SDK throws unsupported
-```
-
-High-level wrappers should return objects that make common flows pleasant:
-
-```typescript
-const run = await agent.run(inputOrParams);
-await run.cancel();
-await run.wait();
-
-for await (const event of run.events()) {
-  // normalized event stream
-}
-
-const artifacts = await run.artifacts.list();
-const session = await run.session();
-```
-
-## Event contract
-
-The public SDK should expose versioned, replayable, normalized events.
-
-```typescript
-type OpenClawEvent = {
-  version: 1;
-  id: string;
-  ts: number;
-  type: OpenClawEventType;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  taskId?: string;
-  agentId?: string;
-  data: unknown;
-  raw?: unknown;
-};
-```
-
-`id` is a replay cursor. Consumers should be able to reconnect with
-`events({ after: id })` and receive missed events when retention allows.
-
-Recommended normalized event families:
-
-| Event                 | Meaning                                                     |
-| --------------------- | ----------------------------------------------------------- |
-| `run.created`         | Run accepted.                                               |
-| `run.queued`          | Run is waiting for a session lane, runtime, or environment. |
-| `run.started`         | Runtime started execution.                                  |
-| `run.completed`       | Run finished successfully.                                  |
-| `run.failed`          | Run ended with an error.                                    |
-| `run.cancelled`       | Run was cancelled.                                          |
-| `run.timed_out`       | Run exceeded its timeout.                                   |
-| `assistant.delta`     | Assistant text delta.                                       |
-| `assistant.message`   | Complete assistant message or replacement.                  |
-| `thinking.delta`      | Reasoning or plan delta, when policy allows exposure.       |
-| `tool.call.started`   | Tool call began.                                            |
-| `tool.call.delta`     | Tool call streamed progress or partial output.              |
-| `tool.call.completed` | Tool call returned successfully.                            |
-| `tool.call.failed`    | Tool call failed.                                           |
-| `approval.requested`  | A run or tool needs approval.                               |
-| `approval.resolved`   | Approval was granted, denied, expired, or cancelled.        |
-| `question.requested`  | Runtime asks the user or host app for input.                |
-| `question.answered`   | Host app supplied an answer.                                |
-| `artifact.created`    | New artifact available.                                     |
-| `artifact.updated`    | Existing artifact changed.                                  |
-| `session.created`     | Session created.                                            |
-| `session.updated`     | Session metadata changed.                                   |
-| `session.compacted`   | Session compaction happened.                                |
-| `task.updated`        | Background task state changed.                              |
-| `git.branch`          | Runtime observed or changed branch state.                   |
-| `git.diff`            | Runtime produced or changed a diff.                         |
-| `git.pr`              | Runtime opened, updated, or linked a pull request.          |
-
-Runtime-native payloads should be available through `raw`, but apps should not
-have to parse `raw` for normal UI.
-
-## Result contract
-
-`Run.wait()` should return a stable result envelope:
-
-```typescript
-type RunResult = {
-  runId: string;
-  status: "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
-  sessionId?: string;
-  sessionKey?: string;
-  taskId?: string;
-  startedAt?: string | number;
-  endedAt?: string | number;
-  output?: {
-    text?: string;
-    messages?: SDKMessage[];
-  };
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    costUsd?: number;
-  };
-  artifacts?: ArtifactSummary[];
-  error?: SDKError;
-};
-```
-
-The result should be boring and stable. Timestamp values preserve the Gateway
-shape, so current lifecycle-backed runs usually report epoch millisecond
-numbers while adapters may still surface ISO strings. Rich UI, tool traces, and
-runtime-native details belong in events and artifacts.
-
-`accepted` is a non-terminal wait result: it means the Gateway wait deadline
-expired before the run produced a lifecycle end/error. It must not be treated as
-`timed_out`; `timed_out` is reserved for a run that exceeded its own runtime
-timeout.
-
-## Approvals and questions
-
-Approvals must be first-class because coding agents constantly cross safety
-boundaries.
-
-```typescript
-run.onApproval(async (request) => {
-  if (request.kind === "tool" && request.toolName === "exec") {
-    return request.approveOnce({ reason: "CI command allowed by policy" });
-  }
-
-  return request.askUser();
-});
-```
-
-Approval events should carry:
-
-- approval id
-- run id and session id
-- request kind
-- requested action summary
-- tool name or environment action
-- risk level
-- available decisions
-- expiration
-- whether the decision can be reused
-
-Questions are separate from approvals. A question asks the user or host app for
-information. An approval asks for permission to perform an action.
-
-## ToolSpace model
-
-Apps need to understand the tool surface without importing plugin internals.
-
-```typescript
-const tools = await run.toolSpace();
-
-for (const tool of tools.list()) {
-  console.log(tool.name, tool.source, tool.requiresApproval);
-}
-```
-
-The SDK should expose:
-
-- normalized tool metadata
-- source: OpenClaw, MCP, plugin, channel, runtime, or app
-- schema summary
-- approval policy
-- runtime compatibility
-- whether a tool is hidden, readonly, write capable, or host capable
-
-Tool invocation through the SDK should be explicit and scoped. Most apps should
-run agents, not call arbitrary tools directly.
-
-## Artifact model
-
-Artifacts should cover more than files.
-
-```typescript
-type ArtifactSummary = {
-  id: string;
-  runId?: string;
-  sessionId?: string;
-  type:
-    | "file"
-    | "patch"
-    | "diff"
-    | "log"
-    | "media"
-    | "screenshot"
-    | "trajectory"
-    | "pull_request"
-    | "workspace";
-  title?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  createdAt: string;
-  expiresAt?: string;
-};
-```
-
-Common examples:
-
-- file edits and generated files
-- patch bundles
-- VCS diffs
-- screenshots and media outputs
-- logs and trace bundles
-- pull request links
-- runtime trajectories
-- managed environment workspace snapshots
-
-Artifact access should support redaction, retention, and download URLs without
-assuming every artifact is a normal local file.
-
-## Security model
-
-The app SDK must be explicit about authority.
-
-Recommended token scopes:
-
-| Scope               | Allows                                              |
-| ------------------- | --------------------------------------------------- |
-| `agent.read`        | List and inspect agents.                            |
-| `agent.run`         | Start runs.                                         |
-| `session.read`      | Read session metadata and messages.                 |
-| `session.write`     | Create, send to, fork, compact, and abort sessions. |
-| `task.read`         | Read background task state.                         |
-| `task.write`        | Cancel or modify task notification policy.          |
-| `approval.respond`  | Approve or deny requests.                           |
-| `tools.invoke`      | Invoke exposed tools directly.                      |
-| `artifacts.read`    | List and download artifacts.                        |
-| `environment.write` | Create or destroy managed environments.             |
-| `admin`             | Administrative operations.                          |
-
-Defaults:
-
-- no secret forwarding by default
-- no unrestricted environment variable pass-through
-- secret references instead of secret values
-- explicit sandbox and network policy
-- explicit remote environment retention
-- approvals for host execution unless policy proves otherwise
-- raw runtime events redacted before they leave Gateway unless the caller has a
-  stronger diagnostic scope
-
-## Managed environment provider
-
-Managed agents should be implemented as environment providers.
-
-```typescript
-type EnvironmentProvider = {
-  id: string;
-  capabilities: {
-    checkout?: boolean;
-    sandbox?: boolean;
-    networkPolicy?: boolean;
-    secrets?: boolean;
-    artifacts?: boolean;
-    logs?: boolean;
-    pullRequests?: boolean;
-    longRunning?: boolean;
-  };
-};
-```
-
-The first implementation does not need to be a hosted SaaS. It can target
-existing node hosts, ephemeral workspaces, CI-style runners, or Testbox-style
-environments. The important contract is:
-
-1. prepare workspace
-2. bind safe environment and secrets
-3. start run
-4. stream events
-5. collect artifacts
-6. clean up or retain by policy
-
-Once this is stable, a hosted cloud service can implement the same provider
-contract.
-
-## Package structure
-
-Recommended packages:
-
-| Package                 | Purpose                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `@openclaw/sdk`         | Public high-level SDK and generated low-level Gateway client. |
-| `@openclaw/sdk-react`   | Optional React hooks for dashboards and app builders.         |
-| `@openclaw/sdk-testing` | Test helpers and fake Gateway server for app integrations.    |
-
-The repo already has `openclaw/plugin-sdk/*` for plugins. Keep that namespace
-separate to avoid confusing plugin authors with app developers.
-
-## Generated client strategy
-
-The low-level client should be generated from versioned Gateway protocol
-schemas, then wrapped by handwritten ergonomic classes.
-
-Layering:
-
-1. Gateway schema source of truth.
-2. Generated low-level TypeScript client.
-3. Runtime validators for external inputs and event payloads.
-4. High-level `OpenClaw`, `Agent`, `Session`, `Run`, `Task`, and `Artifact`
-   wrappers.
-5. Cookbook examples and integration tests.
-
-Benefits:
-
-- protocol drift is visible
-- tests can compare generated methods with Gateway exports
-- App SDK stays independent from Plugin SDK internals
-- low-level consumers still have full protocol access
-- high-level consumers get the small product API
-
-## Related
-
-- [OpenClaw App SDK](/concepts/openclaw-sdk)
-- [Gateway RPC reference](/reference/rpc)
-- [Agent loop](/concepts/agent-loop)
-- [Agent runtimes](/concepts/agent-runtimes)
-- [Background tasks](/automation/tasks)
-- [ACP agents](/tools/acp-agents)
-- [Plugin SDK overview](/plugins/sdk-overview)
 
 
 
@@ -142783,6 +142358,7 @@ openclaw browser dialog --dismiss --dialog-id d1
 openclaw browser wait --text "Done"
 openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref 7
+openclaw browser evaluate --fn 'const title = document.title; return title;'
 openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 openclaw browser highlight e12
 openclaw browser trace start
@@ -142954,8 +142530,10 @@ These are useful for "make the site behave like X" workflows:
 - `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
   execute arbitrary JavaScript in the page context. Prompt injection can steer
   this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
-- Use `openclaw browser evaluate --timeout-ms <ms>` when the page-side function
-  may need longer than the default evaluate timeout.
+- `openclaw browser evaluate --fn` accepts a function source, an expression, or
+  a statement body. Statement bodies are wrapped as async functions, so use
+  `return` for the value you want back. Use `--timeout-ms <ms>` when the
+  page-side function may need longer than the default evaluate timeout.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
@@ -147827,7 +147405,7 @@ uses the same `webSearch.baseUrl` fallback unless
 # Section: tools/image-generation.md
 
 ---
-summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
+summary: "Generate and edit images via image_generate across OpenAI, Google, fal, Microsoft Foundry, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
 read_when:
   - Generating or editing images via the agent
   - Configuring image-generation providers and models
@@ -147911,6 +147489,7 @@ internal image endpoints remain blocked by default.
 | fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
@@ -147925,18 +147504,19 @@ backend emits it.
 
 ## Supported providers
 
-| Provider   | Default model                           | Edit support                       | Auth                                                  |
-| ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| ComfyUI    | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| DeepInfra  | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
-| fal        | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
-| MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
-| OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
-| Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
-| xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider          | Default model                           | Edit support                       | Auth                                                  |
+| ----------------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
+| fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
+| Google            | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
+| Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
+| MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| OpenAI            | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
+| OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
+| xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -147953,13 +147533,13 @@ current session:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                                              | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                                              | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                                              | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                                              | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                                              | ✓              | -                 | ✓                     | -              | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
 
 ## Tool parameters
 
@@ -148077,10 +147657,10 @@ from each attempt.
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default, and configured defaults override plugin-authored provider
     defaults. Google and OpenRouter hosted image providers use 180 second
-    defaults; xAI and Azure OpenAI image generation use 600 seconds. Codex
-    dynamic-tool calls use a 120 second `image_generate` bridge default and
-    honor the same timeout budget when configured, bounded by OpenClaw's 600000
-    ms dynamic-tool bridge maximum.
+    defaults; Microsoft Foundry MAI, xAI, and Azure OpenAI image generation use
+    600 seconds. Codex dynamic-tool calls use a 120 second `image_generate`
+    bridge default and honor the same timeout budget when configured, bounded by
+    OpenClaw's 600000 ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,
@@ -148090,9 +147670,10 @@ from each attempt.
 
 ### Image editing
 
-OpenAI, OpenRouter, Google, DeepInfra, fal, MiniMax, ComfyUI, and xAI support editing
-reference images. Krea 2 models on fal use the same `image` / `images` fields
-as style references instead of edit inputs. Pass a reference image path or URL:
+OpenAI, OpenRouter, Google, DeepInfra, fal, Microsoft Foundry, MiniMax,
+ComfyUI, and xAI support editing reference images. Krea 2 models on fal use the
+same `image` / `images` fields as style references instead of edit inputs. Pass
+a reference image path or URL:
 
 ```text
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
@@ -148101,7 +147682,7 @@ as style references instead of edit inputs. Pass a reference image path or URL:
 OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
 `images` parameter. fal supports 1 reference image for Flux image-to-image, up
 to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
-14 for Nano Banana 2 edits. MiniMax and ComfyUI support 1.
+14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI support 1.
 
 ## Provider deep dives
 
@@ -148161,6 +147742,47 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     To route OpenAI image generation through an Azure OpenAI deployment
     instead of `api.openai.com`, see
     [Azure OpenAI endpoints](/providers/openai#azure-openai-endpoints).
+
+  </Accordion>
+  <Accordion title="Microsoft Foundry MAI image models">
+    Microsoft Foundry image generation uses deployed MAI image deployment names
+    under the `microsoft-foundry/` provider prefix. There is no provider-level
+    default model because the MAI API expects your deployment name in the
+    `model` field:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "microsoft-foundry/<deployment-name>",
+            timeoutMs: 600_000,
+          },
+        },
+      },
+    }
+    ```
+
+    The provider uses Microsoft Foundry's MAI API, not the OpenAI Images API:
+
+    - Generation endpoint: `/mai/v1/images/generations`
+    - Edit endpoint: `/mai/v1/images/edits`
+    - Auth: `AZURE_OPENAI_API_KEY` / provider API key, or Entra ID through `az login`
+    - Output: one PNG image
+    - Size: default `1024x1024`; width and height must each be at least 768 px,
+      and total pixels must be at most 1,048,576
+    - Edits: one PNG or JPEG reference image, supported only by
+      `MAI-Image-2.5-Flash` and `MAI-Image-2.5` deployments
+
+    Prompt-only generation can use a custom deployment name with just the
+    Foundry endpoint configured. Edits with custom deployment names need
+    onboarding/model metadata so OpenClaw can verify that the deployment is
+    backed by `MAI-Image-2.5-Flash` or `MAI-Image-2.5`.
+
+    Current MAI image models are `MAI-Image-2.5-Flash`, `MAI-Image-2.5`,
+    `MAI-Image-2e`, and `MAI-Image-2`. See
+    [Microsoft Foundry plugin](/plugins/reference/microsoft-foundry) for setup
+    and chat-model behavior.
 
   </Accordion>
   <Accordion title="OpenRouter image models">
@@ -148313,6 +147935,7 @@ as ignored for them.
 - [ComfyUI](/providers/comfy) - local ComfyUI and Comfy Cloud workflow setup
 - [fal](/providers/fal) - fal image and video provider setup
 - [Google (Gemini)](/providers/google) - Gemini image provider setup
+- [Microsoft Foundry plugin](/plugins/reference/microsoft-foundry) - Microsoft Foundry chat and MAI image setup
 - [MiniMax](/providers/minimax) - MiniMax image provider setup
 - [OpenAI](/providers/openai) - OpenAI Images provider setup
 - [Vydra](/providers/vydra) - Vydra image, video, and speech setup
@@ -149340,30 +148963,31 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 
 ## Provider capability matrix
 
-| Provider    | Image | Video | Music | TTS | STT | Realtime voice | Media understanding |
-| ----------- | :---: | :---: | :---: | :-: | :-: | :------------: | :-----------------: |
-| Alibaba     |       |   ✓   |       |     |     |                |                     |
-| BytePlus    |       |   ✓   |       |     |     |                |                     |
-| ComfyUI     |   ✓   |   ✓   |   ✓   |     |     |                |                     |
-| DeepInfra   |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
-| Deepgram    |       |       |       |     |  ✓  |       ✓        |                     |
-| ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
-| fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
-| Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
-| Gradium     |       |       |       |  ✓  |     |                |                     |
-| Local CLI   |       |       |       |  ✓  |     |                |                     |
-| Microsoft   |       |       |       |  ✓  |     |                |                     |
-| MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
-| Mistral     |       |       |       |     |  ✓  |                |                     |
-| OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
-| Qwen        |       |   ✓   |       |     |     |                |                     |
-| Runway      |       |   ✓   |       |     |     |                |                     |
-| SenseAudio  |       |       |       |     |  ✓  |                |                     |
-| Together    |       |   ✓   |       |     |     |                |                     |
-| Vydra       |   ✓   |   ✓   |       |  ✓  |     |                |                     |
-| xAI         |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
-| Xiaomi MiMo |   ✓   |       |       |  ✓  |     |                |          ✓          |
+| Provider          | Image | Video | Music | TTS | STT | Realtime voice | Media understanding |
+| ----------------- | :---: | :---: | :---: | :-: | :-: | :------------: | :-----------------: |
+| Alibaba           |       |   ✓   |       |     |     |                |                     |
+| BytePlus          |       |   ✓   |       |     |     |                |                     |
+| ComfyUI           |   ✓   |   ✓   |   ✓   |     |     |                |                     |
+| DeepInfra         |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| Deepgram          |       |       |       |     |  ✓  |       ✓        |                     |
+| ElevenLabs        |       |       |       |  ✓  |  ✓  |                |                     |
+| fal               |   ✓   |   ✓   |   ✓   |     |     |                |                     |
+| Google            |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
+| Gradium           |       |       |       |  ✓  |     |                |                     |
+| Local CLI         |       |       |       |  ✓  |     |                |                     |
+| Microsoft         |       |       |       |  ✓  |     |                |                     |
+| Microsoft Foundry |   ✓   |       |       |     |     |                |                     |
+| MiniMax           |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
+| Mistral           |       |       |       |     |  ✓  |                |                     |
+| OpenAI            |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
+| OpenRouter        |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
+| Qwen              |       |   ✓   |       |     |     |                |                     |
+| Runway            |       |   ✓   |       |     |     |                |                     |
+| SenseAudio        |       |       |       |     |  ✓  |                |                     |
+| Together          |       |   ✓   |       |     |     |                |                     |
+| Vydra             |   ✓   |   ✓   |       |  ✓  |     |                |                     |
+| xAI               |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| Xiaomi MiMo       |   ✓   |       |       |  ✓  |     |                |          ✓          |
 
 <Note>
 Media understanding uses any vision-capable or audio-capable model registered
@@ -152032,6 +151656,16 @@ Agents must use `skill_workshop` for generated skill work. They must not create
 or change proposal files through `write`, `edit`, `exec`, shell commands, or
 direct filesystem operations.
 
+<Note>
+`skill_workshop` is a built-in agent tool and is included in
+`tools.profile: "coding"`. If a stricter policy hides it, add
+`skill_workshop` to the active `tools.allow` list, or use
+`tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
+explicit `tools.allow`. Sandboxed runs do not construct the host-side
+Skill Workshop tool, so run proposal review actions from a normal host-side
+agent session or the CLI.
+</Note>
+
 ## Approval and autonomy
 
 ```json5
@@ -152110,14 +151744,15 @@ Default state directory: `~/.openclaw`.
 
 ## Troubleshooting
 
-| Problem                                        | Resolution                                                                                   |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                  |
-| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                          |
-| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                    |
-| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                            |
-| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. |
-| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                             |
+| Problem                                        | Resolution                                                                                                                                                                                                  |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                 |
+| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
+| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
+| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
+| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
+| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
+| Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
 ## Related
 
@@ -157810,7 +157445,7 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
-    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus either `talk.realtime.providers.openai.apiKey`, `OPENAI_API_KEY`, or an `openai` OAuth profile; configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. For hosted GPT realtime models, OpenClaw prefers the `openai` OAuth profile before `OPENAI_API_KEY`; an explicit OpenAI realtime `apiKey` remains the advanced override. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
+    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus an `openai` API-key auth profile, `talk.realtime.providers.openai.apiKey`, or `OPENAI_API_KEY`; OpenAI OAuth profiles do not configure Realtime voice. Configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
 
     The Chat composer includes a Talk options button next to the Talk start/stop button. The options apply to the next Talk session and can override provider, transport, model, voice, reasoning effort, VAD threshold, silence duration, and prefix padding. When an option is blank, the Gateway uses configured defaults where available or the provider default. Selecting Gateway relay forces the backend relay path; selecting WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
