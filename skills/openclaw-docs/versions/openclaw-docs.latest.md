@@ -7406,7 +7406,7 @@ Requires OpenClaw 2026.5.29 or above. Run `openclaw --version` to check. Upgrade
 Configure `dmPolicy` to control who can DM the bot:
 
 - `"pairing"` - unknown users receive a pairing code; approve via CLI
-- `"allowlist"` - only users listed in `allowFrom` can chat (default: bot owner only)
+- `"allowlist"` - only users listed in `allowFrom` can chat
 - `"open"` - allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
 - `"disabled"` - disable all DMs
 
@@ -7931,8 +7931,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
-| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `allowlist`                          |
-| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | [BotOwnerId]                         |
+| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `pairing`                            |
+| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy                                                                     | `allowlist`                          |
 | `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                  | -                                    |
 | `channels.feishu.requireMention`                         | Require @mention in groups                                                       | `true`                               |
@@ -10056,6 +10056,31 @@ imessage: suppressed stale inbound backlog account=<id> sent=<iso> recovery=<boo
 
   </Accordion>
 
+  <Accordion title="Messages send but inbound iMessages do not arrive">
+    First prove whether the message reached the local Mac. If `chat.db` does not change, OpenClaw cannot receive the message even when `imsg status --json` reports a healthy bridge.
+
+```bash
+imsg chats --limit 10 --json
+imsg watch --chat-id <chat-id> --json
+sqlite3 ~/Library/Messages/chat.db \
+  "select datetime(max(date)/1000000000 + 978307200, 'unixepoch', 'localtime'), max(ROWID) from message;"
+```
+
+    If phone-sent messages create no new rows, repair the macOS Messages and Apple Push layer before changing OpenClaw config. A one-shot service refresh is often enough:
+
+```bash
+launchctl kickstart -k system/com.apple.apsd
+launchctl kickstart -k gui/$(id -u)/com.apple.CommCenter
+launchctl kickstart -k gui/$(id -u)/com.apple.identityservicesd
+launchctl kickstart -k gui/$(id -u)/com.apple.imagent
+imsg launch
+openclaw gateway restart
+```
+
+    Send a fresh iMessage from the phone and confirm a new `chat.db` row or `imsg watch` event before debugging OpenClaw sessions. Do not run this as a periodic bridge-relaunch loop; repeated `imsg launch` plus gateway restarts during active work can interrupt deliveries and strand in-flight channel runs.
+
+  </Accordion>
+
   <Accordion title="Gateway is not running on macOS">
     The default `cliPath: "imsg"` must run on the Mac signed into Messages. On Linux or Windows, set `channels.imessage.cliPath` to a wrapper script that SSHes to that Mac and runs `imsg "$@"`.
 
@@ -10806,6 +10831,11 @@ For most users, the upgrade is in place:
 - runtime state stays under `~/.openclaw/matrix/`
 
 You do not need to rename config keys or reinstall the plugin under a new name.
+The root `openclaw` package no longer bundles Matrix runtime code or Matrix SDK
+dependencies. If `openclaw channels status` shows Matrix is configured but the
+plugin is missing after an update, run `openclaw doctor --fix` or
+`openclaw plugins install @openclaw/matrix`; do not install Matrix SDK packages
+into the root OpenClaw package.
 
 ## What the migration does automatically
 
@@ -28142,7 +28172,7 @@ Launches a local child process and communicates over stdin/stdout.
 <Warning>
 **Stdio env safety filter**
 
-OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, enable a debugger, or redirect runtime output against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
+OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, enable a debugger, or redirect runtime output against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
 
 If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
 </Warning>
@@ -30952,7 +30982,7 @@ openclaw plugins inspect <id> --runtime
 openclaw plugins inspect <id> --json
 ```
 
-Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 
@@ -33578,6 +33608,7 @@ Notes:
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - `tui` resolves configured gateway auth SecretRefs for token/password auth when possible (`env`/`file`/`exec` providers).
 - When launched from inside a configured agent workspace directory, TUI auto-selects that agent for the session key default (unless `--session` is explicitly `agent:<id>:...`).
+- To show the Gateway hostname in the footer for non-local URL-backed connections, run `openclaw config set tui.footer.showRemoteHost true`. The host label is off by default and never appears for loopback or embedded local connections.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
 - Local mode adds `/auth [provider]` inside the TUI command surface.
 - Plugin approval gates still apply in local mode. Tools that require approval prompt for a decision in the terminal; nothing is silently auto-approved because the Gateway is not involved.
@@ -33703,6 +33734,7 @@ updates happen via the package-manager flow in [Updating](/install/updating).
 ```bash
 openclaw update
 openclaw update status
+openclaw update repair
 openclaw update wizard
 openclaw update --channel beta
 openclaw update --channel dev
@@ -33759,6 +33791,36 @@ Options:
 
 - `--json`: print machine-readable status JSON.
 - `--timeout <seconds>`: timeout for checks (default is 3s).
+
+## `update repair`
+
+Rerun update finalization after the core package already changed but later
+repair work did not finish cleanly. This is the supported recovery path when
+`openclaw update` installed the new core package but post-core plugin sync,
+managed npm plugin metadata, registry refresh, or doctor repair still needs to
+converge.
+
+```bash
+openclaw update repair
+openclaw update repair --channel beta
+openclaw update repair --json
+```
+
+Options:
+
+- `--channel <stable|beta|dev>`: persist the update channel before repair and
+  run plugin convergence against that channel.
+- `--json`: print machine-readable finalization JSON.
+- `--timeout <seconds>`: timeout for repair steps (default `1800`).
+- `--yes`: skip confirmation prompts.
+- `--no-restart`: accepted for update command parity; repair never restarts the
+  Gateway.
+
+`openclaw update repair` runs `openclaw doctor --fix`, reloads the repaired
+config and install records, syncs tracked plugins for the active update channel,
+updates managed npm plugin installs, repairs missing configured plugin payloads,
+refreshes the plugin registry, and writes the converged install-record metadata.
+It does not install a new core package and does not restart the Gateway.
 
 ## `update wizard`
 
@@ -33902,9 +33964,9 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw doctor --fix` or `openclaw update`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`.
 
-After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
+After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not
 run package managers or mutate dependency trees. Package-manager `update.run`
@@ -42788,7 +42850,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
 | NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                         |
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                                   |
-| OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                          |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`                     | `openrouter/auto`                                          |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                                    |
 | Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                        |
 | [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                                  |
@@ -52117,6 +52179,7 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
       remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
       mediaMaxMb: 16,
       service: "auto",
+      sendTransport: "auto",
       region: "US",
       actions: {
         reactions: true,
@@ -52139,6 +52202,7 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
 - SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
+- `channels.imessage.sendTransport`: preferred `imsg` RPC send transport for normal outbound replies. `auto` (default) uses the IMCore bridge for existing chats when it is running, then falls back to AppleScript; `bridge` requires private-API delivery; `applescript` forces the public Messages automation path.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
 - `channels.imessage.includeAttachments` is off by default; set it to `true` before expecting inbound media in agent turns.
 - Inbound recovery after a bridge/gateway restart is automatic (GUID dedupe plus a stale-backlog age fence). Existing `channels.imessage.catchup.enabled: true` configs are still honored as a deprecated compatibility profile.
@@ -60373,6 +60437,13 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 `captureContent: true` only for broad diagnostics captures where OTLP log
 message bodies are also approved for export.
 
+`toolInputs`/`toolOutputs` content is captured for the built-in agent runtime's
+tool executions (`openclaw.content.tool_input` on completed/error spans,
+`openclaw.content.tool_output` on completed spans). External harness tool calls
+(Codex, Claude CLI) emit `tool.execution.*` spans without content payloads.
+Captured content travels on a trusted, listener-only channel and is never placed
+on the public diagnostic event bus.
+
 ## Sampling and flushing
 
 - **Traces:** `diagnostics.otel.sampleRate` (root-span only, `0.0` drops all,
@@ -62020,16 +62091,19 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
-  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
-    gateway token/password.
-- Omitting device identity has scope consequences. When a Control UI connection
-  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
-  clears self-declared scopes to an empty set for token, password, and
-  trusted-proxy auth. The connection is allowed on explicit trust paths, but
-  scope-gated methods fail. The exception is local Control UI token/password
-  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
-  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
-  break-glass scope-preservation path.
+  - direct-loopback `gateway-client` backend RPCs on the reserved internal
+    helper path.
+- Omitting device identity has scope consequences. When a device-less operator
+  connection is allowed through an explicit trust path, OpenClaw still clears
+  self-declared scopes to an empty set unless that path has a named
+  scope-preservation exception. Scope-gated methods then fail with
+  `missing scope`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
+  break-glass scope-preservation path. It does not grant scopes to arbitrary
+  custom backend or CLI-shaped WebSocket clients.
+- The reserved direct-loopback `gateway-client` backend helper path preserves
+  scopes only for internal local control-plane RPCs; custom backend IDs do not
+  receive this exception.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics
@@ -65518,24 +65592,23 @@ Use `trusted-proxy` auth mode when:
 
 When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, Control UI WebSocket sessions can connect without device pairing identity.
 
+Scope implications:
+
+- Device-less Control UI WebSocket sessions connect but receive no operator scopes by default. OpenClaw clears the requested scope list to `[]` so a session that is not bound to an approved paired device/token cannot self-declare permissions.
+- If methods fail with `missing scope` after a successful WebSocket connect, use HTTPS so the browser can generate device identity and complete pairing. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- Break-glass only: `gateway.controlUi.dangerouslyDisableDeviceAuth=true` preserves requested scopes even without device identity. This is a severe security downgrade; revert quickly. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+
+Reverse-proxy scope capping:
+
+- If your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps the session scopes to the intersection of the requested scopes and the declared scopes. This header does not grant scopes; it only narrows what the session can hold.
+
 Implications:
 
 - Pairing is no longer the primary gate for Control UI access in this mode.
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
-**Scope clearing without device identity:** Because the browser over plain HTTP
-cannot create the device identity that OpenClaw uses to bind operator scopes,
-trusted-proxy WebSocket connections that lack device identity have their
-self-declared scopes cleared to an empty set. The connection is allowed, but
-scope-gated methods (`operator.read`, `operator.write`, etc.) fail with
-`missing scope`.
-
-To preserve operator scopes on trusted-proxy WebSocket connections without
-device identity, set `gateway.controlUi.dangerouslyDisableDeviceAuth: true`.
-This is a break-glass flag (`openclaw security audit` reports it as critical).
-Use it only when the reverse proxy is the sole path to the Gateway and device
-identity cannot be established.
+Custom WebSocket clients are not Control UI sessions. `gateway.controlUi.dangerouslyDisableDeviceAuth` does not grant scopes to arbitrary `client.mode: "backend"` or CLI-shaped clients. Custom automation should use device identity/pairing, the reserved direct-local `client.id: "gateway-client"` backend helper path, or the [admin HTTP RPC plugin](/plugins/admin-http-rpc) when an HTTP request/response surface is a better fit.
 
 ## Configuration
 
@@ -65787,12 +65860,9 @@ Loopback trusted-proxy identity headers still fail closed: same-host callers are
 
 ## Operator scopes header
 
-Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes`.
+Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes` on HTTP API requests.
 
-Note: `x-openclaw-scopes` applies to HTTP endpoints only. WebSocket scopes are
-determined by the Gateway protocol handshake and device identity binding. For
-WebSocket scope behavior with trusted-proxy, see
-[Control UI pairing behavior](#control-ui-pairing-behavior).
+Note: WebSocket scopes are determined by the Gateway protocol handshake and device identity binding. On Control UI WebSocket upgrade requests, `x-openclaw-scopes` is only a cap on the negotiated session scopes, not a grant. For WebSocket scope behavior with trusted-proxy, see [Control UI pairing behavior](#control-ui-pairing-behavior).
 
 Examples:
 
@@ -65807,6 +65877,7 @@ Behavior:
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
 - Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
 - Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
+- For Control UI WebSocket sessions, `x-openclaw-scopes` is a scope cap when present on the upgrade request. An empty value yields no scopes.
 
 Practical rule: send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to be narrower than the defaults, or when a gateway-auth plugin route needs something stronger than write scope.
 
@@ -65892,17 +65963,20 @@ The audit checks for:
 
   </Accordion>
   <Accordion title="Connection succeeds but methods report missing scope">
-    The WebSocket connects, but `chat.history` or `sessions.list` fails with
-    `missing scope: operator.read`.
+    The WebSocket connects, but `chat.history`, `sessions.list`, or
+    `models.list` fails with `missing scope: operator.read`.
 
-    This is expected for trusted-proxy WebSocket connections without device
-    identity. Connections lacking device identity have their scopes cleared. The
-    browser cannot generate device identity over plain HTTP.
+    Common causes:
+
+    - Device-less Control UI session: trusted-proxy auth can admit the WebSocket connection without device identity, but OpenClaw clears scopes on device-less sessions by design.
+    - Custom backend client: `gateway.controlUi.dangerouslyDisableDeviceAuth` is Control UI scoped and does not grant scopes to arbitrary backend or CLI-shaped WebSocket clients.
+    - Overly narrow `x-openclaw-scopes`: if your proxy injects this header on the Control UI WebSocket upgrade request, the session scopes are capped to that set. An empty header value yields no scopes.
 
     Fix:
 
-    - Set `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to preserve operator scopes on trusted-proxy WebSocket connections, or
-    - Use device identity pairing so scopes are bound to the device token.
+    - For Control UI, use HTTPS so the browser can generate device identity and complete pairing.
+    - For custom automation, use device identity/pairing, the reserved direct-local `gateway-client` backend helper path, or [admin HTTP RPC](/plugins/admin-http-rpc).
+    - Use `gateway.controlUi.dangerouslyDisableDeviceAuth: true` only as a temporary Control UI break-glass path.
 
   </Accordion>
   <Accordion title="WebSocket still failing">
@@ -81853,7 +81927,7 @@ Notes:
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
+- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).
@@ -84874,7 +84948,7 @@ Notes:
 - `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
 - Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
 - Choosing "Always Allow" in the prompt adds that command to the allowlist.
-- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`) and then merged with the app's environment.
+- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`) and then merged with the app's environment.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped environment overrides are reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 
@@ -88908,6 +88982,14 @@ local proof.
     eagerly loading every plugin runtime. Set `activation.onStartup`
     intentionally. This example starts on Gateway startup.
 
+    Host-trusted plugin surfaces are also manifest-gated and require explicit
+    enablement for installed plugins. If an installed plugin registers
+    `api.registerAgentToolResultMiddleware(...)`, declare each target runtime in
+    `contracts.agentToolResultMiddleware`. If it registers
+    `api.registerTrustedToolPolicy(...)`, declare each policy id in
+    `contracts.trustedToolPolicies`. These declarations keep install-time
+    inspection and runtime registration aligned.
+
     For every manifest field, see [Plugin manifest](/plugins/manifest).
 
   </Step>
@@ -90465,7 +90547,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.137.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.139.0`. A `model/list` probe
 against that bundled app-server returned:
 
 | Model id        | Default | Hidden | Input modalities | Reasoning efforts        |
@@ -94704,12 +94786,17 @@ See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
 of optional tools or exec approvals.
 
-Bundled plugins that need host-level policy can register trusted tool policies
-with `api.registerTrustedToolPolicy(...)`. These run before ordinary
-`before_tool_call` hooks and before external plugin decisions. Use them only
+Plugins that need host-level policy can register trusted tool policies with
+`api.registerTrustedToolPolicy(...)`. These run before ordinary
+`before_tool_call` hooks and before normal hook decisions. Bundled trusted
+policies run first; installed-plugin trusted policies run next in plugin-load
+order; ordinary `before_tool_call` hooks run after them. Bundled plugins keep
+the existing trusted-policy path. Installed plugins must be explicitly enabled
+and declare every policy id in `contracts.trustedToolPolicies`; undeclared ids
+are rejected before registration. Policy ids are scoped to the registering
+plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
-reserved workflow safety. External plugins should use normal `before_tool_call`
-hooks.
+reserved workflow safety.
 
 ### Exec environment hook
 
@@ -94901,8 +94988,9 @@ Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
 `ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Inbound
 and `before_dispatch` contexts also expose reply metadata when the channel has
-visibility-filtered quoted message data: `replyToId`, `replyToBody`, and
-`replyToSender`. Prefer these first-class fields before reading legacy metadata.
+visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
+`replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these first-class
+fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
@@ -95999,6 +96087,7 @@ read without importing the plugin runtime.
 {
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"],
+    "trustedToolPolicies": ["workflow-budget"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
@@ -96019,32 +96108,41 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                        |
-| -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                                |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                      |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory. |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
-| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
-| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                      |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                             |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                            |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                         |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.  |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                   |
+| Field                            | Type       | What it means                                                                                                                        |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
+| `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
 declare `contracts.agentToolResultMiddleware` and register with
-`api.registerAgentToolResultMiddleware(...)` instead. External plugins cannot
-register tool-result middleware because the seam can rewrite high-trust tool
-output before the model sees it.
+`api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use
+the same middleware seam only when explicitly enabled and only for runtimes they
+declare in `contracts.agentToolResultMiddleware`.
+
+Installed plugins that need the host-trusted pre-tool policy tier must declare
+each registered local id in `contracts.trustedToolPolicies` and be explicitly
+enabled. Bundled plugins keep the existing trusted-policy path, but installed
+plugins with undeclared policy ids are rejected before registration. Policy ids
+are scoped to the registering plugin, so two plugins may both declare and
+register `workflow-budget`; a single plugin may not register the same local id
+twice.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the
@@ -99123,11 +99221,12 @@ Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
 
 ### Tool-result middleware
 
-Bundled plugins can attach runtime-neutral tool-result middleware through
+Bundled plugins and explicitly enabled installed plugins with matching manifest
+contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or Codex feeds
-tool output back into the model.
+seam is for async tool-result transforms that must run before OpenClaw or Codex
+feeds tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
@@ -99638,7 +99737,7 @@ Runtime send helpers also live on `channel-outbound`:
 - `sendDurableMessageBatch(...)`
 - `withDurableMessageSendContext(...)`
 - `deliverInboundReplyWithMessageSendContext(...)`
-- draft streaming/progress helpers such as `resolveChannelStreamingPreviewChunk(...)`
+- draft streaming/progress helpers such as `resolveChannelDraftStreamingChunking(...)`
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 
@@ -101120,8 +101219,10 @@ releases.
     }
     ```
 
-    External plugins cannot register tool-result middleware because it can
-    rewrite high-trust tool output before the model sees it.
+    Installed plugins can also register tool-result middleware when they are
+    explicitly enabled and declare every targeted runtime in
+    `contracts.agentToolResultMiddleware`. Undeclared installed middleware
+    registrations are rejected.
 
   </Step>
 
@@ -101929,6 +102030,16 @@ can consume this generic provider surface. The older
 `contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
 existing memory-specific providers migrate.
 
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. Batch adapters that upload JSONL request files must
+split provider jobs before their upload-size cap as well as their request-count
+cap. The provider must return one embedding per input chunk in the same order as
+`batch.chunks`; omit the flag when the provider expects file-local batches or
+cannot preserve input ordering across a larger source-wide job.
+
 ### Tools and commands
 
 Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
@@ -101993,7 +102104,7 @@ plugins.
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
 | `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                               |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
@@ -102041,7 +102152,10 @@ The contracts intentionally split authority:
 - External plugins can own session extensions, UI descriptors, commands, tool
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
-  bundled-only because they participate in host safety policy.
+  host-trusted. Bundled policies run first; installed-plugin policies require
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
@@ -102066,16 +102180,18 @@ Examples of non-Plan consumers:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
-Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["openclaw", "codex"]`. External plugins
-cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old embedded-runner-only
-extension factory registration path has been removed.
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+runtime, for example `["openclaw", "codex"]`. Installed plugins without that
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
+embedded-runner-only extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration
@@ -104837,7 +104953,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), target discovery, legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |
@@ -121601,24 +121717,52 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 
 ## Getting started
 
-<Steps>
-  <Step title="Get your API key">
-    Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-  </Step>
-  <Step title="Run onboarding">
-    ```bash
-    openclaw onboard --auth-choice openrouter-api-key
-    ```
-  </Step>
-  <Step title="(Optional) Switch to a specific model">
-    Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+<Tabs>
+  <Tab title="OAuth">
+    <Steps>
+      <Step title="Run OAuth onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-oauth
+        ```
 
-    ```bash
-    openclaw models set openrouter/<provider>/<model>
-    ```
+        OpenClaw opens OpenRouter's browser sign-in flow, exchanges the PKCE
+        code for an OpenRouter API key, and stores that key in the default
+        OpenRouter auth profile. On remote/headless hosts, OpenClaw prints the
+        sign-in URL and asks you to paste the redirect URL after signing in.
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
 
-  </Step>
-</Steps>
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+  <Tab title="API key">
+    <Steps>
+      <Step title="Get your API key">
+        Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
+      </Step>
+      <Step title="Run API-key onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-api-key
+        ```
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
 
 ## Config example
 
@@ -121774,7 +121918,20 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 
 ## Authentication and headers
 
-OpenRouter uses a Bearer token with your API key under the hood.
+OpenRouter uses a Bearer token with your API key under the hood. OpenRouter
+OAuth is a PKCE login flow that issues an OpenRouter API key, so OpenClaw stores
+the result as the same `openrouter:default` API-key auth profile used by the
+manual API-key setup path.
+
+For an existing install, sign in or rotate the stored OpenRouter key without
+rerunning full onboarding:
+
+```bash
+openclaw models auth login --provider openrouter --method oauth
+```
+
+Use `openclaw models auth login --provider openrouter --method api-key` when
+you want to paste a key you created manually at OpenRouter.
 
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:
@@ -140251,327 +140408,6 @@ For the deeper technical reference, including RPC details, see
 
 
 
-# Section: superpowers/specs/2026-04-22-tweakcn-custom-theme-import-design.md
-
-# Tweakcn Custom Theme Import Design
-
-Status: approved in terminal on 2026-04-22
-
-## Summary
-
-Add exactly one browser-local custom Control UI theme slot that can be imported from a tweakcn share link. The existing built-in theme families remain `claw`, `knot`, and `dash`. The new `custom` family behaves like a normal OpenClaw theme family and supports `light`, `dark`, and `system` mode when the imported tweakcn payload includes both light and dark token sets.
-
-The imported theme is stored only in the current browser profile with the rest of the Control UI settings. It is not written to gateway config and does not sync across devices or browsers.
-
-## Problem
-
-The Control UI theme system is currently closed over three hard-coded theme families:
-
-- `ui/src/ui/theme.ts`
-- `ui/src/ui/views/config.ts`
-- `ui/src/styles/base.css`
-
-Users can switch among built-in families and mode variants, but they cannot bring in a theme from tweakcn without editing repo CSS. The requested outcome is smaller than a general theming system: keep the three built-ins and add one user-controlled imported slot that can be replaced from a tweakcn link.
-
-## Goals
-
-- Keep the existing built-in theme families unchanged.
-- Add exactly one imported custom slot, not a theme library.
-- Accept a tweakcn share link or a direct `https://tweakcn.com/r/themes/{id}` URL.
-- Persist the imported theme in browser local storage only.
-- Make the imported slot work with existing `light`, `dark`, and `system` mode controls.
-- Keep failure behavior safe: a bad import never breaks the active UI theme.
-
-## Non goals
-
-- No multi-theme library or browser-local list of imports.
-- No gateway-side persistence or cross-device sync.
-- No arbitrary CSS editor or raw theme JSON editor.
-- No automatic loading of remote font assets from tweakcn.
-- No attempt to support tweakcn payloads that only expose one mode.
-- No repo-wide theming refactor beyond the seams required for the Control UI.
-
-## User decisions already made
-
-- Keep the three built-in themes.
-- Add one tweakcn-powered import slot.
-- Store the imported theme in the browser, not gateway config.
-- Support `light`, `dark`, and `system` for the imported slot.
-- Overwriting the custom slot with the next import is the intended behavior.
-
-## Recommended approach
-
-Add a fourth theme family id, `custom`, to the Control UI theme model. The `custom` family becomes selectable only when a valid tweakcn import is present. The imported payload is normalized into an OpenClaw-specific custom theme record and stored in browser local storage with the rest of the UI settings.
-
-At runtime, OpenClaw renders a managed `<style>` tag that defines the resolved custom CSS variable blocks:
-
-```css
-:root[data-theme="custom"] { ... }
-:root[data-theme="custom-light"] { ... }
-```
-
-This keeps custom theme variables scoped to the `custom` family and avoids leaking inline CSS variables into the built-in families.
-
-## Architecture
-
-### Theme model
-
-Update `ui/src/ui/theme.ts`:
-
-- Extend `ThemeName` to include `custom`.
-- Extend `ResolvedTheme` to include `custom` and `custom-light`.
-- Extend `VALID_THEME_NAMES`.
-- Update `resolveTheme()` so `custom` mirrors the existing family behavior:
-  - `custom + dark` -> `custom`
-  - `custom + light` -> `custom-light`
-  - `custom + system` -> `custom` or `custom-light` based on OS preference
-
-No legacy aliases are added for `custom`.
-
-### Persistence model
-
-Extend `UiSettings` persistence in `ui/src/ui/storage.ts` with one optional custom-theme payload:
-
-- `customTheme?: ImportedCustomTheme`
-
-Recommended stored shape:
-
-```ts
-type ImportedCustomTheme = {
-  sourceUrl: string;
-  themeId: string;
-  label: string;
-  importedAt: string;
-  light: Record<string, string>;
-  dark: Record<string, string>;
-};
-```
-
-Notes:
-
-- `sourceUrl` stores the original user input after normalization.
-- `themeId` is the tweakcn theme id extracted from the URL.
-- `label` is the tweakcn `name` field when present, else `Custom`.
-- `light` and `dark` are already normalized OpenClaw token maps, not raw tweakcn payloads.
-- The imported payload lives beside other browser-local settings and is serialized in the same local-storage document.
-- If stored custom-theme data is missing or invalid on load, ignore the payload and fall back to `theme: "claw"` when the persisted family was `custom`.
-
-### Runtime application
-
-Add a narrow custom-theme stylesheet manager in the Control UI runtime, owned near `ui/src/ui/app-settings.ts` and `ui/src/ui/theme.ts`.
-
-Responsibilities:
-
-- Create or update one stable `<style id="openclaw-custom-theme">` tag in `document.head`.
-- Emit CSS only when a valid custom theme payload exists.
-- Remove the style tag content when the payload is cleared.
-- Keep built-in family CSS in `ui/src/styles/base.css`; do not splice imported tokens into the checked-in stylesheet.
-
-This manager runs whenever settings are loaded, saved, imported, or cleared.
-
-### Light-mode selectors
-
-Implementation should prefer `data-theme-mode="light"` for cross-family light styling rather than special-casing `custom-light`. If an existing selector is pinned to `data-theme="light"` and needs to apply to every light family, broaden it as part of this work.
-
-## Import UX
-
-Update `ui/src/ui/views/config.ts` in the `Appearance` section:
-
-- Add a `Custom` theme card beside `Claw`, `Knot`, and `Dash`.
-- Show the card as disabled when no imported custom theme exists.
-- Add an import panel under the theme grid with:
-  - one text input for a tweakcn share link or `/r/themes/{id}` URL
-  - one `Import` button
-  - one `Replace` path when a custom payload already exists
-  - one `Clear` action when a custom payload already exists
-- Show the imported theme label and source host when a payload exists.
-- If the active theme is `custom`, importing a replacement applies immediately.
-- If the active theme is not `custom`, importing only stores the new payload until the user selects the `Custom` card.
-
-The quick settings theme picker in `ui/src/ui/views/config-quick.ts` should also show `Custom` only when a payload exists.
-
-## URL parsing and remote fetch
-
-The browser import path accepts:
-
-- `https://tweakcn.com/themes/{id}`
-- `https://tweakcn.com/r/themes/{id}`
-
-Implementation should normalize both forms to:
-
-- `https://tweakcn.com/r/themes/{id}`
-
-The browser then fetches the normalized `/r/themes/{id}` endpoint directly.
-
-Use a narrow schema validator for the external payload. A zod schema is preferred because this is an untrusted external boundary.
-
-Required remote fields:
-
-- top-level `name` as optional string
-- `cssVars.theme` as optional object
-- `cssVars.light` as object
-- `cssVars.dark` as object
-
-If either `cssVars.light` or `cssVars.dark` is missing, reject the import. This is deliberate: the approved product behavior is full mode support, not best-effort synthesis of a missing side.
-
-## Token mapping
-
-Do not mirror tweakcn variables blindly. Normalize a bounded subset into OpenClaw tokens and derive the rest in a helper.
-
-### Tokens imported directly
-
-From each tweakcn mode block:
-
-- `background`
-- `foreground`
-- `card`
-- `card-foreground`
-- `popover`
-- `popover-foreground`
-- `primary`
-- `primary-foreground`
-- `secondary`
-- `secondary-foreground`
-- `muted`
-- `muted-foreground`
-- `accent`
-- `accent-foreground`
-- `destructive`
-- `destructive-foreground`
-- `border`
-- `input`
-- `ring`
-- `radius`
-
-From shared `cssVars.theme` when present:
-
-- `font-sans`
-- `font-mono`
-
-If a mode block overrides `font-sans`, `font-mono`, or `radius`, the mode-local value wins.
-
-### Tokens derived for OpenClaw
-
-The importer derives OpenClaw-only variables from the imported base colors:
-
-- `--bg-accent`
-- `--bg-elevated`
-- `--bg-hover`
-- `--panel`
-- `--panel-strong`
-- `--panel-hover`
-- `--chrome`
-- `--chrome-strong`
-- `--text`
-- `--text-strong`
-- `--chat-text`
-- `--muted`
-- `--muted-strong`
-- `--accent-hover`
-- `--accent-muted`
-- `--accent-subtle`
-- `--accent-glow`
-- `--focus`
-- `--focus-ring`
-- `--focus-glow`
-- `--secondary`
-- `--secondary-foreground`
-- `--danger`
-- `--danger-muted`
-- `--danger-subtle`
-
-Derivation rules live in a pure helper so they can be tested independently. Exact color-mixing formulas are an implementation detail, but the helper must satisfy two constraints:
-
-- preserve readable contrast close to the imported theme intent
-- produce stable output for the same imported payload
-
-### Tokens ignored in v1
-
-These tweakcn tokens are intentionally ignored in the first version:
-
-- `chart-*`
-- `sidebar-*`
-- `font-serif`
-- `shadow-*`
-- `tracking-*`
-- `letter-spacing`
-- `spacing`
-
-This keeps the scope on the tokens the current Control UI actually needs.
-
-### Fonts
-
-Font stack strings are imported if present, but OpenClaw does not load remote font assets in v1. If the imported stack references fonts that are unavailable in the browser, normal fallback behavior applies.
-
-## Failure behavior
-
-Bad imports must fail closed.
-
-- Invalid URL format: show inline validation error, do not fetch.
-- Unsupported host or path shape: show inline validation error, do not fetch.
-- Network failure, non-OK response, or malformed JSON: show inline error, keep current stored payload untouched.
-- Schema failure or missing light/dark blocks: show inline error, keep current stored payload untouched.
-- Clear action:
-  - removes the stored custom payload
-  - removes the managed custom style tag content
-  - if `custom` is active, switches theme family back to `claw`
-- Invalid stored custom payload on first load:
-  - ignore the stored payload
-  - do not emit custom CSS
-  - if persisted theme family was `custom`, fall back to `claw`
-
-At no point should a failed import leave the active document with partial custom CSS variables applied.
-
-## Files expected to change in implementation
-
-Primary files:
-
-- `ui/src/ui/theme.ts`
-- `ui/src/ui/storage.ts`
-- `ui/src/ui/app-settings.ts`
-- `ui/src/ui/views/config.ts`
-- `ui/src/ui/views/config-quick.ts`
-- `ui/src/styles/base.css`
-
-Likely new helpers:
-
-- `ui/src/ui/custom-theme.ts`
-
-Tests:
-
-- `ui/src/ui/app-settings.test.ts`
-- `ui/src/ui/storage.node.test.ts`
-- `ui/src/ui/views/config.browser.test.ts`
-- new focused tests for URL parsing and payload normalization
-
-## Testing
-
-Minimum implementation coverage:
-
-- parse share-link URL into tweakcn theme id
-- normalize `/themes/{id}` and `/r/themes/{id}` into the fetch URL
-- reject unsupported hosts and malformed ids
-- validate tweakcn payload shape
-- map a valid tweakcn payload into normalized OpenClaw light and dark token maps
-- load and save the custom payload in browser-local settings
-- resolve `custom` for `light`, `dark`, and `system`
-- disable `Custom` selection when no payload exists
-- apply imported theme immediately when `custom` is already active
-- fall back to `claw` when the active custom theme is cleared
-
-Manual verification target:
-
-- import a known tweakcn theme from Settings
-- switch among `light`, `dark`, and `system`
-- switch between `custom` and the built-in families
-- reload the page and confirm the imported custom theme persists locally
-
-## Rollout notes
-
-This feature is intentionally small. If users later ask for multiple imported themes, rename, export, or cross-device sync, treat that as a follow-on design. Do not pre-build a theme library abstraction in this implementation.
-
-
-
 # Section: tools/acp-agents-setup.md
 
 ---
@@ -158083,7 +157919,7 @@ Notes:
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
+- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver. When `tui.footer.showRemoteHost` is enabled, remote Gateway connections also show the connection host.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -158097,6 +157933,14 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- To show the Gateway host for non-local URL-backed connections, opt in with:
+
+  ```bash
+  openclaw config set tui.footer.showRemoteHost true
+  ```
+
+  Loopback and embedded local connections never show a host label.
+
 - If the session has a [goal](/tools/goal), the footer shows its compact state
   such as `Pursuing goal`, `Goal paused (/goal resume)`, or
   `Goal achieved`.
