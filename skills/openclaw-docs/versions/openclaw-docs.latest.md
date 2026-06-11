@@ -5517,6 +5517,14 @@ export CLICKCLACK_BOT_TOKEN="ccb_..."
 openclaw gateway
 ```
 
+If `plugins.allow` is a non-empty restrictive list, explicitly selecting
+ClickClack in channel setup or running `openclaw plugins enable clickclack`
+appends `clickclack` to that list. Onboarding installation uses the same
+explicit-selection behavior. These paths do not override `plugins.deny` or a
+global `plugins.enabled: false` setting. Direct `openclaw plugins install
+clickclack` follows the normal plugin-install policy and also records ClickClack
+in an existing allowlist.
+
 ## Multiple bots
 
 Each account opens its own ClickClack realtime connection and uses its own bot token.
@@ -22597,7 +22605,7 @@ Use it when you want to:
 
 - inspect the local requested policy, host approvals file, and effective merge
 - apply a local preset such as YOLO or deny-all
-- synchronize local `tools.exec.*` and local `~/.openclaw/exec-approvals.json`
+- synchronize local `tools.exec.*` and the local host approvals file
 
 Examples:
 
@@ -22653,7 +22661,7 @@ Precedence is intentional:
 ```bash
 openclaw approvals set --file ./exec-approvals.json
 openclaw approvals set --stdin <<'EOF'
-{ version: 1, defaults: { security: "full", ask: "off" } }
+{ version: 1, defaults: { security: "full", ask: "off", askFallback: "full" } }
 EOF
 openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
@@ -22707,7 +22715,8 @@ Why `tools.exec.host=gateway` in this example:
 - YOLO is about approvals, not routing.
 - If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
 
-This matches the current host-default YOLO behavior. Tighten it if you want approvals.
+Omitted `askFallback` defaults to `deny`. Set `askFallback: "full"`
+explicitly when upgrading a no-UI host that should keep never-prompt behavior.
 
 Local shortcut:
 
@@ -22752,7 +22761,9 @@ Targeting notes:
 - `--node` uses the same resolver as `openclaw nodes` (id, name, ip, or id prefix).
 - `--agent` defaults to `"*"`, which applies to all agents.
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
-- Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
+- Approvals files are stored per host in the OpenClaw state dir
+  (`$OPENCLAW_STATE_DIR/exec-approvals.json`, or
+  `~/.openclaw/exec-approvals.json` when the variable is unset).
 
 ## Related
 
@@ -23148,10 +23159,14 @@ Use the built-in `user` profile, or create your own `existing-session` profile:
 openclaw browser --browser-profile user tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+openclaw browser create-profile --name chrome-port --driver existing-session --cdp-url http://127.0.0.1:9222
 openclaw browser --browser-profile chrome-live tabs
 ```
 
-This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
+The default existing-session path is host-only Chrome MCP auto-connect. If the browser is already
+running with a DevTools endpoint, pass `--cdp-url` so Chrome MCP attaches to that endpoint instead.
+For Docker, Browserless, or other remote setups where Chrome MCP semantics are not needed, use a
+CDP profile.
 
 Current existing-session limits:
 
@@ -29610,7 +29625,8 @@ The node host stores its node id, token, display name, and gateway connection in
 
 `system.run` is gated by local exec approvals:
 
-- `~/.openclaw/exec-approvals.json`
+- `$OPENCLAW_STATE_DIR/exec-approvals.json`, or
+  `~/.openclaw/exec-approvals.json` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
 
@@ -33845,12 +33861,14 @@ install method aligned:
   missing or older than the current stable release.
 
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
-outside the live Gateway request handler. Control-plane `update.run` package-manager
-updates also use a managed-service handoff instead of replacing the package tree
-inside the live Gateway process. The Gateway starts a detached helper, exits,
-and the helper runs the normal `openclaw update --yes --json` CLI path from
-outside the Gateway process tree. If that handoff is unavailable, `update.run`
-returns a structured response with the safe shell command to run manually.
+outside the live Gateway request handler. Control-plane `update.run`
+package-manager updates and supervised git-checkout updates also use a
+managed-service handoff instead of replacing the package tree or rebuilding
+`dist/` inside the live Gateway process. The Gateway starts a detached helper,
+exits, and the helper runs the normal `openclaw update --yes --json` CLI path
+from outside the Gateway process tree. If that handoff is unavailable,
+`update.run` returns a structured response with the safe shell command to run
+manually.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -33865,29 +33883,33 @@ installed OpenClaw build while leaving full plugin-command completion rebuilds t
 explicit `openclaw completion --write-state` runs.
 
 When a local managed Gateway service is installed and restart is enabled,
-package-manager updates stop the running service before replacing the package
-tree, then refresh the service metadata from the updated install, restart the
-service, and verify the restarted Gateway reports the expected version before
-reporting `Gateway: restarted and verified.`. On macOS, the post-update check
-also verifies the LaunchAgent is loaded/running for the active profile and the
-configured loopback port is healthy. If the plist is installed but launchd is
-not supervising it, OpenClaw re-bootstraps the LaunchAgent automatically, then
-reruns the health/version/channel readiness checks. A fresh bootstrap loads the
-RunAtLoad job directly, so update recovery does not immediately `kickstart -k`
-the newly spawned Gateway. If the Gateway still does not become healthy, the
-command exits non-zero and prints the restart log path plus explicit restart,
-reinstall, and package rollback instructions. If restart cannot run, the command
-prints `Gateway: restart skipped (...)` or `Gateway: restart failed: ...` with a
-manual `openclaw gateway restart` hint. With `--no-restart`,
-package replacement still runs but the managed service is not stopped or
-restarted, so the running Gateway may keep old code until you restart it
-manually.
+package-manager and git-checkout updates stop the running service before
+replacing the package tree or mutating the checkout/build output. The updater
+then refreshes the service metadata from the updated install, restarts the
+service, and verifies the restarted Gateway before reporting
+`Gateway: restarted and verified.`. Package-manager updates additionally verify
+the restarted Gateway reports the expected package version; git-checkout updates
+verify gateway health and service readiness after the rebuild. On macOS, the
+post-update check also verifies the LaunchAgent is loaded/running for the active
+profile and the configured loopback port is healthy. If the plist is installed
+but launchd is not supervising it, OpenClaw re-bootstraps the LaunchAgent
+automatically, then reruns the health/version/channel readiness checks. A fresh
+bootstrap loads the RunAtLoad job directly, so update recovery does not
+immediately `kickstart -k` the newly spawned Gateway. If the Gateway still does
+not become healthy, the command exits non-zero and prints the restart log path
+plus explicit restart, reinstall, and package rollback instructions. If restart
+cannot run, the command prints `Gateway: restart skipped (...)` or
+`Gateway: restart failed: ...` with a manual `openclaw gateway restart` hint.
+With `--no-restart`, package replacement or git rebuild still runs but the
+managed service is not stopped or restarted, so the running Gateway may keep old
+code until you restart it manually.
 
 ### Control-plane response shape
 
 When `update.run` is invoked through the Gateway control plane on a
-package-manager install, the handler reports the handoff initiation separately
-from the CLI update that continues after the Gateway exits:
+package-manager install or supervised git checkout, the handler reports the
+handoff initiation separately from the CLI update that continues after the
+Gateway exits:
 
 - `ok: true`, `result.status: "skipped"`,
   `result.reason: "managed-service-handoff-started"`, and
@@ -33896,8 +33918,11 @@ from the CLI update that continues after the Gateway exits:
   `openclaw update --yes --json` outside the live service process.
 - `ok: false`, `result.reason: "managed-service-handoff-unavailable"`, and
   `handoff.status: "unavailable"` mean OpenClaw could not find a supervising
-  service boundary for a safe handoff. The response includes
-  `handoff.command`, the shell command to run from outside the Gateway.
+  service boundary and durable service identity for a safe handoff. For
+  example, systemd handoff requires the OpenClaw unit identity
+  (`OPENCLAW_SYSTEMD_UNIT`), not only ambient systemd process markers. The
+  response includes `handoff.command`, the shell command to run from outside the
+  Gateway.
 - `ok: false`, `result.reason: "managed-service-handoff-failed"` means the
   Gateway tried to create the handoff but could not spawn the detached helper.
 
@@ -33908,8 +33933,8 @@ health checks complete. During the handoff, the sentinel can carry
 restarted Gateway keeps polling it and only fires the continuation after the CLI
 has verified service health and rewritten the sentinel with the final `ok`
 result. `openclaw status` and `openclaw status --all` show an `Update restart`
-row while that sentinel is pending or failed, and `update.status` returns the
-latest cached sentinel.
+row while that sentinel is pending or failed, and `update.status` refreshes and
+returns the latest sentinel.
 
 ## Git checkout flow
 
@@ -40077,10 +40102,12 @@ present.
   `build`. Gateway startup does not initialize QMD by default, so cold boot
   avoids importing the memory runtime or creating the long-lived watcher before
   memory is first used.
-- If you want a gateway-start refresh anyway, set
-  `memory.qmd.update.startup` to `idle` or `immediate`. The opt-in startup
-  refresh uses a one-shot QMD subprocess path instead of creating the full
-  long-lived in-process watcher.
+- If you want QMD initialized at gateway start anyway, set
+  `memory.qmd.update.startup` to `idle` or `immediate`. With
+  `memory.qmd.update.onBoot: true`, startup runs the initial refresh. With
+  `onBoot: false`, startup skips that immediate refresh but still opens the
+  long-lived manager when update or embed intervals are configured, so QMD can
+  own its regular watcher and timers.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
   vector readiness probes and embedding maintenance in that mode. If a mode
@@ -47459,6 +47486,7 @@ Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
 - Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
+- `block` mode rotates the preview into a new message at `streaming.preview.chunk.maxChars` (default 800, capped at Telegram's 4096 edit limit); other modes grow one preview up to 4096 characters.
 - `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
 - If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
@@ -50668,7 +50696,7 @@ Periodic heartbeat runs.
       compaction: {
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        timeoutSeconds: 900,
+        timeoutSeconds: 180,
         reserveTokensFloor: 24000,
         keepRecentTokens: 50000,
         identifierPolicy: "strict", // strict | off | custom
@@ -50695,7 +50723,7 @@ Periodic heartbeat runs.
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
-- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
+- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
@@ -54473,12 +54501,17 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles can set `cdpUrl` when Chrome is already running
+  behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
+  mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
+  `userDataDir` is ignored for Chrome MCP launch arguments.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
   `responsebody`, PDF export, download interception, or batch actions.
-- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
-  set `cdpUrl` explicitly for remote CDP.
+- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; set
+  `cdpUrl` explicitly only for remote CDP profiles or existing-session endpoint
+  attach.
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
@@ -61722,8 +61755,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates from the control plane use a detached managed-service handoff instead of replacing the package tree inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
-    - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates and supervised git-checkout updates from the control plane use a detached managed-service handoff instead of replacing the package tree or mutating checkout/build output inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. An unavailable handoff means OpenClaw lacks a safe supervisor boundary or durable service identity, such as `OPENCLAW_SYSTEMD_UNIT` for systemd. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
+    - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
   </Accordion>
@@ -66120,7 +66153,7 @@ exhaustive):
 | `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` fails closed when sandbox is off                       | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
 | `tools.exec.security_full_configured`                         | warn/critical | Host exec is running with `security="full"`                                          | `tools.exec.security`, `agents.list[].tools.exec.security`                                           | no       |
 | `tools.exec.fs_tools_disabled_but_exec_enabled`               | warn          | Filesystem tool policy does not make shell execution read-only                       | `tools.deny`, `agents.list[].tools.deny`, `agents.*.sandbox.workspaceAccess`                         | no       |
-| `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | `~/.openclaw/exec-approvals.json`                                                                    | no       |
+| `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | host approvals file                                                                                  | no       |
 | `tools.exec.allowlist_interpreter_without_strict_inline_eval` | warn          | Interpreter allowlists permit inline eval without forced reapproval                  | `tools.exec.strictInlineEval`, `agents.list[].tools.exec.strictInlineEval`, exec approvals allowlist | no       |
 | `tools.exec.safe_bins_interpreter_unprofiled`                 | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk   | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                    | no       |
 | `tools.exec.safe_bins_broad_behavior`                         | warn          | Broad-behavior tools in `safeBins` weaken the low-risk stdin-filter trust model      | `tools.exec.safeBins`, `agents.list[].tools.exec.safeBins`                                           | no       |
@@ -86571,6 +86604,12 @@ title: "Voice wake (macOS)"
 
 # Voice Wake & Push-to-Talk
 
+## Requirements
+
+Voice Wake and push-to-talk require macOS 26 or newer. On older macOS versions,
+the controls are hidden from the Voice settings page, which shows the macOS 26
+requirement.
+
 ## Modes
 
 - **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.
@@ -86611,7 +86650,7 @@ Hardening:
 ## User-facing settings
 
 - **Voice Wake** toggle: enables wake-word runtime.
-- **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
+- **Hold Right Option to talk**: enables the push-to-talk monitor.
 - Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
 - Mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
 - **Sounds**: chimes on trigger detect and on send; defaults to the macOS "Glass" system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
@@ -86627,7 +86666,7 @@ Hardening:
 
 ## Quick verification
 
-- Toggle push-to-talk on, hold Cmd+Fn, speak, release: overlay should show partials then send.
+- Toggle push-to-talk on, hold Right Option, speak, release: overlay should show partials then send.
 - While holding, menu-bar ears should stay enlarged (uses `triggerVoiceEars(ttl:nil)`); they drop after release.
 
 ## Related
@@ -103942,6 +103981,13 @@ two-party event loops that do not go through the shared inbound reply runner.
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
+    `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
+    truncation counts, `code`, `signal`, `killed`, `termination`, and
+    `noOutputTimedOut`. Timeout and no-output-timeout results report `code: 124`
+    when the child process does not provide a non-zero exit code. Non-timeout
+    signal exits can still return `code: null`, so use `termination` and
+    `noOutputTimedOut` to distinguish timeout reasons.
+
   </Accordion>
   <Accordion title="api.runtime.events">
     Event subscriptions.
@@ -107737,6 +107783,12 @@ OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
 providers: anthropic-vertex
 
+## Claude Fable 5
+
+Use `anthropic-vertex/claude-fable-5` where the model is available in your Google Cloud region.
+Fable 5 always uses adaptive thinking and defaults to `high` effort. `/think off` and
+`/think minimal` use `low` effort because the model does not support disabling thinking.
+
 
 
 # Section: plugins/reference/anthropic.md
@@ -109385,7 +109437,10 @@ chat APIs:
 Anthropic Claude deployments in Microsoft Foundry use the Anthropic Messages
 API shape, not the OpenAI-compatible `/openai/v1` shape. Configure those as a
 custom `anthropic-messages` provider until the Microsoft Foundry plugin grows a
-native Anthropic runtime.
+native Anthropic runtime. When the Foundry deployment name differs from the
+Claude model ID, set `params.canonicalModelId` on the model entry so OpenClaw
+can apply model-specific wire contracts, map `/think off` correctly, and
+preserve signed thinking safely.
 
 ## MAI image generation
 
@@ -111521,7 +111576,12 @@ Anthropic's current public docs:
   </Tab>
 </Tabs>
 
-## Thinking defaults (Claude 4.8 and 4.6)
+## Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+
+`anthropic/claude-fable-5` always uses adaptive thinking and defaults to `high`
+effort. Because Anthropic does not allow thinking to be disabled for this model,
+`/think off` and `/think minimal` use `low` effort. OpenClaw also omits custom
+temperature values for Fable 5 requests.
 
 Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends Anthropic's Opus 4.8 effort values; Claude 4.6 models default to `adaptive`.
 
@@ -112058,6 +112118,19 @@ Choose your preferred auth method and follow the setup steps.
         export AWS_REGION="us-west-2"
         ```
       </Step>
+      <Step title="Opt in to provider data sharing for Claude Fable 5">
+        Claude Fable 5 and Claude Mythos-class Bedrock models require the Mantle Data Retention API mode `provider_data_share` before invocation. This opt-in allows Bedrock to share prompts and completions with Anthropic and retain them for up to 30 days for trust and safety review.
+
+        ```bash
+        AWS_REGION="${AWS_REGION:-us-east-1}"
+        curl -X PUT "https://bedrock-mantle.${AWS_REGION}.api.aws/v1/data_retention" \
+          -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
+          -H "Content-Type: application/json" \
+          -d '{ "mode": "provider_data_share" }'
+        ```
+
+        Use another Bedrock model in the config if you cannot accept that retention mode.
+      </Step>
       <Step title="Verify models are discovered">
         ```bash
         openclaw models list
@@ -112544,6 +112617,25 @@ openclaw models list
     optional region prefixes (`us.`, `eu.`, `ap.`, `apac.`, `au.`, `jp.`,
     `global.`). No config knob is required, and the omission applies to both
     the request options object and the `inferenceConfig` payload field.
+  </Accordion>
+
+  <Accordion title="Claude Fable 5">
+    Use `amazon-bedrock/anthropic.claude-fable-5` in `us-east-1`, or the
+    regional inference ids such as `us.anthropic.claude-fable-5`.
+    OpenClaw applies Fable's 1M context window, 128K output limit, always-on
+    adaptive thinking, and supported effort mapping. `/think off` and
+    `/think minimal` map to `low`; unsupported temperature and forced tool
+    choice controls are omitted. Streaming output is held until Bedrock
+    returns a terminal status so mid-stream refusals do not expose partial text.
+    Fable supports only the standard service tier; OpenClaw ignores configured
+    `flex`, `priority`, and `reserved` tiers for this model.
+
+    AWS requires an explicit `provider_data_share` data-retention opt-in before
+    Fable is available. Prompts and completions are shared with Anthropic and
+    retained for up to 30 days for trust and safety. Review and configure
+    [Bedrock data retention](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
+    before enabling the model.
+
   </Accordion>
 
   <Accordion title="Guardrails">
@@ -129615,16 +129707,24 @@ OpenClaw has three public release lanes:
   - Git tag: `vYYYY.M.PATCH-beta.N`
 - Do not zero-pad month or patch
 - Starting with the June 2026 release process update, the third component is a
-  monthly patch counter, not a calendar day. Pre-update tags and npm versions
-  keep their existing names and remain valid; release automation continues to
+  sequential monthly release-train number, not a calendar day. Stable and beta
+  releases determine the current train; alpha-only tags do not consume or
+  advance the beta/stable patch number. Pre-update tags and npm versions keep
+  their existing names and remain valid; release automation continues to
   compare them by year, month, patch, channel, and prerelease or correction
   number.
+- Alpha/nightly builds use the next unreleased patch train and increment only
+  `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds
+  move to the following patch. Ignore legacy alpha-only tags with higher patch
+  numbers when selecting a beta or stable train.
 - npm versions are immutable. If a beta tag has already been published, do not
   delete, republish, or reuse it; cut the next beta number or the next monthly
   patch instead. Because `2026.6.5-beta.1` was already published during the
   transition, June 2026 release trains must use patch `5` or higher. Do not
   publish new June 2026 stable or beta trains as `2026.6.2`, `2026.6.3`, or
   `2026.6.4`.
+- After stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even
+  if automated alpha-only tags with higher patch numbers already exist.
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
@@ -132724,8 +132824,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
     | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
     | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
@@ -132774,7 +132874,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   </Accordion>
 </AccordionGroup>
 
-QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
+When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
 
 ### Full QMD example
 
@@ -143129,7 +143229,9 @@ main model can read the screenshot directly.
 <Accordion title="Ports and reachability">
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for
+  remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
+  the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
   checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
   their CDP WebSocket handshakes.
@@ -143183,7 +143285,7 @@ main model can read the screenshot directly.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
@@ -143572,6 +143674,9 @@ What to check if attach does not work:
 - the target Chromium-based browser is version `144+`
 - remote debugging is enabled in that browser's inspect page
 - the browser showed and you accepted the attach consent prompt
+- if Chrome was started with an explicit `--remote-debugging-port`, set
+  `browser.profiles.<name>.cdpUrl` to that DevTools endpoint instead of relying
+  on Chrome MCP auto-connect
 - `openclaw doctor` migrates old extension-based browser config and checks that
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you
@@ -145447,7 +145552,7 @@ Configuration location:
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
 - `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
+- allowlist entries live in the host-local approvals file under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
 - `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 
@@ -145817,7 +145922,7 @@ Codex Guardian mapping, and ACPX harness permissions, see
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
-host-local `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps
+host-local `ask: "always"` in the execution host approvals file keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
 </Note>
 
@@ -145867,11 +145972,19 @@ Exec approvals are enforced locally on the execution host:
 
 ## Settings and storage
 
-Approvals live in a local JSON file on the execution host:
+Approvals live in a local JSON file on the execution host. When
+`OPENCLAW_STATE_DIR` is set, the file follows that state directory;
+otherwise it uses the default OpenClaw state directory:
 
 ```text
+$OPENCLAW_STATE_DIR/exec-approvals.json
+# otherwise
 ~/.openclaw/exec-approvals.json
 ```
+
+The default approval socket follows the same root:
+`$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
+`~/.openclaw/exec-approvals.sock` when the variable is unset.
 
 Example schema:
 
@@ -145953,7 +146066,8 @@ when set at the narrower session or agent scope.
 ### `askFallback`
 
 <ParamField path="askFallback" type='"deny" | "allowlist" | "full"'>
-  Resolution when a prompt is required but no UI is reachable.
+  Resolution when a prompt is required but no UI is reachable. If this
+  field is omitted, OpenClaw defaults to `deny`.
 
 - `deny` - block.
 - `allowlist` - allow only if allowlist matches.
@@ -146003,9 +146117,11 @@ agent under `agents.list[].tools.exec.commandHighlighting`.
 If you want host exec to run without approval prompts, you must open
 **both** policy layers - requested exec policy in OpenClaw config
 (`tools.exec.*`) **and** host-local approvals policy in
-`~/.openclaw/exec-approvals.json`.
+the execution host approvals file.
 
-YOLO is the default host behavior unless you tighten it explicitly:
+OpenClaw defaults omitted `askFallback` to `deny`. Set host
+`askFallback` to `full` explicitly when a no-UI approval prompt should
+fall back to allow.
 
 | Layer                 | YOLO setting               |
 | --------------------- | -------------------------- |
@@ -146072,7 +146188,7 @@ openclaw exec-policy preset yolo
 That local shortcut updates both:
 
 - Local `tools.exec.host/security/ask`.
-- Local `~/.openclaw/exec-approvals.json` defaults.
+- Local approvals file defaults, including `askFallback: "full"`.
 
 It is intentionally local-only. To change gateway-host or node-host
 approvals remotely, use `openclaw approvals set --gateway` or
@@ -146215,7 +146331,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or
 headless node host). If a node does not advertise exec approvals yet,
-edit its local `~/.openclaw/exec-approvals.json` directly.
+edit its local approvals file directly.
 
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).
@@ -146355,7 +146471,7 @@ Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active 
 
 <ParamField path="security" type="'deny' | 'allowlist' | 'full'">
 Ignored for normal tool calls. `gateway` / `node` security is controlled by
-`tools.exec.security` and `~/.openclaw/exec-approvals.json`; elevated mode can
+`tools.exec.security` and the host approvals file; elevated mode can
 force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
@@ -146383,7 +146499,7 @@ Notes:
 - `tools.exec.mode` is the normalized policy knob. Values are `deny`, `allowlist`, `ask`, `auto`, and `full`. `auto` runs deterministic allowlist/safe-bin matches directly and routes every remaining exec approval case through OpenClaw's native auto reviewer before asking a human. `ask` / `ask=always` still asks a human every time.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
-- `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
+- `gateway`/`node` approvals are controlled by the host approvals file.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - `exec host=node` is the only shell-execution path for nodes; the legacy `nodes.run` wrapper has been removed.
@@ -146422,7 +146538,7 @@ Notes:
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
 - `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
 - `tools.exec.ask` (default: `off`)
-- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
+- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host approvals file; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
 - In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)
@@ -157154,7 +157270,7 @@ The same browser-local pattern applies to the assistant avatar override. Uploade
 
 ## Runtime config endpoint
 
-The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.json`. That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires either an already valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
+The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` when the UI is served under `/__openclaw__/`). That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires either an already valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
 
 ## Language support
 
