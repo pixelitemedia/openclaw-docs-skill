@@ -471,7 +471,7 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.5` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
 
-The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, and CLI startup commands against the booted gateway. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
 Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
@@ -53843,6 +53843,8 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `extraDirs` scans the sibling repo as an explicit skill root.
 - `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
   real target root without allowing arbitrary symlink escapes.
+- To let Skill Workshop apply write through the same trusted symlink target,
+  set `skills.workshop.allowSymlinkTargetWrites: true`.
 
 ## Common patterns
 
@@ -54259,6 +54261,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       nodeManager: "npm", // npm | pnpm | yarn | bun
       allowUploadedArchives: false,
     },
+    workshop: {
+      allowSymlinkTargetWrites: false,
+    },
     entries: {
       "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
@@ -54275,6 +54280,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
   resolve into when the link lives outside its configured source root.
+- `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
+  through already-trusted symlink targets (default: false).
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
@@ -64843,6 +64850,10 @@ gateway if the running process predates the config change.
 Do not use broad targets such as `~`, `/`, or a whole synced project folder.
 Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted
 `SKILL.md` directories.
+
+If Skill Workshop apply should also write through those trusted symlinked
+workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep
+it disabled for read-only shared skill roots.
 
 Related:
 
@@ -92271,6 +92282,10 @@ Current compatibility records include:
 - legacy runtime aliases such as `api.runtime.taskFlow`,
   `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
+- WhatsApp `WebInboundMessage` flat callback fields such as `body`, `chatId`,
+  `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
+  `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
+  `platform` contexts
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
 - legacy memory-specific embedding provider registration while embedding
@@ -92302,6 +92317,33 @@ Current compatibility records include:
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
 until the docs, diagnostics, and release notes announce a removal window.
+
+### WhatsApp Inbound Callback Flat Aliases
+
+WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical nested
+`event`, `payload`, `quote`, `group`, and `platform` contexts plus deprecated
+flat aliases for the shipped callback fields. New callback code should read the
+nested contexts. Code that constructs clean nested callback messages can use
+`WebInboundCallbackMessage`; compatibility listeners that still inject old flat
+test or plugin messages should use `LegacyFlatWebInboundMessage` or
+`WebInboundMessageInput`.
+
+The flat aliases remain available until **2026-08-30**. That removal window
+applies only to flat alias access; the nested callback shape is the canonical
+runtime contract. The TypeScript `@deprecated` annotations on each flat alias
+name its exact nested replacement. Common examples:
+
+- `id`, `timestamp`, and `isBatched` move under `event`.
+- `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`, and
+  `untrustedStructuredContext` move under `payload`.
+- `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
+  `sendMedia(...)` move under `platform`.
+- `replyTo*` fields move under `quote`, and group subject/participant/mention
+  fields move under `group`.
+
+`payload.untrustedStructuredContext` is extracted from inbound provider payloads.
+Plugins should inspect the `label`, `source`, and `type` before treating its
+`payload` as authoritative.
 
 ## Release notes
 
@@ -98692,7 +98734,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - included in OpenClaw. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
-- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds file-backed memory search tools.
+- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
@@ -98822,9 +98864,9 @@ Each entry lists the package, distribution route, and description.
 
 - **[googlechat](/plugins/reference/googlechat)** (`@openclaw/googlechat`) - npm; ClawHub. OpenClaw Google Chat channel plugin for spaces and direct messages.
 
-- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. OpenClaw llama.cpp embedding provider plugin.
-
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
+
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Local GGUF embeddings through node-llama-cpp.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
@@ -107783,11 +107825,15 @@ OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
 providers: anthropic-vertex
 
+<!-- openclaw-plugin-reference:manual-start -->
+
 ## Claude Fable 5
 
 Use `anthropic-vertex/claude-fable-5` where the model is available in your Google Cloud region.
 Fable 5 always uses adaptive thinking and defaults to `high` effort. `/think off` and
 `/think minimal` use `low` effort because the model does not support disabling thinking.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 
 
@@ -109146,15 +109192,15 @@ providers: litellm; contracts: imageGenerationProviders
 # Section: plugins/reference/llama-cpp.md
 
 ---
-summary: "OpenClaw llama.cpp embedding provider plugin."
+summary: "Local GGUF embeddings through node-llama-cpp."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
-title: "llama-cpp plugin"
+title: "Llama Cpp plugin"
 ---
 
-# llama-cpp plugin
+# Llama Cpp plugin
 
-OpenClaw llama.cpp embedding provider plugin.
+Local GGUF embeddings through node-llama-cpp.
 
 ## Distribution
 
@@ -109167,7 +109213,7 @@ contracts: embeddingProviders
 
 ## Related docs
 
-- [llama.cpp Provider](/plugins/llama-cpp)
+- [llama-cpp](/plugins/llama-cpp)
 
 
 
@@ -109306,7 +109352,7 @@ channels: mattermost
 # Section: plugins/reference/memory-core.md
 
 ---
-summary: "Adds file-backed memory search tools."
+summary: "Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
 title: "Memory Core plugin"
@@ -109314,7 +109360,7 @@ title: "Memory Core plugin"
 
 # Memory Core plugin
 
-Adds file-backed memory search tools.
+Adds agent-callable tools.
 
 ## Distribution
 
@@ -109386,7 +109432,7 @@ contracts: tools; skills
 # Section: plugins/reference/microsoft-foundry.md
 
 ---
-summary: "Use Microsoft Foundry chat and MAI image deployments from OpenClaw."
+summary: "Adds Microsoft Foundry model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the microsoft-foundry plugin
 title: "Microsoft Foundry plugin"
@@ -109394,9 +109440,7 @@ title: "Microsoft Foundry plugin"
 
 # Microsoft Foundry plugin
 
-Use Microsoft Foundry deployments from OpenClaw with API-key auth or Microsoft
-Entra ID through the Azure CLI. The plugin owns Microsoft Foundry model
-discovery, runtime token refresh, and MAI image generation.
+Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Distribution
 
@@ -109405,7 +109449,10 @@ discovery, runtime token refresh, and MAI image generation.
 
 ## Surface
 
-- Model provider: `microsoft-foundry`
+providers: microsoft-foundry; contracts: imageGenerationProviders
+
+<!-- openclaw-plugin-reference:manual-start -->
+
 - Image-generation provider: `microsoft-foundry`
 
 ## Requirements
@@ -109495,6 +109542,8 @@ MAI image constraints:
   Foundry deployment through onboarding or add `models.providers.microsoft-foundry.baseUrl`.
 - `supports MAI image deployments only`: the selected image model points at a
   non-MAI deployment. Use a deployed MAI image model for `image_generate`.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 
 
@@ -151627,6 +151676,7 @@ agent session or the CLI.
       autonomous: {
         enabled: false,
       },
+      allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -151637,6 +151687,9 @@ agent session or the CLI.
 
 - `autonomous.enabled`: allows OpenClaw to create pending proposals from durable
   conversation signals after successful turns. Default: `false`.
+- `allowSymlinkTargetWrites`: allows apply to write through workspace skill
+  symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.
+  Default: `false`.
 - `approvalPolicy: "pending"`: requires an approval prompt before
   agent-initiated `apply`, `reject`, or `quarantine`.
 - `approvalPolicy: "auto"`: skips that approval prompt. The agent must still
@@ -151702,6 +151755,7 @@ Default state directory: `~/.openclaw`.
 | `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
+| `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
@@ -151749,6 +151803,7 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { enabled: false },
+      allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -152053,6 +152108,13 @@ different visible skill set per agent.
   quarantine. `auto` allows those actions without approval.
 </ParamField>
 
+<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
+  Allow Skill Workshop apply to write through workspace skill symlinks whose
+  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep this
+  disabled unless generated proposal applies should mutate that shared skill
+  root.
+</ParamField>
+
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
   Maximum pending and quarantined proposals retained per workspace.
 </ParamField>
@@ -152084,6 +152146,23 @@ To allow an intentional symlink layout, declare the trusted target:
 With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills` is
 accepted after realpath resolution. `extraDirs` scans the sibling repo directly;
 `allowSymlinkTargets` preserves the symlinked path for existing layouts.
+
+Skill Workshop apply does not write through those symlinks by default. To let
+Workshop apply mutate skills under already-trusted symlink targets, opt in
+separately:
+
+```json5
+{
+  skills: {
+    load: {
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+    workshop: {
+      allowSymlinkTargetWrites: true,
+    },
+  },
+}
+```
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks (per-skill `SKILL.md` containment still
@@ -152361,6 +152440,8 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
+    Skill Workshop writes through those trusted targets only when
+    `skills.workshop.allowSymlinkTargetWrites` is enabled.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
@@ -152690,6 +152771,8 @@ aligned.
     Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
+    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
+    should also apply proposals through those trusted symlinked paths.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">
