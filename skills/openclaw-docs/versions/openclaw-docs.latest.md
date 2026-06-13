@@ -42936,6 +42936,7 @@ Kimi K2 model IDs:
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
 - `moonshot/kimi-k2.6`
+- `moonshot/kimi-k2.7-code`
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
@@ -45639,7 +45640,7 @@ The implicit default set always covers canary, mention gating, native command re
 Output artifacts:
 
 - `telegram-qa-report.md`
-- `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
+- `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
 Package RTT comparison uses the same Telegram credential contract while keeping
@@ -45712,7 +45713,7 @@ pnpm openclaw qa discord \
 Output artifacts:
 
 - `discord-qa-report.md`
-- `discord-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `discord-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
 - `discord-qa-reaction-timelines.json` and `discord-status-reactions-tool-only-timeline.png` when the status-reaction scenario runs.
 
@@ -45760,7 +45761,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 Output artifacts:
 
 - `slack-qa-report.md`
-- `slack-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 - `approval-checkpoints/` - only when Mantis sets
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
@@ -46005,7 +46006,7 @@ poll and upload-file coverage run through deterministic gateway `poll` and
 Output artifacts:
 
 - `whatsapp-qa-report.md`
-- `whatsapp-qa-summary.json`
+- `qa-evidence.json` - evidence entries for the live transport checks.
 - `whatsapp-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool
@@ -46052,9 +46053,10 @@ the source of truth for one test run and should define:
 - docs and code refs
 - optional plugin requirements
 - optional gateway config patch
-- the executable `qa-flow`
+- an executable `qa-flow` block for flow scenarios, or `execution.kind`/`execution.path`
+  for Vitest and Playwright scenarios
 
-The reusable runtime surface that backs `qa-flow` is allowed to stay generic
+The reusable runtime surface that backs `qa-flow` blocks is allowed to stay generic
 and cross-cutting. For example, markdown scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
@@ -46180,6 +46182,7 @@ The report should answer:
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
 When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
+Every `qa suite` scenario execution writes a `qa-evidence.json` artifact. Flow scenarios also write `qa-suite-summary.json` for existing suite/report tooling; scenarios that declare `execution.kind: vitest` or `execution.kind: playwright` run the matching test path and write `qa-vitest-report.md` or `qa-playwright-report.md` plus per-scenario logs.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
@@ -57401,6 +57404,21 @@ health commands above for live connectivity checks.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the built-in channel monitors that expose them today: Discord, Google Chat, iMessage, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
 
+## Uptime monitoring
+
+External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.
+
+- **DO use:** `GET /health` — instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
+- **DON'T use:** `/v1/chat/completions` for health checks — each request creates a full agent session with skill snapshot, context assembly, and LLM calls
+
+When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/completions` generates a new random session for each request. Monitoring services that ping every 15 minutes create ~96 sessions/day, each consuming 4–22KB. Over time this causes session store bloat and can lead to context window overflow.
+
+### Monitoring service setup examples
+
+- **BetterStack:** Set health check URL to `https://<your-gateway-host>:<port>/health`
+- **UptimeRobot:** Add a new HTTP monitor with URL `https://<your-gateway-host>:<port>/health`
+- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true}` when the gateway is healthy
+
 ## When something fails
 
 - `logged out` or status 409–515 → relink with `openclaw channels logout` then `openclaw channels login`.
@@ -59332,6 +59350,7 @@ Auth matrix:
   - honor `x-openclaw-scopes` when the header is present
   - fall back to the normal operator default scope set when the header is absent
   - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
+  - require `operator.admin` for owner-level request controls such as `x-openclaw-model`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
@@ -59353,7 +59372,7 @@ OpenClaw treats the OpenAI `model` field as an **agent target**, not a raw provi
 
 Optional request headers:
 
-- `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent.
+- `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent. Shared-secret bearer callers can use this header. Identity-bearing callers, such as trusted-proxy or private no-auth ingress requests with `x-openclaw-scopes`, need `operator.admin`; write-only callers get `403 missing scope: operator.admin`.
 - `x-openclaw-agent-id: <agentId>` remains supported as a compatibility override.
 - `x-openclaw-session-key: <sessionKey>` fully controls session routing.
 - `x-openclaw-message-channel: <channel>` sets the synthetic ingress channel context for channel-aware prompts and policies.
@@ -59435,7 +59454,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
 
   </Accordion>
   <Accordion title="How do I override the backend model?">
-    Use `x-openclaw-model`.
+    Use `x-openclaw-model`. This is an owner-level override: it works with the Gateway shared-secret bearer token/password path, and it requires `operator.admin` on identity-bearing HTTP paths such as trusted proxy auth.
 
     Examples:
     `x-openclaw-model: openai/gpt-5.4`
@@ -59448,7 +59467,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
     `/v1/embeddings` uses the same agent-target `model` ids.
 
     Use `model: "openclaw/default"` or `model: "openclaw/<agentId>"`.
-    When you need a specific embedding model, send it in `x-openclaw-model`.
+    When you need a specific embedding model, send it in `x-openclaw-model` from a shared-secret caller or an identity-bearing caller with `operator.admin`.
     Without that header, the request passes through to the selected agent's normal embedding setup.
 
   </Accordion>
@@ -59542,7 +59561,7 @@ Expected behavior:
 
 - `GET /v1/models` should list `openclaw/default`
 - Open WebUI should use `openclaw/default` as the chat model id
-- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model`
+- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model` from a shared-secret caller or an identity-bearing caller with `operator.admin`
 
 Quick smoke:
 
@@ -59627,7 +59646,7 @@ Notes:
 
 - `/v1/models` returns OpenClaw agent targets, not raw provider catalogs.
 - `openclaw/default` is always present so one stable id works across environments.
-- Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
+- Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field. On identity-bearing HTTP auth paths, this header requires `operator.admin`.
 - `/v1/embeddings` supports `input` as a string or array of strings.
 
 ## Related
@@ -67371,7 +67390,7 @@ Important boundary note:
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, plugin routes such as `/api/v1/admin/rpc`, or `/api/channels/*` as full-access operator secrets for that gateway.
 - On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes (`operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`) and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
 - Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth, or from an explicitly no-auth private ingress.
-- In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set.
+- In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set. Owner-level OpenAI-compatible headers such as `x-openclaw-model` require `operator.admin` when scopes are narrowed.
 - `/tools/invoke` and HTTP session history endpoints follow the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 
@@ -85171,11 +85190,13 @@ most Linux-compatible Gateway runtime.
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and Windows 11. It installs without administrator privileges and is published with signed
 x64 and ARM64 installers on OpenClaw releases.
 
-Download the latest stable installer:
+Download the latest stable installer from the [OpenClaw releases page](https://github.com/openclaw/openclaw/releases):
 
-- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
-- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
-- [Checksums](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-SHA256SUMS.txt)
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-arm64.exe)
+- [Checksums](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-SHA256SUMS.txt)
+
+If a download link above returns a 404, visit the [releases page](https://github.com/openclaw/openclaw/releases) and look for the `OpenClawCompanion-Setup-*` assets on the latest release.
 
 After install, launch **OpenClaw Companion** from the Start menu or the system
 tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,
@@ -95064,6 +95085,10 @@ For audio-only TTS replies, `content` may contain the hidden spoken transcript
 even when the channel payload has no visible text/caption. Rewriting that
 `content` updates the hook-visible transcript only; it is not rendered as a
 media caption.
+
+`reply_payload_sending` events may include `usageState`, a best-effort live
+per-turn model/usage/context snapshot. Durable delivery, recovered replay, and
+replies without exact run correlation omit it.
 
 Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
@@ -118410,6 +118435,7 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 | Model ref                         | Name                   | Reasoning | Input       | Context | Max output |
 | --------------------------------- | ---------------------- | --------- | ----------- | ------- | ---------- |
 | `moonshot/kimi-k2.6`              | Kimi K2.6              | No        | text, image | 262,144 | 262,144    |
+| `moonshot/kimi-k2.7-code`         | Kimi K2.7 Code         | Always on | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2.5`              | Kimi K2.5              | No        | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking`       | Kimi K2 Thinking       | Yes       | text        | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking-turbo` | Kimi K2 Thinking Turbo | Yes       | text        | 262,144 | 262,144    |
@@ -118418,10 +118444,17 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 [//]: # "moonshot-kimi-k2-ids:end"
 
 Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
-published pay-as-you-go rates: Kimi K2.6 is $0.16/MTok cache hit,
+published pay-as-you-go rates: Kimi K2.7 Code is $0.19/MTok cache hit,
+$0.95/MTok input, and $4.00/MTok output; Kimi K2.6 is $0.16/MTok cache hit,
 $0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
 $0.60/MTok input, and $3.00/MTok output. Other legacy catalog entries keep
 zero-cost placeholders unless you override them in config.
+
+Kimi K2.7 Code always uses native thinking. OpenClaw exposes only the `on`
+thinking state for this model and omits outbound `thinking` and
+`reasoning_effort` controls, as required by Moonshot. OpenClaw also omits
+sampling overrides that K2.7 fixes to provider defaults. Kimi K2.6 remains the
+onboarding default.
 
 ## Getting started
 
@@ -118497,6 +118530,7 @@ Choose your provider and follow the setup steps.
           models: {
             // moonshot-kimi-k2-aliases:start
             "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
+            "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
             "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
             "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
             "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
@@ -118520,6 +118554,15 @@ Choose your provider and follow the setup steps.
                 reasoning: false,
                 input: ["text", "image"],
                 cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
+                id: "kimi-k2.7-code",
+                name: "Kimi K2.7 Code",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -118676,7 +118719,13 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">
-    Moonshot Kimi supports binary native thinking:
+    Kimi K2.7 Code always uses native thinking. Moonshot requires clients to
+    omit the `thinking` field for this model, so OpenClaw exposes only `on` and
+    ignores stale `off` settings. K2.7 also fixes `temperature`, `top_p`, `n`,
+    `presence_penalty`, and `frequency_penalty`; OpenClaw omits configured
+    overrides for those fields.
+
+    Other Moonshot Kimi models support binary native thinking:
 
     - `thinking: { type: "enabled" }`
     - `thinking: { type: "disabled" }`
@@ -118699,7 +118748,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     }
     ```
 
-    OpenClaw also maps runtime `/think` levels for Moonshot:
+    OpenClaw maps runtime `/think` levels for those models:
 
     | `/think` level       | Moonshot behavior          |
     | -------------------- | -------------------------- |
@@ -118707,14 +118756,16 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | Any non-off level    | `thinking.type=enabled`    |
 
     <Warning>
-    When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. OpenClaw normalizes incompatible `tool_choice` values to `auto` for compatibility.
+    When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. OpenClaw normalizes incompatible values to `auto`. This includes Kimi K2.7 Code, whose thinking mode cannot be disabled to preserve a pinned tool choice.
     </Warning>
 
     Kimi K2.6 also accepts an optional `thinking.keep` field that controls
     multi-turn retention of `reasoning_content`. Set it to `"all"` to keep full
     reasoning across turns; omit it (or leave it `null`) to use the server
     default strategy. OpenClaw only forwards `thinking.keep` for
-    `moonshot/kimi-k2.6` and strips it from other models.
+    `moonshot/kimi-k2.6` and strips it from other models. Kimi K2.7 Code
+    preserves full reasoning history by default while OpenClaw omits the entire
+    `thinking` field.
 
     ```json5
     {
@@ -118735,7 +118786,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
   </Accordion>
 
   <Accordion title="Tool call id sanitization">
-    Moonshot Kimi serves tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves them unchanged so multi-turn tool calls keep working.
+    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. For the OpenAI-completions transport, OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to deterministic OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id.
 
     To force strict sanitization on a custom OpenAI-compatible provider, set `sanitizeToolCallIds: true`:
 
@@ -154296,7 +154347,7 @@ title: "Thinking levels"
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
-  - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+  - Moonshot Kimi K2.7 Code (`moonshot/kimi-k2.7-code`) always thinks. Its profile exposes only `on`, and OpenClaw omits the outbound `thinking` field as required by Moonshot. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
 
