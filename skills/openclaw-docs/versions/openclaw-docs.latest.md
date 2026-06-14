@@ -488,13 +488,19 @@ from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
-`OpenClaw NPM Release` with the saved `preflight_run_id`.
+`OpenClaw NPM Release` with the saved `preflight_run_id`. Stable publish also
+requires an exact `windows_node_tag`; the workflow verifies the Windows source
+release and compares its x64/ARM64 installers with the candidate-approved
+`windows_node_installer_digests` input before any publish child, then promotes
+and verifies those same pinned installer digests plus the exact companion asset
+and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 
@@ -4975,17 +4981,20 @@ Control how agents process messages:
   <Step title="Incoming message arrives">
     A WhatsApp group or DM message arrives.
   </Step>
-  <Step title="Broadcast check">
-    System checks if peer ID is in `broadcast`.
+  <Step title="Route and admission">
+    OpenClaw applies channel allowlists, group activation rules, and configured ACP binding ownership.
   </Step>
-  <Step title="If in broadcast list">
+  <Step title="Broadcast check">
+    If no configured ACP binding owns the route, OpenClaw checks whether the peer ID is in `broadcast`.
+  </Step>
+  <Step title="If broadcast applies">
     - All listed agents process the message.
     - Each agent has its own session key and isolated context.
     - Agents process in parallel (default) or sequentially.
 
   </Step>
-  <Step title="If not in broadcast list">
-    Normal routing applies (first matching binding).
+  <Step title="If broadcast does not apply">
+    OpenClaw dispatches the ordinary route or the configured ACP session route selected during routing.
   </Step>
 </Steps>
 
@@ -5136,7 +5145,7 @@ Broadcast groups work alongside existing routing:
 - `GROUP_B`: agent1 AND agent2 respond (broadcast).
 
 <Note>
-**Precedence:** `broadcast` takes priority over `bindings`.
+**Precedence:** `broadcast` takes priority over ordinary route bindings. Configured ACP bindings (`bindings[].type="acp"`) are exclusive: when one matches, OpenClaw dispatches to the configured ACP session instead of fan-out broadcast.
 </Note>
 
 ## Troubleshooting
@@ -5157,9 +5166,9 @@ Broadcast groups work alongside existing routing:
 
   </Accordion>
   <Accordion title="Only one agent responding">
-    **Cause:** Peer ID might be in `bindings` but not `broadcast`.
+    **Cause:** Peer ID might be in ordinary route bindings but not `broadcast`, or it might match an exclusive configured ACP binding.
 
-    **Fix:** Add to broadcast config or remove from bindings.
+    **Fix:** Add ordinary route-bound peers to broadcast config, or remove/change the configured ACP binding if fan-out broadcast is desired.
 
   </Accordion>
   <Accordion title="Performance issues">
@@ -7788,7 +7797,9 @@ Enable `dynamicAgentCreation` to automatically create **isolated agent instances
 This is essential for public bots where you want each user to have their own private AI assistant experience.
 
 <Note>
-**Account limitation**: `dynamicAgentCreation` currently works with the **default Feishu account only**. Named/multi-account setups are not yet fully supported — dynamic bindings are created without `accountId`, so messages to named accounts may still route to `agent:main`. Track progress in [Issue #42837](https://github.com/openclaw/openclaw/issues/42837).
+Dynamic bindings include the normalized Feishu `accountId`, so default and named accounts route each sender to the correct dynamic agent.
+
+If a named account created an unscoped dynamic agent on an older release, that legacy agent still counts toward `maxAgents`. Confirm that it is not used by the default account before removing it, or temporarily increase `maxAgents`; OpenClaw cannot safely infer which account owns ambiguous legacy state.
 </Note>
 
 ### Quick setup
@@ -7819,7 +7830,7 @@ This is essential for public bots where you want each user to have their own pri
 
 When a new user sends their first DM:
 
-1. The channel generates a unique `agentId` = `feishu-{user_open_id}`
+1. The channel generates a unique `agentId`: `feishu-{user_open_id}` for the default account, or a bounded account-prefixed identity digest for a named account
 2. Creates a new workspace at `workspaceTemplate` path
 3. Registers the agent and creates a binding for this user
 4. The workspace helper ensures bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) on first access
@@ -7836,22 +7847,23 @@ When a new user sends their first DM:
 
 Template variables:
 
-- `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx`)
+- `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx` or `feishu-support-<identity_digest>`)
 - `{userId}` - the sender's Feishu open_id (e.g., `ou_xxxxxx`)
 
 ### Session scope
 
 `session.dmScope` controls how direct messages are mapped to agent sessions. This is a **global setting** that affects all channels.
 
-| Value                | Behavior                                                  | Best for                                                           |
-| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `"main"`             | Each user's DM maps to their agent's main session         | Single-user bots where you want `USER.md` / `SOUL.md` to auto-load |
-| `"per-channel-peer"` | Each (channel + user) combination gets a separate session | Public multi-user bots needing stronger isolation                  |
+| Value                        | Behavior                                                            | Best for                                                           |
+| ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `"main"`                     | Each user's DM maps to their agent's main session                   | Single-user bots where you want `USER.md` / `SOUL.md` to auto-load |
+| `"per-channel-peer"`         | Each (channel + user) combination gets a separate session           | Public multi-user bots needing stronger isolation                  |
+| `"per-account-channel-peer"` | Each (account + channel + user) combination gets a separate session | Multi-account bots needing account-level session isolation         |
 
 **Tradeoff**: Using `"main"` enables automatic bootstrap file loading (`USER.md`, `SOUL.md`, `MEMORY.md`), but means all DMs across all channels share the same session key pattern. For public multi-user bots where isolation matters more than bootstrap auto-loading, consider `"per-channel-peer"` and manage bootstrap files manually.
 
 <Note>
-`"per-account-channel-peer"` is not recommended with `dynamicAgentCreation` because dynamic bindings are created without `accountId`. Use it only with manual bindings.
+Use `"per-account-channel-peer"` when named Feishu accounts should keep separate sessions for the same sender. Dynamic bindings preserve the account scope.
 </Note>
 
 ```json5
@@ -9008,7 +9020,7 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Non-Telegram groups also discourage Markdown tables; Telegram rich-text guidance comes from the Telegram channel prompt. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 
@@ -18046,7 +18058,6 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - direct chats: preview message + `editMessageText`
     - groups/topics: preview message + `editMessageText`
-    - direct-chat tool progress: optional native `sendMessageDraft` status preview when enabled and supported
 
     Requirement:
 
@@ -18055,28 +18066,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
-    - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
+    - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them to current streaming config
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
-
-    Direct chats can use native Telegram drafts for these tool-progress lines without persisting tool chatter into chat history. Native drafts stop before answer text starts; final answers stay on the normal persistent delivery path. This lane is off by default and should be gated to trusted DM IDs first:
-
-    ```json
-    {
-      "channels": {
-        "telegram": {
-          "streaming": {
-            "mode": "partial",
-            "preview": {
-              "toolProgress": true,
-              "nativeToolProgress": true,
-              "nativeToolProgressAllowFrom": ["123456789"]
-            }
-          }
-        }
-      }
-    }
-    ```
 
     To keep the edited preview for answer text but hide tool-progress lines, set:
 
@@ -18155,14 +18147,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Formatting and HTML fallback">
-    Outbound text uses Telegram `parse_mode: "HTML"`.
+  <Accordion title="Rich message formatting">
+    Outbound text uses Telegram rich messages.
 
-    - Markdown-ish text is rendered to Telegram-safe HTML.
-    - Supported Telegram HTML tags are preserved; unsupported HTML is escaped.
-    - If Telegram rejects parsed HTML, OpenClaw retries as plain text.
+    - Markdown text is sent as rich Markdown without converting it to HTML.
+    - Explicit HTML payloads are sent as rich HTML.
+    - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
-    Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`.
+    Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+
+    Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
   </Accordion>
 
@@ -20259,6 +20253,40 @@ content and identifiers.
 
   </Tab>
 </Tabs>
+
+## Configured ACP bindings
+
+WhatsApp supports persistent ACP bindings with top-level `bindings[]` entries:
+
+```json5
+{
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "direct", id: "+15555550123" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "group", id: "120363424282127706@g.us" },
+      },
+    },
+  ],
+}
+```
+
+- Direct chats match E.164 numbers such as `+15555550123`.
+- Groups match WhatsApp group JIDs such as `120363424282127706@g.us`.
+- Group allowlists, sender policy, and mention or activation gating run before OpenClaw ensures the configured ACP session exists.
+- A matched configured ACP binding owns the route. WhatsApp broadcast groups do not fan out that turn to ordinary WhatsApp sessions.
 
 ## Personal-number and self-chat behavior
 
@@ -23053,7 +23081,22 @@ Notes:
   or `--element`.
 - `existing-session` / `user` profiles support page screenshots and `--ref`
   screenshots from snapshot output, but not CSS `--element` screenshots.
-- `--labels` overlays current snapshot refs on the screenshot.
+- `--labels` overlays current snapshot refs on the screenshot. On
+  Playwright-backed profiles, it works with `--full-page` (full-page label
+  overlay), `--ref` (element-clip label overlay by ARIA ref), and `--element`
+  (element-clip label overlay by CSS selector); in element-clip modes, labels
+  are projected relative to the element. The response also includes an
+  `annotations` array with each ref's bounding box. Each item has `ref`,
+  `number`, `role`, optional `name`, and `box: {x, y, width, height}`;
+  coordinates are in the captured image's space (viewport / fullpage /
+  element-relative). The field is omitted when empty.
+  `existing-session` profiles render a chrome-mcp overlay on page screenshots
+  but do not use the Playwright projection helper and do not include
+  `annotations`; CSS `--element` screenshots are unsupported there. Without
+  Playwright or chrome-mcp, labeled screenshots are not available. Prior
+  releases ignored `--full-page`, `--ref`, and `--element` on labeled
+  Playwright screenshots and always returned a viewport capture; labeled
+  screenshots now honor those scopes.
 - `snapshot --urls` appends discovered link destinations to AI snapshots so
   agents can choose direct navigation targets instead of guessing from link
   text alone.
@@ -29909,7 +29952,10 @@ Interactive onboarding behavior with reference mode:
 ### Non-interactive Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`). If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for
+your key. Coding Plan endpoints prefer `zai/glm-5.2`; general API endpoints use
+`zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or
+`zai-coding-cn`.
 </Note>
 
 ```bash
@@ -30740,7 +30786,7 @@ is available, then fall back to `latest`.
   <Accordion title="--dangerously-force-unsafe-install">
     `--dangerously-force-unsafe-install` is deprecated and is now a no-op. OpenClaw no longer runs built-in install-time dangerous-code blocking for plugin installs.
 
-    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks and `security.installPolicy` can still block installs.
+    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
 
@@ -30986,7 +31032,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
-    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` and plugin `before_install` hooks can still block updates.
+    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
   </Accordion>
 </AccordionGroup>
 
@@ -34385,6 +34431,7 @@ openclaw wiki status
 openclaw wiki doctor
 openclaw wiki init
 openclaw wiki ingest ./notes/alpha.md
+openclaw wiki okf import ./knowledge-catalog/okf/bundles/ga4
 openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
@@ -34453,6 +34500,31 @@ Notes:
 - URL ingest is controlled by `ingest.allowUrlIngest`
 - imported source pages keep provenance in frontmatter
 - auto-compile can run after ingest when enabled
+
+### `wiki okf import <path>`
+
+Import an unpacked Open Knowledge Format bundle into wiki concept pages.
+
+The importer reads every non-reserved `.md` concept document in the OKF
+directory tree, requires a non-empty `type` field, and treats unknown OKF
+`type` values as generic concepts. Reserved OKF `index.md` and `log.md` files
+are not imported as concepts.
+
+Imported pages are flattened under `concepts/` so existing wiki compile,
+search, get, digest, and dashboard flows see them immediately. The original OKF
+concept ID, `type`, `resource`, `tags`, timestamp, source path, and full
+frontmatter are preserved in the page frontmatter. Internal OKF markdown links
+are rewritten to the generated wiki pages; broken or external links are left
+unchanged.
+
+Examples:
+
+```bash
+openclaw wiki okf import ./bundles/ga4
+openclaw wiki okf import ./bundles/ga4 --json
+openclaw wiki search "BigQuery Table" --mode source-evidence --json
+openclaw wiki get <path-from-json-result>
+```
 
 ### `wiki compile`
 
@@ -34583,6 +34655,8 @@ These require the official `obsidian` CLI on `PATH` when
 - Use `wiki lint` before trusting contradictory or low-confidence content.
 - Use `wiki compile` after bulk imports or source changes when you want fresh
   dashboards and compiled digests immediately.
+- Use `wiki okf import` when a data catalog, documentation export, or agent
+  enrichment pipeline already emits OKF markdown bundles.
 - Use `wiki bridge import` when bridge mode depends on newly exported memory
   artifacts.
 
@@ -35323,6 +35397,9 @@ names that plugin registers. Active Memory lists those tools in the recall
 prompt and passes the same list to the embedded sub-agent. If none of the
 configured tools are available, or the memory sub-agent fails, Active Memory
 skips recall for that turn and the main reply continues without memory context.
+For custom recall tools, non-empty model-visible tool output counts as recall
+evidence unless structured result fields explicitly report an empty result or
+failure.
 `toolsAllow` only accepts concrete memory tool names. Wildcards, `group:*`
 entries, and core agent tools such as `read`, `exec`, `message`, and
 `web_search` are ignored before the hidden memory sub-agent starts.
@@ -35587,7 +35664,11 @@ Before v2026.5.2 the plugin silently extended your configured `timeoutMs` by an
 extra 30000 ms during cold-start so model warm-up, embedding-index load, and
 the first recall could share one larger budget. v2026.5.2 moved that grace
 behind an explicit `setupGraceTimeoutMs` config — your configured `timeoutMs`
-is now the budget by default, unless you opt in.
+is now the recall-work budget by default, unless you opt in. The blocking hook
+uses two bounded phases around that budget: up to 1500 ms for session/config
+preflight before recall starts, then a separate fixed 1500 ms for abort
+settlement and transcript recovery after recall work stops. Neither allowance
+extends model or tool execution.
 
 If you upgraded from v2026.4.x and you set `timeoutMs` to a value tuned for the
 old implicit-grace world (the recommended starter `timeoutMs: 15000` is one
@@ -35609,14 +35690,16 @@ outer watchdog budgets back to the pre-v5.2 effective values:
 }
 ```
 
-Per the v2026.5.2 changelog: _"use the configured recall timeout as the
-blocking prompt-build hook budget by default and move cold-start setup grace
-behind explicit `setupGraceTimeoutMs` config, so the plugin no longer silently
-extends 15000 ms configs to 45000 ms on the main lane."_
+The v2026.5.2 change removed the old implicit 30000 ms cold-start extension.
+Beyond the configured recall-work budget, the hook can use up to 1500 ms for
+preflight and another 1500 ms for post-recall completion. Its worst-case
+blocking time is therefore `timeoutMs + setupGraceTimeoutMs + 3000` ms.
 
 The embedded recall runner uses the same effective timeout budget, so
 `setupGraceTimeoutMs` covers both the outer prompt-build watchdog and the inner
-blocking recall run.
+blocking recall run. The preflight cap covers session/config checks before that
+budget begins. The post-recall allowance lets the outer hook settle abort
+cleanup and read any final transcript state.
 
 For resource-tight gateways where cold-start latency is a known trade-off,
 lower values (5000–15000 ms) work too — the trade-off is a higher chance of
@@ -35802,7 +35885,7 @@ These run inside the agent loop or gateway pipeline:
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
-- **`before_install`**: inspect install context and optionally block skill or plugin installs after operator install policy runs.
+- **`before_install`**: inspect staged skill or plugin install material after operator install policy runs, when plugin hooks are loaded in the current OpenClaw process.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
@@ -35814,6 +35897,7 @@ Hook decision rules for outbound/tool guards:
 - `before_tool_call`: `{ block: false }` is a no-op and does not clear a prior block.
 - `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
 - `before_install`: `{ block: false }` is a no-op and does not clear a prior block.
+- Use `security.installPolicy`, not `before_install`, for operator-owned install allow/block decisions that must cover CLI install and update paths.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
@@ -39089,12 +39173,13 @@ of only a bot-to-bot Slack transcript.
 evidence pipeline. It checks out the trusted candidate ref in a separate
 worktree, runs `pnpm openclaw qa telegram --credential-source convex
 --credential-role ci`, writes a `mantis-evidence.json` manifest from the
-Telegram QA summary and observed-message artifact, renders the redacted
-transcript HTML through a Crabbox desktop browser, generates a motion-trimmed GIF
-with `crabbox media preview`, and posts the inline PR evidence comment when a PR
-number is available. This lane is transcript-visual rather than logged-in
-Telegram Web proof: the Telegram Bot API gives stable live message evidence, but
-Telegram Web login state is not required for normal Mantis automation.
+Telegram QA summary, `qa-evidence.json`, and report artifacts, renders the
+redacted evidence HTML through a Crabbox desktop browser, generates a
+motion-trimmed GIF with `crabbox media preview`, and posts the inline PR
+evidence comment when a PR number is available. This lane is QA-evidence visual
+rather than logged-in Telegram Web proof: the Telegram Bot API gives stable live
+message evidence, but Telegram Web login state is not required for normal Mantis
+automation.
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper. A maintainer can trigger it from a PR comment with
@@ -39336,8 +39421,8 @@ zero:
 
 - `pnpm openclaw qa discord` already runs a live Discord lane with driver and
   SUT bots.
-- The live transport runner already writes reports and observed-message
-  artifacts under `.artifacts/qa-e2e/`.
+- The live transport runner already writes reports, QA evidence, and
+  transport-specific artifacts under `.artifacts/qa-e2e/`.
 - Convex credential leases already provide exclusive access to shared live
   transport credentials.
 - The browser control service already supports screenshots, snapshots,
@@ -42832,7 +42917,7 @@ Gemini CLI JSON replies are parsed from `response`; usage falls back to `stats`,
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5.1`
+- Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Model refs use the canonical `zai/*` provider ID.
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
@@ -45584,17 +45669,17 @@ Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count
 
 These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                            | Description                                                                                                           |
-| ------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                            | Description                                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                                             |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
+| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
+| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
+| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 
@@ -45611,10 +45696,6 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_GROUP_ID` - numeric chat id (string).
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
-
-Optional:
-
-- `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
 
 Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
 
@@ -45641,26 +45722,26 @@ Output artifacts:
 
 - `telegram-qa-report.md`
 - `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
-- `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
-Package RTT comparison uses the same Telegram credential contract while keeping
-its RTT sample controls on the RTT harness path:
+Package Telegram runs use the same Telegram credential contract. Repeated RTT
+measurement is part of the normal package Telegram live lane; the RTT
+distribution is folded into `qa-evidence.json` under `result.timing` for the
+selected RTT check.
 
 ```bash
-pnpm rtt openclaw@beta \
-  --credential-source convex \
-  --credential-role maintainer \
-  --samples 20 \
-  --sample-timeout-ms 30000
+OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
+pnpm test:docker:npm-telegram-live
 ```
 
-When `--credential-source convex` is set, the RTT Docker wrapper leases a
-`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
-the installed-package run, heartbeats the lease, and releases it on shutdown.
-`--samples` and `--sample-timeout-ms` still feed
-`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
-`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
-across env-backed and Convex-backed RTT runs.
+When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
+leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
+env into the installed-package run, heartbeats the lease, and releases it on
+shutdown. The package wrapper defaults to 20 RTT checks of
+`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
+`maintainer` outside CI when Convex is selected. Override
+`OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
+or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
+creating a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA
 
@@ -48414,6 +48495,201 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: "Usage" section under Context (only if available).
+
+## Custom `/usage full` footer
+
+`/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
+context window, turn tokens, cache, and cost when those fields are available. No
+template file is required.
+
+`messages.usageTemplate` is only for advanced custom layouts. The value is a
+JSON file path (supports `~`) or an inline object, and it replaces the built-in
+footer when valid:
+
+```json
+{
+  "messages": {
+    "usageTemplate": "~/.openclaw/usage-footer.json"
+  }
+}
+```
+
+Missing or empty templates fall back to the built-in footer quietly. Unreadable
+or invalid configured templates also fall back to the built-in footer and emit an
+operator warning.
+
+Start custom templates from the built-in shape, then edit the parts you want to
+change:
+
+```jsonc
+{
+  "schema": "openclaw.usageBar.v1",
+  "scales": {
+    "braille": "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+    "block": "░▏▎▍▌▋▊▉█",
+    "shade": "░▒▓█",
+    "moon": "🌑🌘🌗🌖🌕",
+    "level": "▁▂▃▄▅▆▇█",
+    "weather": ["🥶", "☁️", "🌥", "⛅️", "🌤", "☀️"],
+    "plants": ["🪾", "🍂", "🌱", "☘️", "🍀", "🌿"],
+    "moons6": ["🌑", "🌚", "🌘", "🌗", "🌖", "🌝"],
+  },
+  "aliases": {
+    "models": {
+      "claude-opus-4-6": "opus46",
+      "claude-opus-4-8": "opus48",
+      "claude-sonnet-4-6": "sonnet46",
+      "claude-haiku-4-5": "haiku45",
+      "gpt-5.5": "gpt5.5",
+    },
+    "reasoning": {
+      "off": "🌑",
+      "minimal": "🌚",
+      "low": "🌘",
+      "medium": "🌗",
+      "high": "🌕",
+      "xhigh": "🌝",
+    },
+  },
+  "output": {
+    "sep": "",
+    "default": [
+      { "text": "{model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+      { "map": "model.is_fallback", "cases": { "true": " 🔄" } },
+      { "map": "model.is_override", "cases": { "true": " 📌" } },
+      { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
+      { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
+      {
+        "when": "context.max_tokens",
+        "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+      },
+      {
+        "when": "usage.has_split_tokens",
+        "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
+      },
+      { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
+      { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
+      { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+    ],
+    "surfaces": {
+      "discord": [
+        { "text": "-# -\n" },
+        { "text": "-# {model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+        { "map": "model.is_fallback", "cases": { "true": "🔄" } },
+        { "map": "model.is_override", "cases": { "true": "📌" } },
+        { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
+        { "map": "state.fast_mode", "cases": { "true": " ⚡️", "false": " 🐌" } },
+        {
+          "when": "context.max_tokens",
+          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        },
+        {
+          "when": "usage.has_split_tokens",
+          "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
+        },
+        { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
+        { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
+        { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+      ],
+    },
+  },
+}
+```
+
+### Shape
+
+```jsonc
+{
+  "schema": "openclaw.usageBar.v1",
+  "scales": { "<name>": "low-to-high glyphs" }, // string (1 glyph/char) or array
+  "aliases": { "<table>": { "<value>": "<label>" } },
+  "output": {
+    "sep": "", // joins surviving pieces
+    "default": [
+      /* pieces */
+    ], // fallback for any surface
+    "surfaces": {
+      "discord": [
+        /* pieces */
+      ],
+      "telegram": [
+        /* pieces */
+      ],
+    },
+  },
+}
+```
+
+Each surface is an ordered list of **pieces**; the engine renders each, drops
+empties, and joins survivors with `sep`. A surface with no entry uses
+`output.default`.
+
+### Contract Paths
+
+A piece reads values from the per-turn contract by dot-path. Absent values are
+empty (so a `when` guard or a `|fallback` keeps the piece clean).
+
+| Path                                                                                | Meaning                                |
+| ----------------------------------------------------------------------------------- | -------------------------------------- |
+| `surface`                                                                           | channel id (`discord`/`telegram`/etc.) |
+| `model.provider` / `model.display_name`                                             | provider id / model id                 |
+| `model.reasoning`                                                                   | effort (`off` through `xhigh`)         |
+| `model.is_fallback` / `model.is_override`                                           | bool: fallback used / model pinned     |
+| `state.fast_mode`                                                                   | bool: fast vs slow                     |
+| `context.max_tokens` / `context.pct_used`                                           | window budget / 0-100 used             |
+| `usage.input_tokens` / `usage.output_tokens` / `usage.total_tokens`                 | turn aggregate                         |
+| `usage.has_split_tokens` / `usage.has_total_only_tokens` / `usage.cache_hit_pct`    | token display guards and cache percent |
+| `usage.last.input_tokens` / `usage.last.output_tokens` / `usage.last.cache_hit_pct` | final model call only                  |
+| `cost.turn_usd`                                                                     | estimated turn cost                    |
+| `identity.name` / `identity.emoji`                                                  | agent name / chosen emoji              |
+
+(Provider rate-limit windows are **not** in this contract.)
+
+### Verbs
+
+Pipe a value through verbs left to right; a non-verb segment is the fallback.
+
+| Verb            | Effect                                | Example                           |
+| --------------- | ------------------------------------- | --------------------------------- |
+| `num`           | compact count                         | `272000 -> 272k`                  |
+| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
+| `pct`           | append `%`                            | `96 -> 96%`                       |
+| `inv`           | `100 - x`                             | for used to remaining             |
+| `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
+| `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+### Piece forms
+
+- `{ "text": "📚 {context.max_tokens|num}" }`: literal + interpolation.
+- `{ "when": "<path>", "text": "..." }`: render only if the path is truthy.
+- `{ "map": "<path>", "cases": { "true": "⚡", "false": "🐌" } }`: value to glyph.
+- `{ "each": "limits.windows", "item": "{label}" }`: iterate an array.
+
+### Example
+
+```jsonc
+{
+  "schema": "openclaw.usageBar.v1",
+  "scales": { "braille": "⠐⡀⡄⡆⡇⣇⣧⣷⣿" },
+  "aliases": { "reasoning": { "medium": "🌗", "high": "🌕" } },
+  "output": {
+    "surfaces": {
+      "discord": [
+        { "text": "{model.display_name}" },
+        { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
+        { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
+        {
+          "when": "context.max_tokens",
+          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        },
+      ],
+    },
+  },
+}
+```
+
+renders e.g. `claude-sonnet-4-6 🌗 🐌 | 📚 [⣿⣿⣿⣿⣧]272k`.
 
 ## Providers + credentials
 
@@ -51725,6 +52001,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
+
 <Accordion title="Multi-account WhatsApp">
 
 ```json5
@@ -52881,7 +53159,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `capabilities`: optional list (`image`, `audio`, `video`). Defaults: `openai`/`anthropic`/`minimax` → image, `google` → image+audio+video, `groq` → audio.
     - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
-    - `tools.media.image.timeoutSeconds` and matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool.
+    - `tools.media.image.timeoutSeconds` and matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
     Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
@@ -72313,7 +72591,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern`, `small`, or `all` (alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M3, Grok 4.3)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 5.1, MiniMax M3, Grok 4.3)
   - `OPENCLAW_LIVE_MODELS=small` to run the constrained small-model allowlist (Qwen 8B/9B local-compatible routes, Ollama Gemma, OpenRouter Qwen/GLM, and Z.AI GLM)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
@@ -72597,6 +72875,9 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Tool calling across several providers:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
+- Z.AI Coding Plan GLM-5.2 direct smoke:
+  - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
+
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
   - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -72628,7 +72909,7 @@ This is the "common models" run we expect to keep working:
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - DeepSeek: `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro`
-- Z.AI (GLM): `zai/glm-5.1`
+- Z.AI (GLM): `zai/glm-5.1` (general API) or `zai/glm-5.2` (Coding Plan)
 - MiniMax: `minimax/MiniMax-M3`
 
 Run gateway smoke with tools + image:
@@ -72642,7 +72923,7 @@ Pick at least one per provider family:
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - DeepSeek: `deepseek/deepseek-v4-flash`
-- Z.AI (GLM): `zai/glm-5.1`
+- Z.AI (GLM): `zai/glm-5.1` (general API) or `zai/glm-5.2` (Coding Plan)
 - MiniMax: `minimax/MiniMax-M3`
 
 Optional additional coverage (nice to have):
@@ -73359,17 +73640,27 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
     installing from the registry.
+  - Emits repeated RTT timing in `qa-evidence.json` by default with
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES=20`. Override
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
+    `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
+    `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the RTT run.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
+    Telegram QA check IDs to sample; when unset, the default RTT-capable check
+    is `telegram-mentioned-message-reply`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
-    `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
+    `OPENCLAW_QA_CONVEX_SITE_URL` and a role secret. If
     `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
     the Docker wrapper selects Convex automatically.
   - The wrapper validates Telegram or Convex credential env on the host before
     Docker build/install work. Set `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1`
     only when deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
-    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
+    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. When Convex credentials
+    are selected and no role is set, the wrapper uses `ci` in CI and
+    `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases.
@@ -73485,11 +73776,11 @@ gh workflow run package-acceptance.yml --ref main \
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
-  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
+  - Writes a Telegram QA report, summary, and `qa-evidence.json` under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
 `Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs the
-candidate ref with Convex-leased Telegram credentials, renders the redacted
-observed-message transcript in a Crabbox desktop browser, records MP4 evidence,
+candidate ref with Convex-leased Telegram credentials, renders the redacted QA
+report/evidence bundle in a Crabbox desktop browser, records MP4 evidence,
 generates a motion-trimmed GIF, uploads the artifact bundle, and posts inline PR
 evidence through the Mantis GitHub App when `pr_number` is set. Maintainers can
 start it from the Actions UI through `Mantis Scenario` (`scenario_id:
@@ -81823,6 +82114,59 @@ permission boundary. Dangerous plugin node commands still require explicit
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.
 
+## Config (`openclaw.json`)
+
+Node-related settings live under `gateway.nodes` and `tools.exec`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      // Auto-approve first-time node pairing from trusted networks (CIDR list).
+      // Disabled when unset. Only applies to first-time role:node requests
+      // with no requested scopes; does not auto-approve upgrades.
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+      // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
+      allowCommands: ["camera.snap", "screen.record"],
+      // Block exact command names even if defaults or allowCommands include them.
+      denyCommands: ["camera.clip"],
+    },
+  },
+  tools: {
+    exec: {
+      // Default exec host: "node" routes all exec calls to a paired node.
+      host: "node",
+      // Security mode for node exec: allow only approved/allowlisted commands.
+      security: "allowlist",
+      // Pin exec to a specific node (id or name). Omit to allow any node.
+      node: "build-node",
+    },
+  },
+}
+```
+
+Use exact node command names. `denyCommands` removes a command even when a
+platform default or `allowCommands` entry would otherwise allow it. See
+[Gateway configuration reference](/gateway/configuration-reference#gateway-field-details)
+for gateway node pairing and command-policy field details.
+
+Per-agent exec node override:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        tools: { exec: { node: "build-node" } },
+      },
+    ],
+  },
+}
+```
+
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
@@ -89807,21 +90151,29 @@ only for behavior that really belongs to the backend.
 
 `CliBackendPlugin` can also define:
 
-| Hook                               | Use                                                    |
-| ---------------------------------- | ------------------------------------------------------ |
-| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                 |
-| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort       |
-| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch  |
-| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform     |
-| `textTransforms`                   | Bidirectional prompt/output replacements               |
-| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                |
-| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
-| `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
-| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
-| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers      |
+| Hook                               | Use                                                                         |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
+| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
+| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch                       |
+| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
+| `textTransforms`                   | Bidirectional prompt/output replacements                                    |
+| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
+| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
+| `nativeToolMode`                   | Declare whether the CLI has always-on native tools                          |
+| `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
+| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
+| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+`ctx.executionMode` is `"agent"` for normal turns and `"side-question"` for
+ephemeral `/btw` calls. Use it when the CLI needs different one-shot flags, such
+as disabling native tools, session persistence, or resume behavior for BTW. If a
+backend normally has `nativeToolMode: "always-on"` but its side-question argv
+reliably disables those tools, also set `sideQuestionToolMode: "disabled"`;
+otherwise OpenClaw fails closed when BTW requires a no-tools CLI run.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
@@ -90558,9 +90910,13 @@ available timeout in this order:
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
-  converted to milliseconds, or the 60 second media default.
+  converted to milliseconds, or the 60 second media default. For image
+  understanding, this applies to the request itself and is not reduced by
+  earlier preparation work.
 - The 90 second dynamic-tool default.
 
+This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
+request timeouts run inside that call and keep their own timeout semantics.
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex
 so the turn can continue instead of leaving the session in `processing`.
@@ -91560,10 +91916,14 @@ or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
 provide its own timeout, or a 120 second image-generation default otherwise.
 The media-understanding `image` tool uses
-`tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
-budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
+`tools.media.image.timeoutSeconds` or its 60 second media default. For image
+understanding, that timeout applies to the request itself and is not
+reduced by earlier preparation work. Dynamic tool budgets are
+capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
 where supported and returns a failed dynamic-tool response to Codex so the turn
 can continue instead of leaving the session in `processing`.
+This watchdog is the outer dynamic `item/tool/call` budget; provider-specific
+request timeouts run inside that call and keep their own timeout semantics.
 
 After Codex accepts a turn, and after OpenClaw responds to a turn-scoped
 app-server request, the harness expects Codex to make current-turn progress and
@@ -94813,7 +95173,8 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install context and optionally block
+- **`before_install`** - inspect staged skill or plugin install material from a loaded
+  plugin runtime
 
 ## Debug runtime hooks
 
@@ -95123,11 +95484,19 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the operator-owned `security.installPolicy` check
-when one is configured. The `builtinScan` field remains in the event payload for
-compatibility, but OpenClaw no longer runs built-in install-time dangerous-code
-blocking, so it is an empty `ok` result. Return additional findings or
-`{ block: true, blockReason }` to stop the install.
+Use `security.installPolicy` for operator-owned allow/block decisions. That
+policy runs from OpenClaw config, covers CLI install and update paths, and fails
+closed when enabled but unavailable.
+
+`before_install` is a plugin-runtime lifecycle hook. It runs after
+`security.installPolicy` only in the OpenClaw process where plugin hooks have
+already been loaded, such as Gateway-backed install flows. It is useful for
+plugin-owned observations, warnings, and compatibility checks, but it is not the
+primary enterprise or host security boundary for installs. The `builtinScan`
+field remains in the event payload for compatibility, but OpenClaw no longer
+runs built-in install-time dangerous-code blocking, so it is an empty `ok`
+result. Return additional findings or `{ block: true, blockReason }` to stop the
+install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision.
 Handler failures block the install fail-closed.
@@ -97450,6 +97819,7 @@ less like a pile of Markdown files.
 - Page-level provenance, confidence, contradictions, and open questions
 - Compiled digests for agent/runtime consumers
 - Wiki-native search/get/apply/lint tools
+- Open Knowledge Format imports into compiled wiki concepts
 - Optional bridge mode that imports public artifacts from the active memory plugin
 - Optional Obsidian-friendly render mode and CLI integration
 
@@ -97559,6 +97929,34 @@ The main page groups are:
 - `concepts/` for ideas, abstractions, patterns, and policies
 - `syntheses/` for compiled summaries and maintained rollups
 - `reports/` for generated dashboards
+
+## Open Knowledge Format imports
+
+`memory-wiki` can import unpacked Open Knowledge Format bundles with:
+
+```bash
+openclaw wiki okf import ./bundles/ga4
+```
+
+This is the cleanest fit when a data catalog, documentation crawler, or
+enrichment agent already produces OKF: keep OKF as the portable exchange
+artifact, then let `memory-wiki` turn it into OpenClaw-native concept pages and
+compiled digests.
+
+The importer follows the OKF v0.1 shape:
+
+- non-reserved `.md` files are concept documents
+- each imported concept needs a non-empty `type` frontmatter field
+- unknown OKF `type` values are accepted
+- reserved `index.md` and `log.md` files are not imported as concepts
+- broken or external markdown links are preserved
+
+Imported concept pages are flattened under `concepts/` so the existing compile,
+search, get, dashboard, and prompt-digest paths see them without adding a second
+wiki tree. Each page keeps the original OKF concept ID, source path, `type`,
+`resource`, `tags`, timestamp, and full producer frontmatter. Internal OKF links
+are rewritten to the generated wiki concept pages and also emitted as structured
+`relationships` entries with `kind: okf-link`.
 
 ## Structured claims and evidence
 
@@ -102401,7 +102799,10 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   (for example normalizing old flag shapes).
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
-  flag.
+  flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
+  backend-native isolation flags for ephemeral `/btw` calls. If those flags
+  reliably disable native tools for an otherwise always-on CLI, declare
+  `sideQuestionToolMode: "disabled"` too.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).
@@ -102450,6 +102851,10 @@ See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
 semantics.
 
 ### Hook decision semantics
+
+`before_install` is a plugin-runtime lifecycle hook, not the operator install
+policy surface. Use `security.installPolicy` when an allow/block decision must
+cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
@@ -126371,7 +126776,7 @@ OpenClaw uses the `zai` provider with a Z.AI API key.
 ## GLM models
 
 GLM is a model family, not a separate provider. In OpenClaw, GLM models use
-refs such as `zai/glm-5.1`: provider `zai`, model id `glm-5.1`.
+refs such as `zai/glm-5.2`: provider `zai`, model id `glm-5.2`.
 
 ## Getting started
 
@@ -126437,12 +126842,12 @@ you want to force a specific Coding Plan or general API surface.
   models: {
     providers: {
       zai: {
-        // Example value. Onboarding writes the matching baseUrl for your endpoint.
-        baseUrl: "https://api.z.ai/api/paas/v4",
+        // GLM-5.2 uses the Coding Plan endpoint.
+        baseUrl: "https://api.z.ai/api/coding/paas/v4",
       },
     },
   },
-  agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
+  agents: { defaults: { model: { primary: "zai/glm-5.2" } } },
 }
 ```
 
@@ -126457,28 +126862,31 @@ openclaw models list --all --provider zai
 
 The manifest-backed catalog currently includes:
 
-| Model ref            | Notes         |
-| -------------------- | ------------- |
-| `zai/glm-5.1`        | Default model |
-| `zai/glm-5`          |               |
-| `zai/glm-5-turbo`    |               |
-| `zai/glm-5v-turbo`   |               |
-| `zai/glm-4.7`        |               |
-| `zai/glm-4.7-flash`  |               |
-| `zai/glm-4.7-flashx` |               |
-| `zai/glm-4.6`        |               |
-| `zai/glm-4.6v`       |               |
-| `zai/glm-4.5`        |               |
-| `zai/glm-4.5-air`    |               |
-| `zai/glm-4.5-flash`  |               |
-| `zai/glm-4.5v`       |               |
+| Model ref            | Notes                           |
+| -------------------- | ------------------------------- |
+| `zai/glm-5.2`        | Coding Plan default; 1M context |
+| `zai/glm-5.1`        | General API default             |
+| `zai/glm-5`          |                                 |
+| `zai/glm-5-turbo`    |                                 |
+| `zai/glm-5v-turbo`   |                                 |
+| `zai/glm-4.7`        |                                 |
+| `zai/glm-4.7-flash`  |                                 |
+| `zai/glm-4.7-flashx` |                                 |
+| `zai/glm-4.6`        |                                 |
+| `zai/glm-4.6v`       |                                 |
+| `zai/glm-4.5`        |                                 |
+| `zai/glm-4.5-air`    |                                 |
+| `zai/glm-4.5-flash`  |                                 |
+| `zai/glm-4.5v`       |                                 |
 
 <Tip>
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 </Tip>
 
 <Note>
-The default bundled model ref is `zai/glm-5.1`. GLM versions and availability
+Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
+`zai/glm-5.1`. Endpoint auto-detection falls back to `glm-5.1` or `glm-4.7`
+when the selected plan does not expose GLM-5.2. GLM versions and availability
 can change; run `openclaw models list --all --provider zai` to see the catalog
 known to your installed version.
 </Note>
@@ -126525,7 +126933,7 @@ known to your installed version.
       agents: {
         defaults: {
           models: {
-            "zai/glm-5.1": {
+            "zai/glm-5.2": {
               params: { preserveThinking: true },
             },
           },
@@ -129883,10 +130291,14 @@ the maintainer-only release runbook.
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
    prior evidence stale.
-9. For beta, tag `vYYYY.M.PATCH-beta.N`, then run `pnpm release:candidate -- --tag
-vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helper runs
-   the local generated-release checks, dispatches or verifies the full release
-   validation and npm preflight evidence, runs Parallels and Telegram package
+9. For a tagged beta candidate, run
+   `pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N` from the matching
+   `release/YYYY.M.PATCH` branch. For stable, pass the required Windows source
+   release too:
+   `pnpm release:candidate -- --tag vYYYY.M.PATCH --windows-node-tag vX.Y.Z`.
+   The helper runs the local generated-release checks, dispatches or verifies
+   the full release validation and npm preflight evidence, runs Parallels
+   fresh/update proof against the exact prepared tarball plus Telegram package
    proof, records plugin npm and ClawHub plans, and prints the exact
    `OpenClaw Release Publish` command only after the evidence bundle is green.
    `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
@@ -129926,9 +130338,12 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
     direct push, it opens or updates an appcast PR. Stable Windows Hub
     readiness requires the signed `OpenClawCompanion-Setup-x64.exe`,
     `OpenClawCompanion-Setup-arm64.exe`, and
-    `OpenClawCompanion-SHA256SUMS.txt` assets on the OpenClaw GitHub release;
-    promote them with the `Windows Node Release` workflow after the matching
-    `openclaw/openclaw-windows-node` release has passed its signing workflow.
+    `OpenClawCompanion-SHA256SUMS.txt` assets on the OpenClaw GitHub release.
+    Pass the exact signed `openclaw/openclaw-windows-node` release tag as
+    `windows_node_tag` and its candidate-approved installer digest map as
+    `windows_node_installer_digests`; `OpenClaw Release Publish` keeps the
+    release draft, dispatches `Windows Node Release`, and verifies all three
+    assets before publication.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
@@ -130037,21 +130452,36 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
   to the GitHub release as `openclaw-<version>-dependency-evidence.zip`.
 - Run `OpenClaw Release Publish` for the mutating publish sequence after the
   tag exists. Dispatch it from `release/YYYY.M.PATCH` (or `main` when publishing a
-  main-reachable tag), pass the release tag and successful OpenClaw npm
-  `preflight_run_id`, and keep the default plugin publish scope
-  `all-publishable` unless you are deliberately running a focused repair. The
-  workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw
-  npm publish so the core package is not published before its externalized
-  plugins.
-- Run the manual `Windows Node Release` workflow for stable releases after the
-  matching `openclaw/openclaw-windows-node` release exists. It downloads the
-  signed Windows Hub installers from the companion repo, verifies their
-  Authenticode signatures on a Windows runner, writes a SHA-256 manifest, and
-  uploads the installers plus manifest onto the canonical OpenClaw GitHub
-  release. Website download links should target exact OpenClaw release asset
-  URLs for the current stable release, or `releases/latest/download/...` only
-  after verifying GitHub's latest redirect points at that same release; do not
-  link only to the companion repo release page.
+  main-reachable tag), pass the release tag, successful OpenClaw npm
+  `preflight_run_id`, and successful `full_release_validation_run_id`, and keep
+  the default plugin publish scope `all-publishable` unless you are deliberately
+  running a focused repair. The workflow serializes plugin npm publish, plugin
+  ClawHub publish, and OpenClaw npm publish so the core package is not published
+  before its externalized plugins.
+- Stable `OpenClaw Release Publish` requires an exact `windows_node_tag` after
+  the matching non-prerelease `openclaw/openclaw-windows-node` release exists.
+  It also requires the candidate-approved `windows_node_installer_digests` map.
+  Before dispatching any publish child, it verifies that source release is
+  published, non-prerelease, contains the required x64/ARM64 installers, and
+  still matches that approved map. It then dispatches `Windows Node Release`
+  while the OpenClaw release is still a draft, carrying the pinned installer
+  digest map unchanged. The child
+  workflow downloads the signed Windows Hub installers from that exact tag,
+  matches them against the pinned digests, verifies their Authenticode
+  signatures use the expected OpenClaw Foundation signer on a Windows runner,
+  writes a SHA-256 manifest, and uploads the installers plus manifest onto the
+  canonical OpenClaw GitHub release, then re-downloads the promoted assets and
+  verifies the manifest membership and hashes. The parent verifies the current
+  x64, ARM64, and checksum asset contract before publication. Direct recovery
+  rejects unexpected `OpenClawCompanion-*` asset names before replacing the
+  expected contract assets with the pinned source bytes. Manually dispatch
+  `Windows Node Release` only for recovery, and always pass an exact tag, never
+  `latest`, plus the explicit `expected_installer_digests` JSON map from the
+  approved source release. Website download links should target exact OpenClaw
+  release asset URLs for the current stable release, or
+  `releases/latest/download/...` only after verifying GitHub's latest redirect
+  points at that same release; do not link only to the companion repo release
+  page.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
 - `OpenClaw Release Checks` also runs the QA Lab mock parity lane plus the fast
@@ -130481,7 +130911,12 @@ orchestrates the trusted-publisher workflows in the order the release needs:
    `ref=<release-sha>`.
 5. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
 6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and
-   saved `preflight_run_id`.
+   saved `preflight_run_id` after verifying the saved
+   `full_release_validation_run_id`.
+7. For stable releases, create or update the GitHub release as a draft, dispatch
+   `Windows Node Release` with the explicit `windows_node_tag` and
+   candidate-approved `windows_node_installer_digests`, and verify the canonical
+   installer/checksum assets before publishing the draft.
 
 Beta publish example:
 
@@ -130490,6 +130925,7 @@ gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 
@@ -130499,7 +130935,10 @@ Stable publish to the default beta dist-tag:
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH \
+  -f windows_node_tag=vX.Y.Z \
+  -f windows_node_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 
@@ -130509,7 +130948,10 @@ Stable promotion directly to `latest` is explicit:
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH \
+  -f windows_node_tag=vX.Y.Z \
+  -f windows_node_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=latest
 ```
 
@@ -130539,6 +130981,13 @@ package cannot ship without every publishable official plugin, including
 - `tag`: required release tag; must already exist
 - `preflight_run_id`: successful `OpenClaw NPM Release` preflight run id;
   required when `publish_openclaw_npm=true`
+- `full_release_validation_run_id`: successful `Full Release Validation` run
+  id; required when `publish_openclaw_npm=true`
+- `windows_node_tag`: exact non-prerelease `openclaw/openclaw-windows-node`
+  release tag; required for stable OpenClaw publish
+- `windows_node_installer_digests`: candidate-approved compact JSON map of the
+  current Windows installer names to their pinned `sha256:` digests; required
+  for stable OpenClaw publish
 - `npm_dist_tag`: npm target tag for the OpenClaw package
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only
   for focused plugin-only repair work with `publish_openclaw_npm=false`
@@ -130584,14 +131033,21 @@ When cutting a stable npm release:
    Matrix, and Telegram coverage from one manual workflow
 4. If you intentionally only need the deterministic normal test graph, run the
    manual `CI` workflow on the release ref instead
-5. Save the successful `preflight_run_id`
-6. Run `OpenClaw Release Publish` with the same `tag`, the same `npm_dist_tag`,
-   and the saved `preflight_run_id`; it publishes externalized plugins to npm
-   and ClawHub before promoting the OpenClaw npm package
-7. If the release landed on `beta`, use the
+5. Select the exact non-prerelease `openclaw/openclaw-windows-node` release tag
+   whose signed x64 and ARM64 installers should ship. Save it as
+   `windows_node_tag`, and save their validated digest map as
+   `windows_node_installer_digests`. The release-candidate helper records both
+   and includes them in its generated publish command.
+6. Save the successful `preflight_run_id` and `full_release_validation_run_id`
+7. Run `OpenClaw Release Publish` with the same `tag`, the same `npm_dist_tag`,
+   the selected `windows_node_tag`, its saved `windows_node_installer_digests`,
+   the saved `preflight_run_id`, and the saved `full_release_validation_run_id`;
+   it publishes externalized plugins to npm and ClawHub before promoting the
+   OpenClaw npm package
+8. If the release landed on `beta`, use the
    `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml`
    workflow to promote that stable version from `beta` to `latest`
-8. If the release intentionally published directly to `latest` and `beta`
+9. If the release intentionally published directly to `latest` and `beta`
    should follow the same stable build immediately, use that same release
    workflow to point both dist-tags at the stable version, or let its scheduled
    self-healing sync move `beta` later
@@ -141309,6 +141765,7 @@ top-level `bindings[]` entries.
 - **Discord channel/thread:** `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
 - **Slack channel/DM:** `match.channel="slack"` + `match.peer.id="<channelId|channel:<channelId>|#<channelId>|userId|user:<userId>|slack:<userId>|<@userId>>"`. Prefer stable Slack ids; channel bindings also match replies inside that channel's threads.
 - **Telegram forum topic:** `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+- **WhatsApp DM/group:** `match.channel="whatsapp"` + `match.peer.id="<E.164|group JID>"`. Use E.164 numbers such as `+15555550123` for direct chats and WhatsApp group JIDs such as `120363424282127706@g.us` for groups.
 - **iMessage DM/group:** `match.channel="imessage"` + `match.peer.id="<handle|chat_id:*|chat_guid:*|chat_identifier:*>"`. Prefer `chat_id:*` for stable group bindings.
 
 </ParamField>
@@ -141426,8 +141883,9 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
 
 ### Behavior
 
-- OpenClaw ensures the configured ACP session exists before use.
-- Messages in that channel or topic route to the configured ACP session.
+- OpenClaw ensures the configured ACP session exists after channel-specific admission and before use.
+- Messages in that channel, topic, or chat route to the configured ACP session.
+- Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
 - Temporary runtime bindings (for example created by thread-focus flows) still apply where present.
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
@@ -142449,7 +142907,14 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
-- `--labels` adds a viewport-only screenshot with overlayed ref labels and prints the saved path.
+- With Playwright, `--labels` adds a screenshot with overlayed ref labels
+  (prints `MEDIA:<path>`) plus an `annotations` array with each ref's bounding
+  box. On `screenshot`, Playwright-backed labels work with `--full-page`,
+  `--ref`, and `--element`; on `snapshot`, the accompanying screenshot remains
+  viewport-only. Existing-session/chrome-mcp profiles render overlay labels on
+  page screenshots but do not return `annotations` or use the Playwright
+  full-page/ref/element projection helper. Without Playwright or chrome-mcp,
+  labeled screenshots are not available.
 - `--urls` appends discovered link destinations to AI snapshots.
 
 ## Snapshots and refs
@@ -142465,7 +142930,9 @@ OpenClaw supports two "snapshot" styles:
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
-  - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
+  - Add `--labels` to include a screenshot with overlayed `e12` labels. On
+    Playwright-backed profiles this also returns per-ref bounding-box metadata
+    (`annotations[]`).
   - Add `--urls` when link text is ambiguous and the agent needs concrete
     navigation targets.
 
@@ -143998,8 +144465,14 @@ app-server thread as an ephemeral side thread. That keeps Codex OAuth and native
 thread behavior intact while still isolating the side answer from the parent
 transcript. Like Codex `/side`, the side thread keeps the current Codex
 permissions and native tool surface, with guardrails that tell the model not to
-treat inherited parent-thread work as active instructions. Non-Codex runtimes
-keep the older direct one-shot path.
+treat inherited parent-thread work as active instructions.
+
+For CLI runtime aliases, BTW uses the owning CLI backend in side-question mode
+instead of falling back to a direct provider call. OpenClaw seeds sanitized
+conversation context into a fresh one-shot CLI invocation, disables OpenClaw MCP
+tool bundling and reusable CLI session state for that invocation, and lets the
+backend add any CLI-native no-resume or no-tools flags it supports. Direct
+non-CLI runtimes keep the direct one-shot path.
 
 ## What it does not do
 
@@ -151050,10 +151523,12 @@ such as `@beta` stay pinned to the selected package and fail when incompatible.
 
 Configure `security.installPolicy` to run a trusted local policy command before
 plugin install or update proceeds. The policy receives metadata plus the staged
-source path and can allow or block the install. It runs before plugin
-`before_install` hooks. The deprecated `--dangerously-force-unsafe-install`
-flag is accepted for compatibility but does not bypass install policy, hooks, or
-OpenClaw's built-in plugin dependency denylist.
+source path and can allow or block the install. It covers CLI and Gateway-backed
+plugin install/update paths. Plugin `before_install` hooks run later only in
+OpenClaw processes where plugin hooks are loaded, so use `security.installPolicy`
+for operator-owned install decisions. The deprecated
+`--dangerously-force-unsafe-install` flag is accepted for compatibility but does
+not bypass install policy or OpenClaw's built-in plugin dependency denylist.
 
 See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and
@@ -154564,9 +155039,9 @@ search or dynamic-tools surface. Codex-native code mode, tool search, deferred
 dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
-When enabled for OpenClaw runs, the model receives one `tool_search_code` tool by default.
-That tool runs a short JavaScript body in an isolated Node subprocess with an
-`openclaw.tools` bridge:
+When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
+by default. That tool runs a short JavaScript body in an isolated Node
+subprocess with an `openclaw.tools` bridge:
 
 ```js
 const hits = await openclaw.tools.search("create a GitHub issue");
@@ -154597,8 +155072,8 @@ run:
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
 5. Index compact descriptors for search.
-6. Expose either the OpenClaw code bridge or the structured fallback tools to the
-   model.
+6. Expose the OpenClaw code bridge, the structured fallback tools, or the
+   compact directory surface to the model.
 
 At execution time every real tool call returns to OpenClaw. The isolated Node
 runtime does not hold plugin implementations, MCP client objects, or secrets.
@@ -154607,18 +155082,26 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 ## Modes
 
-`tools.toolSearch` has two model-facing modes:
+`tools.toolSearch` has three model-facing modes:
 
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge.
 - `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
   structured tools for providers that should not receive code.
+- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+  bounded prompt directory of available tool names and descriptions for
+  providers that should see tool names without every full schema. OpenClaw can
+  also expose a small bounded set of likely or required tool schemas directly
+  for the current turn.
 
-Both modes use the same catalog and execution path. The only difference is the
-shape the model sees. If the current runtime cannot launch the isolated Node
-code-mode child process, the default `code` mode falls back to `tools` before
-catalog compaction.
+All modes use the same policy-filtered catalog and normal OpenClaw execution
+path. If the current runtime cannot launch the isolated Node code-mode child
+process, the default `code` mode falls back to `tools` before catalog
+compaction. In `directory` mode, client-provided tools stay directly visible
+for the current run while OpenClaw tools, plugin tools, and MCP tools can be
+compacted behind the directory catalog. A direct call to an exact hidden
+directory name is hydrated from that same authorized catalog before execution.
 
-Both modes are experimental. Prefer direct tool exposure for small OpenClaw tool
+All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
 catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
 
 There is no separate source-selection config. When Tool Search is enabled, the
@@ -154638,7 +155121,10 @@ Tool Search changes the shape:
   contract
 - Tool Search tools mode: the model sees three compact structured fallback
   tools
-- during the turn: the model loads only the tool schemas it actually needs
+- Tool Search directory mode: the model sees a bounded directory plus
+  search/describe/call controls and a small bounded set of likely or required
+  schemas
+- during the turn: the model can load remaining schemas as needed
 
 Direct tool exposure is still the right default for small catalogs. Tool Search
 is best when one run can see many tools, especially from MCP servers or
@@ -154679,6 +155165,20 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_search`
 - `tool_describe`
 - `tool_call`
+
+Directory mode exposes:
+
+- `tool_search`
+- `tool_describe`
+- `tool_call`
+
+It also keeps client-provided tools directly visible and may expose a small
+bounded set of likely or required catalog tool schemas directly for the current
+turn. If the bounded directory omits entries, use `tool_search` to find them. If
+the model requests an exact hidden directory tool name directly, OpenClaw
+hydrates it from the authorized catalog before normal execution.
+Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
+tool names because exact deferred dispatch uses those names.
 
 ## Runtime boundary
 
@@ -154729,6 +155229,18 @@ Use the structured fallback tools instead for OpenClaw runs:
   tools: {
     toolSearch: {
       mode: "tools",
+    },
+  },
+}
+```
+
+Use the compact directory surface instead for OpenClaw runs:
+
+```json5
+{
+  tools: {
+    toolSearch: {
+      mode: "directory",
     },
   },
 }
