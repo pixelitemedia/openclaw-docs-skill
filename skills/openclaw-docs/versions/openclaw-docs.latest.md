@@ -4157,7 +4157,9 @@ $OPENCLAW_STATE_DIR/tasks/runs.sqlite
 
 The registry loads into memory at gateway start and syncs writes to SQLite for durability across restarts.
 The Gateway keeps the SQLite write-ahead log bounded by using SQLite's default
-autocheckpoint threshold plus periodic and shutdown `TRUNCATE` checkpoints.
+autocheckpoint threshold plus periodic `PASSIVE` checkpoints. Shutdown and
+explicit maintenance checkpoints still use `TRUNCATE` so normal closes can
+reclaim WAL space without making the background sweeper wait on active readers.
 
 ### Automatic maintenance
 
@@ -20099,7 +20101,7 @@ handoff path over manual terminal capture.
 
 - Gateway owns the WhatsApp socket and reconnect loop.
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
-- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query waits plus OpenClaw's local outbound send/presence operation bound.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
@@ -33240,7 +33242,7 @@ Notes:
 - When the current session snapshot is sparse, `/status` can backfill token and cache counters from the most recent transcript usage log. Existing nonzero live values still win over transcript fallback values.
 - `/status` includes compact Gateway process uptime and host system uptime.
 - Transcript fallback can also recover the active runtime model label when the live session entry is missing it. If that transcript model differs from the selected model, status resolves the context window against the recovered runtime model instead of the selected one.
-- When a session is pinned to a model that differs from the configured primary, status prints both values, the reason (`session override`), and the clear hint (`/model <configured-default>` or `/reset`). The configured primary applies to new or unpinned sessions; existing pinned sessions keep their session selection until cleared.
+- When a session is pinned to a model that differs from the configured primary, status prints both values, the reason (`session override`), and the clear hint (`/model default`). The configured primary applies to new or unpinned sessions; existing pinned sessions keep their session selection until cleared.
 - For prompt-size accounting, transcript fallback prefers the larger prompt-oriented total when session metadata is missing or smaller, so custom-provider sessions do not collapse to `0` token displays.
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
@@ -42752,7 +42754,7 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
 - Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
-- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because live OpenAI API requests reject it and the current Codex catalog does not expose it
+- `openai/gpt-5.3-codex-spark` is available through ChatGPT/Codex OAuth subscription auth when your signed-in account exposes it; OpenClaw still suppresses direct OpenAI API-key and Azure API-key routes for this model because those transports reject it
 
 ```json5
 {
@@ -43439,7 +43441,7 @@ The same `provider/model` can mean different things depending on where it came f
 - Configured defaults (`agents.defaults.model.primary` and agent-specific primaries) are the normal starting point and use `agents.defaults.model.fallbacks`.
 - Auto fallback selections are temporary recovery state. They are stored with `modelOverrideSource: "auto"` so later turns can keep using the fallback chain without probing a known-bad primary every time; OpenClaw periodically probes the original primary again, clears the auto selection when it recovers, and announces fallback/recovery transitions once per state change.
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
-- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, switch the current session with `/model Y` or clear stale session state with `/reset`.
+- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, clear the current session selection with `/model default` so it inherits the configured primary again.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
@@ -43566,6 +43568,7 @@ You can switch models for the current session without restarting:
 /model list
 /model 3
 /model openai/gpt-5.4
+/model default
 /model status
 ```
 
@@ -43583,6 +43586,7 @@ You can switch models for the current session without restarting:
     - If the agent is idle, the next run uses the new model right away.
     - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+    - `/model default` clears the session selection and returns the session to the configured default model.
     - A user-selected `/model` ref is strict for that session: if the selected provider/model is unreachable, the reply fails visibly instead of silently answering from `agents.defaults.model.fallbacks`. This is different from configured defaults and cron job primaries, which can still use fallback chains.
     - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 
@@ -44750,7 +44754,7 @@ The Personal Agent Benchmark Pack is a small repo-backed QA scenario pack for
 local personal assistant workflows. It is not a generic model benchmark and it
 does not require a new runner. The pack reuses the private QA stack described in
 [QA overview](/concepts/qa-e2e-automation), the synthetic
-[QA channel](/channels/qa-channel), and the existing `qa/scenarios` markdown
+[QA channel](/channels/qa-channel), and the existing `qa/scenarios` YAML
 catalog.
 
 The first pack is intentionally narrow:
@@ -44800,9 +44804,9 @@ to inspect and file in issues.
 
 ## Extending The Pack
 
-Add new cases under `qa/scenarios/personal/`, then add the scenario id to
-`QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic in
-`mock-openai`, and focused on one personal assistant behavior.
+Add new `.yaml` cases under `qa/scenarios/personal/`, then add the scenario id
+to `QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic
+in `mock-openai`, and focused on one personal assistant behavior.
 
 Good follow-up candidates:
 
@@ -45382,9 +45386,9 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
+| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci` or `--qa-profile release`.                                                                                                                           |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
+| `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
@@ -45401,6 +45405,30 @@ script aliases; both forms are supported.
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                               |
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                                 |
 | `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
+
+Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
+the resolved scenarios through `qa suite`. `--surface` and
+`--category` filter the selected profile instead of defining separate lanes.
+The resulting `qa-evidence.json` includes a profile scorecard summary with
+selected-category counts and missing coverage IDs; the individual evidence
+entries remain the source of truth for the tests, coverage roles, artifacts,
+and results:
+
+```bash
+pnpm openclaw qa run \
+  --qa-profile smoke-ci \
+  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --provider-mode mock-openai \
+  --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
+```
+
+Use `smoke-ci` for deterministic no-live-service proof and `release` for the
+Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
+the root profile before the QA command:
+
+```bash
+pnpm openclaw --profile work qa run --qa-profile smoke-ci
+```
 
 ## Operator flow
 
@@ -46120,25 +46148,26 @@ Operational env vars and the Convex broker endpoint contract live in [Testing �
 
 Seed assets live in `qa/`:
 
-- `qa/scenarios/index.md`
-- `qa/scenarios/<theme>/*.md`
+- `qa/scenarios/index.yaml`
+- `qa/scenarios/<theme>/*.yaml`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
 
-`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+`qa-lab` should stay a generic YAML scenario runner. Each scenario YAML file is
 the source of truth for one test run and should define:
 
-- scenario metadata
-- optional category, capability, lane, and risk metadata
-- docs and code refs
-- optional plugin requirements
-- optional gateway config patch
-- an executable `qa-flow` block for flow scenarios, or `execution.kind`/`execution.path`
-  for Vitest and Playwright scenarios
+- top-level `title`
+- `scenario` metadata
+- optional category, capability, lane, and risk metadata in `scenario`
+- docs and code refs in `scenario`
+- optional plugin requirements in `scenario`
+- optional gateway config patch in `scenario`
+- executable top-level `flow` for flow scenarios, or `scenario.execution.kind` /
+  `scenario.execution.path` for Vitest and Playwright scenarios
 
-The reusable runtime surface that backs `qa-flow` blocks is allowed to stay generic
-and cross-cutting. For example, markdown scenarios can combine transport-side
+The reusable runtime surface that backs `flow` is allowed to stay generic
+and cross-cutting. For example, YAML scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
 
@@ -46176,17 +46205,17 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for markdown QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
+`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
 
 At the architecture level, the split is:
 
 - `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
 - The transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
-- Markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
+- YAML scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 
 ### Adding a channel
 
-Adding a channel to the markdown QA system requires exactly two things:
+Adding a channel to the YAML QA system requires exactly two things:
 
 1. A transport adapter for the channel.
 2. A scenario pack that exercises the channel contract.
@@ -46220,7 +46249,7 @@ The minimum adoption bar for a new channel:
 2. Implement the transport runner on the shared `qa-lab` host seam.
 3. Keep transport-specific mechanics inside the runner plugin or channel harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command. Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
+5. Author or adapt YAML scenarios under the themed `qa/scenarios/` directories.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 
@@ -46263,7 +46292,13 @@ The report should answer:
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
 When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
-Every `qa suite` scenario execution writes a `qa-evidence.json` artifact. Flow scenarios also write `qa-suite-summary.json` for existing suite/report tooling; scenarios that declare `execution.kind: vitest` or `execution.kind: playwright` run the matching test path and write `qa-vitest-report.md` or `qa-playwright-report.md` plus per-scenario logs.
+Every `qa suite` run writes top-level `qa-evidence.json`,
+`qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
+scenario set. Scenarios that declare `execution.kind: vitest` or
+`execution.kind: playwright` run the matching test path and also write
+per-scenario logs. When `qa suite` is reached through
+`qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
+scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
@@ -73464,6 +73499,45 @@ When you touch tests or want extra confidence:
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
+## Test Temp Directories
+
+Prefer the shared helpers in `test/helpers/temp-dir.ts` for test-owned
+temporary directories. They make ownership explicit and keep cleanup in the same
+test lifecycle:
+
+```ts
+import { afterEach } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
+
+afterEach(tempDirs.cleanup);
+
+it("uses a temp workspace", () => {
+  const workspace = tempDirs.make("openclaw-example-");
+  // use workspace
+});
+```
+
+Use `makeTempDir(tempDirs, prefix)` and `cleanupTempDirs(tempDirs)` when a test
+already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
+tests unless a case is explicitly verifying raw temp-dir behavior. Add an
+auditable allow comment with a concrete reason when a test intentionally needs a
+bare temp directory:
+
+```ts
+// openclaw-temp-dir: allow verifies raw fs cleanup behavior
+const workspace = fs.mkdtempSync(prefix);
+```
+
+For migration visibility, `node scripts/report-test-temp-creations.mjs` reports
+new bare temp-dir creation in added diff lines without blocking existing cleanup
+styles. Its file scope intentionally follows the same test-path classification
+used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
+filename heuristic, while skipping the shared helper implementation itself.
+`check:changed` runs this report for changed test paths as a warning-only CI
+signal; findings are GitHub warning annotations, not failures.
+
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
@@ -73567,6 +73641,11 @@ inside every shard.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
+  - Writes top-level `qa-evidence.json`, `qa-suite-summary.json`, and
+    `qa-suite-report.md` artifacts for the selected scenario set, including
+    mixed flow, Vitest, and Playwright scenario selections.
+  - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
+    selected taxonomy profile scorecard in the same `qa-evidence.json`.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker
@@ -87258,7 +87337,7 @@ If the work is vendor-only and no shared contract exists yet, stop and define th
 
 Use **provider hooks** when the behavior belongs to the model provider contract rather than the generic agent loop. Examples include provider-specific request params after transport selection, auth-profile preference, prompt overlays, and follow-up fallback routing after model/profile failover.
 
-Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify successful-but-unusable attempt results such as empty, reasoning-only, or planning-only responses so the outer model fallback policy can make the retry decision.
+Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify explicit protocol outcomes such as empty output, reasoning without visible output, or a structured plan without a final answer so the outer model fallback policy can make the retry decision.
 
 Keep both seams narrow:
 
@@ -92368,11 +92447,12 @@ enabled.
 
 OpenClaw sets app-level `destructive_enabled` from the effective global or
 per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. The `_default`
-app config is disabled with `open_world_enabled: false`. Enabled plugin apps
-are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
-plugin open-world policy knob and does not maintain per-plugin destructive
-tool-name deny lists.
+destructive tool metadata from its native app tool annotations. `true` and
+`"auto"` both set `destructive_enabled: true`; `false` sets it false. The
+`_default` app config is disabled with `open_world_enabled: false`. Enabled
+plugin apps are emitted with `open_world_enabled: true`; OpenClaw does not
+expose a separate plugin open-world policy knob and does not maintain
+per-plugin destructive tool-name deny lists.
 
 Tool approval mode is automatic by default for plugin apps so non-destructive
 read tools can run without a same-thread approval UI. Destructive tools remain
@@ -92389,6 +92469,9 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
 - When policy is `false`, OpenClaw returns a deterministic decline.
 - When policy is `true`, OpenClaw auto-accepts only safe schemas it can map to
   an approval response, such as a boolean approve field.
+- When policy is `"auto"`, OpenClaw exposes destructive plugin actions to
+  Codex but turns ownership-proven MCP approval elicitations into OpenClaw
+  plugin approvals before returning the Codex approval response.
 - Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
   id, or an unsafe elicitation schema declines instead of prompting.
 
@@ -92436,8 +92519,8 @@ Codex thread bindings keep the app config they started with until OpenClaw
 establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even when policy is true, unsafe elicitation
-schemas and ambiguous plugin identity still fail closed.
+`allow_destructive_actions` values. Even when policy is true or `"auto"`,
+unsafe elicitation schemas and ambiguous plugin identity still fail closed.
 
 ## Related
 
@@ -99745,8 +99828,10 @@ Native harnesses that own their own protocol projection can use
 `openclaw/plugin-sdk/agent-harness-runtime` when a completed turn produced no
 visible assistant text. The helper returns `empty`, `reasoning-only`, or
 `planning-only` so OpenClaw's fallback policy can decide whether to retry on a
-different model. It intentionally leaves prompt errors, in-flight turns, and
-intentional silent replies such as `NO_REPLY` unclassified.
+different model. `planning-only` requires the harness's explicit `planText`
+field; OpenClaw does not infer it from assistant prose. The helper intentionally
+leaves prompt errors, in-flight turns, and intentional silent replies such as
+`NO_REPLY` unclassified.
 
 ### Native Codex harness mode
 
@@ -103473,6 +103558,7 @@ API key auth, and dynamic model resolution.
 
       - `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
       - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
+      - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, and `createPlainTextToolCallCompatWrapper`.
       - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "openai")`, and underlying provider schema helpers.
 
       For Gemini-family providers, keep the reasoning-output mode aligned with
@@ -105389,7 +105475,7 @@ and pairing-path families.
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
     | `plugin-sdk/provider-usage` | Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
     | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
-    | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
+    | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
     | `plugin-sdk/provider-transport-runtime` | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
@@ -105461,6 +105547,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
     | `plugin-sdk/plugin-config-runtime` | Runtime plugin-config lookup helpers such as `requireRuntimeConfig`, `resolvePluginConfigObject`, and `resolveLivePluginConfigObject` |
     | `plugin-sdk/config-mutation` | Transactional config mutation helpers such as `mutateConfigFile`, `replaceConfigFile`, and `logConfigUpdated` |
+    | `plugin-sdk/message-tool-delivery-hints` | Shared message-tool delivery metadata hint strings |
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
@@ -121962,10 +122049,11 @@ the Server-side compaction accordion below.
     ```
 
     With `strict-agentic`, OpenClaw:
-    - No longer treats a plan-only turn as successful progress when a tool action is available
-    - Retries the turn with an act-now steer
     - Auto-enables `update_plan` for substantial work
-    - Surfaces an explicit blocked state if the model keeps planning without acting
+    - Retries structurally empty or reasoning-only turns with a visible-answer continuation
+    - Uses explicit harness plan events when the selected harness provides them
+
+    OpenClaw does not classify assistant prose to decide whether a turn is a plan, progress update, or final answer.
 
     <Note>
     Scoped to OpenAI and Codex GPT-5-family runs only. Other providers and older model families keep default behavior.
@@ -122386,6 +122474,7 @@ Bundled fallback examples:
 | Model ref                         | Notes                        |
 | --------------------------------- | ---------------------------- |
 | `openrouter/auto`                 | OpenRouter automatic routing |
+| `openrouter/openrouter/fusion`    | OpenRouter Fusion router     |
 | `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
 | `openrouter/moonshotai/kimi-k2.5` | Kimi K2.5 via MoonshotAI     |
 
@@ -122512,6 +122601,79 @@ media understanding preflight.
 
 OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
+
+## Fusion router
+
+Use OpenRouter Fusion when you want one OpenClaw model ref to ask several
+OpenRouter models in parallel, have OpenRouter judge their answers, and return a
+single final response through the normal OpenRouter provider endpoint. Because
+the upstream model slug is `openrouter/fusion`, the OpenClaw model ref includes
+both the OpenClaw provider prefix and the upstream OpenRouter namespace:
+
+```bash
+openclaw models set openrouter/openrouter/fusion
+```
+
+Configure Fusion's panel and judge through the model's `params.extraBody`. Those
+fields are forwarded into the OpenRouter chat-completions request body. Fusion
+works with either OpenRouter OAuth onboarding or API-key onboarding; if you use
+OAuth, omit the `env.OPENROUTER_API_KEY` line from the example below.
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      model: { primary: "openrouter/openrouter/fusion" },
+      models: {
+        "openrouter/openrouter/fusion": {
+          params: {
+            extraBody: {
+              plugins: [
+                {
+                  id: "fusion",
+                  analysis_models: [
+                    "google/gemini-3.5-flash",
+                    "moonshotai/kimi-k2.6",
+                    "deepseek/deepseek-v4-pro",
+                  ],
+                  model: "google/gemini-3.5-flash",
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The `analysis_models` list is the parallel panel, and `model` inside the Fusion
+plugin config is the judge model. Do not set top-level `tool_choice` to
+`"required"` in normal OpenClaw agent/chat turns to try to force Fusion;
+OpenClaw turns may include OpenClaw tool definitions, and a top-level required
+tool choice can require one of those tools instead of the Fusion router. When
+this Fusion plugin config is present, OpenClaw also adds a sanitized
+system-prompt note with the configured analysis models and judge model so the
+agent can answer questions about its current Fusion panel. Other `extraBody`
+fields are not copied into the prompt.
+
+Fusion is slower by design. OpenRouter may send the same OpenClaw prompt to
+multiple analysis models and then run a final judge/synthesis step, so latency is
+usually higher than a direct single-model request. Use Fusion for deliberate,
+high-quality answers or escalation paths, not as the default for
+latency-sensitive chat. For faster responses, keep the panel small and choose
+faster analysis and judge models.
+
+Test the configured ref with a one-shot local model call:
+
+```bash
+openclaw infer model run --local \
+  --model openrouter/openrouter/fusion \
+  --prompt "Reply with exactly: FUSION_OK" \
+  --json
+```
 
 ## Authentication and headers
 
@@ -128848,22 +129010,13 @@ create` validates the written archive by default; `--no-verify` is the
   explicit `dbPath`.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
-  source that reintroduces transcript bridge contracts such as
-  `transcriptLocator`, `sqlite-transcript://...`, `sessionFile`, or
-  `storePath`, and scans tests for those bridge-contract names too. It also
-  bans `SessionManager.open(...)` and the old static SessionManager facades so
-  runtime and tests cannot silently re-create a file-backed session opener or
-  file-era session discovery. It also bans the old session JSONL downloader
-  hook/class from export UI. It also bans sidecar-shaped plugin-state/task
-  SQLite helper names; tests should assert `databasePath` and the shared
-  `state/openclaw.sqlite` location instead of pretending those features own
-  separate SQLite files. It also bans the old generic memory index SQL table
-  names (`meta`, `files`, `chunks`, `chunks_vec`,
-  `chunks_fts`, `embedding_cache`) in runtime source so the agent database keeps
-  its explicit `memory_index_*` schema. It also bans embedding TEXT schemas and
-  embedding JSON-array writes so vectors stay compact SQLite BLOBs. Migration,
-  doctor, import, and explicit non-session export code remain allowed. The
-  guard now also covers runtime `cache/*.json` stores, generic
+  source that reintroduces the retired transcript bridge markers
+  `transcriptLocator` or `sqlite-transcript://...`. Migration, doctor, import,
+  and explicit non-session export code remain allowed. Broader legacy contract
+  names such as `sessionFile`, `storePath`, and old `SessionManager` file-era
+  facades still have current owners and need separate migration guard work
+  before they can become a required preflight check. The guard now also covers
+  runtime `cache/*.json` stores, generic
   `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
   restart and lock sidecars, Voice Wake settings, plugin binding approvals,
   installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity
@@ -135587,6 +135740,7 @@ Scope includes:
 - Thinking signature cleanup
 - Image payload sanitization
 - Blank text-block cleanup before provider replay
+- Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
 
@@ -135655,6 +135809,21 @@ Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
 - Applied in `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
+
+---
+
+## Global rule: incomplete reasoning-only turns
+
+Assistant turns that hit the provider output limit with only thinking or
+redacted-thinking content are omitted from the in-memory replay copy. Such turns
+contain incomplete provider state and may carry a partial thinking signature.
+
+Empty length turns remain unchanged, as do length turns with visible text, tool
+calls, or unknown content blocks. Stored transcripts are not rewritten.
+
+Implementation:
+
+- `normalizeAssistantReplayContent` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 ---
 
@@ -142662,7 +142831,12 @@ CLI, and scripting patterns (snapshots, refs, waits, debug flows).
 
 ## Control API (optional)
 
-For local integrations only, the Gateway exposes a small loopback HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API.
+This standalone server is opt-in — set the environment variable
+`OPENCLAW_EAGER_BROWSER_CONTROL_SERVER=1` in the gateway service environment
+and restart the gateway before the HTTP endpoints become available. Without
+this variable the browser control runtime still works through the CLI and
+agent tools, but nothing listens on the loopback control port.
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -153543,7 +153717,8 @@ plugins.
       dashboard session, except when `session.dmScope: "main"` is configured
       and the current parent is the agent's main session — in that case `/new`
       resets the main session in place. Typed `/reset` still runs the Gateway's
-      in-place reset.
+      in-place reset. Use `/model default` when you want to clear a pinned
+      session model selection.
     </Note>
 
   </Accordion>
@@ -153716,6 +153891,7 @@ use the Control UI Tools panel or config surfaces.
 /model 3           # select by number from picker
 /model openai/gpt-5.4
 /model opus@anthropic:default
+/model default     # clear the session model selection
 /model status      # detailed view with endpoint and API mode
 ```
 
