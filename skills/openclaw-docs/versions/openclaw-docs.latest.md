@@ -1001,7 +1001,7 @@ You can override this behavior:
 - `envelopeTimezone: "local"` uses the host timezone.
 - `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
 - Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
+- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers, direct agent prompt prefixes, and embedded model-input prefixes.
 - `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
 
 ### Examples
@@ -2433,6 +2433,9 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 <ParamField path="--model" type="string">
   Model override; uses the selected allowed model for the job.
 </ParamField>
+<ParamField path="--clear-model" type="boolean">
+  On `cron edit`, removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if set, otherwise the agent/default model). Cannot be combined with `--model`.
+</ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override.
 </ParamField>
@@ -2738,7 +2741,9 @@ openclaw cron edit <jobId> --clear-agent
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
 
-`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
+The agent `cron` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `cron(action: "list")`; use `cron(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the existing full response with delivery previews.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`. On `cron edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag), which is distinct from `--no-deliver` disabling runner fallback delivery.
 
 <Note>
 Model override note:
@@ -2747,6 +2752,7 @@ Model override note:
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
 - If it is not allowed or cannot be resolved, cron fails the run with an explicit validation error.
 - API `cron.update` payload patches can set `model: null` to clear a stored job model override.
+- `openclaw cron edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot be combined with `--model`.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
 - Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
@@ -4206,7 +4212,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and sessions">
-    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Sessions are conversation context; tasks are activity tracking on top of that.
+    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
     A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
@@ -8485,6 +8491,8 @@ For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visi
 Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best for group rooms backed by latest-generation, tool-reliable models such as GPT 5.5. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
 Use `"automatic"` for weaker models or runtimes that do not reliably understand tool-only delivery. In automatic mode, the agent's final assistant text is the visible source reply path, so a model that cannot consistently call `message(action=send)` can still answer normally.
+
+In automatic mode, normal text final replies are posted directly to the room. If the visible reply needs files, images, or other attachments, the agent may still use `message(action=send)` for that attachment instead of trying to force it through the final text reply.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
@@ -17860,6 +17868,10 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
 
 ## Access control and activation
 
+### Group bot identity
+
+In Telegram groups and forum topics, an explicit mention of the configured bot handle (for example `@my_bot`) is treated as addressing the selected OpenClaw agent, even when the agent persona name differs from the Telegram username. The group silence policy still applies to unrelated group traffic, but the bot handle itself is not considered "someone else."
+
 <Tabs>
   <Tab title="DM policy">
     `channels.telegram.dmPolicy` controls direct message access:
@@ -18025,6 +18037,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    Group history context defaults to `mention-only`: prior group messages are
+    included only when they were addressed to the bot, are replies to the bot,
+    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
+    include recent room history for trusted groups. Set
+    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
+    with the next turn.
+
+```json5
+{
+  channels: {
+    telegram: {
+      includeGroupHistoryContext: "recent",
+    },
+  },
+}
+```
+
     Getting the group chat ID:
 
     - forward a group message to `@userinfobot` / `@getidsbot`
@@ -18150,13 +18179,27 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses Telegram rich messages.
+    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients.
 
-    - Markdown text is sent as rich Markdown without converting it to HTML.
-    - Explicit HTML payloads are sent as rich HTML.
+    Set `channels.telegram.richMessages: true` to opt into Bot API 10.1 rich messages:
+
+```json5
+{
+  channels: {
+    telegram: {
+      richMessages: true,
+    },
+  },
+}
+```
+
+    - Markdown text is rendered through OpenClaw's Markdown IR and sent as Telegram rich HTML.
+    - Explicit rich HTML payloads preserve supported Bot API 10.1 tags such as headings, tables, details, rich media, and formulas.
     - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
-    Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+    This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+
+    Rich messages require compatible Telegram clients. Some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported, so keep this option disabled unless every client used with the bot can render them.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
@@ -18813,7 +18856,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
-- formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
@@ -21924,7 +21967,7 @@ Quick rule:
   fallback and do not reconstruct historic tool calls or system notices.
 - If multiple ACP clients share the same Gateway session key, event and cancel
   routing are best-effort rather than strictly isolated per client. Prefer the
-  default isolated `acp:<uuid>` sessions when you need clean editor-local
+  default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local
   turns.
 - Gateway stop states are translated into ACP stop reasons, but that mapping is
   less expressive than a fully ACP-native runtime.
@@ -22067,7 +22110,7 @@ openclaw acp --session agent:qa:bug-123
 ```
 
 Each ACP session maps to a single Gateway session key. One agent can have many
-sessions; ACP defaults to an isolated `acp:<uuid>` session unless you override
+sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override
 the key or label.
 
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
@@ -22170,8 +22213,10 @@ In Zed, open the Agent panel and select "OpenClaw ACP" to start a thread.
 
 ## Session mapping
 
-By default, ACP sessions get an isolated Gateway session key with an `acp:` prefix.
-To reuse a known session, pass a session key or label:
+By default, ACP bridge sessions get an isolated Gateway session key with an
+`acp-bridge:` prefix. These normal-model bridge sessions are synthetic and
+subject to stale-entry pruning and entry-count caps. To reuse a known session,
+pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.
@@ -24605,6 +24650,8 @@ Isolated cron chat delivery is shared between the agent and the runner:
 
 Use `cron add|create --webhook <url>` or `cron edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
+`cron edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
+
 `--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
 
 Reminders created from an active chat preserve the live chat delivery target for fallback announce delivery. Internal session keys may be lowercase; do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
@@ -24680,7 +24727,7 @@ Use `--due` when you want the manual command to run only if the job is currently
 
 ## Models
 
-`cron add|edit --model <ref>` selects an allowed model for the job.
+`cron add|edit --model <ref>` selects an allowed model for the job. `cron edit <job-id> --clear-model` removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if present, otherwise the agent/default model); it cannot be combined with `--model`.
 
 <Warning>
 If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
@@ -31168,7 +31215,8 @@ doctor can report the missing artifact.
 Policy is authored, not generated from the user's current settings. A minimal
 policy for channels, MCP servers, model providers, network posture, ingress/channel access, Gateway
 exposure, agent workspace posture, configured sandbox runtime posture, OpenClaw
-data-handling posture, config secret provider/auth profile posture, and tool metadata looks like this:
+data-handling posture, config secret provider/auth profile posture, exec approval
+file posture, and tool metadata looks like this:
 
 ```jsonc
 {
@@ -31259,6 +31307,15 @@ data-handling posture, config secret provider/auth profile posture, and tool met
       "allowModes": ["api_key", "token"],
     },
   },
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": { "allowSecurity": ["deny"] },
+    "agents": {
+      "allowSecurity": ["deny", "allowlist"],
+      "allowAutoAllowSkills": false,
+      "allowlist": { "expected": ["deploy", "status"] },
+    },
+  },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
     "profiles": {
@@ -31301,9 +31358,11 @@ and `group:runtime` covers shell/process tools. Tool posture policy observes
 `tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
 `tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
 `tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
-`agents.list[].tools.*` overrides. It does not read runtime/operator approval
-state such as exec-approvals.json, and it does not enforce tool calls at
-runtime. Secret evidence records
+`agents.list[].tools.*` overrides. Exec approval policy reads the named
+`exec-approvals.json` product artifact only when an `execApprovals` rule is
+present; evidence records defaults, per-agent posture, and allowlist patterns
+without socket tokens or last-used command text. Policy does not enforce tool
+calls at runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
@@ -31332,8 +31391,8 @@ its own finding against the same observed config.
 
 Use `scopes.<scopeName>` when one set of agents or channels needs stricter
 policy than the top-level baseline. Agent-scoped sections use `agentIds`, which
-supports `tools.*`, `agents.workspace.*`, `sandbox.*`, and
-`dataHandling.memory.*`. Channel-scoped
+supports `tools.*`, `agents.workspace.*`, `sandbox.*`, `dataHandling.memory.*`,
+and `execApprovals.*`. Channel-scoped
 ingress uses `channelIds`, which supports `ingress.channels.*`. Unsupported
 sections are rejected instead of being ignored. If an `agentIds` entry is not
 present in `agents.list[]`, OpenClaw evaluates the scoped rule against inherited
@@ -31418,10 +31477,10 @@ groups where those fields cannot be observed.
 Top-level `ingress.session.requireDmScope` remains global because
 `session.dmScope` is not channel-attributable evidence.
 
-| Selector     | Supported sections                                                | Use when                                          |
-| ------------ | ----------------------------------------------------------------- | ------------------------------------------------- |
-| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, and `dataHandling.memory` | One or more runtime agents need stricter rules.   |
-| `channelIds` | `ingress.channels`                                                | One or more channels need stricter ingress rules. |
+| Selector     | Supported sections                                                                 | Use when                                          |
+| ------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, `dataHandling.memory`, and `execApprovals` | One or more runtime agents need stricter rules.   |
+| `channelIds` | `ingress.channels`                                                                 | One or more channels need stricter ingress rules. |
 
 Every scope present in `policy.jsonc` must be valid and enforceable.
 
@@ -31514,6 +31573,69 @@ allowlist such as `["all"]`.
 | `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
 | `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
 | `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+#### Exec approvals
+
+Exec approvals policy observes the active runtime `exec-approvals.json`
+artifact. By default this is `~/.openclaw/exec-approvals.json`; when
+`OPENCLAW_STATE_DIR` is set, Policy reads
+`$OPENCLAW_STATE_DIR/exec-approvals.json`. Actual posture rules such as
+`execApprovals.defaults.*` or `execApprovals.agents.*` require readable artifact
+evidence; a missing or invalid artifact is reported as unobservable evidence
+instead of becoming a best-effort pass against synthetic runtime defaults. Once
+the artifact is readable, omitted approval fields inherit runtime defaults: missing
+`defaults.security` is `full`, and missing agent security inherits that
+default. Evidence includes `defaults`, `agents.*`, and
+`agents.*.allowlist[].pattern` plus optional `argPattern`, effective
+`autoAllowSkills` posture, and entry source. It does not include socket
+path/token, `commandText`, `lastUsedCommand`, resolved paths, or timestamps.
+
+| Policy field                                | Observed state                                                                         | Use when                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
+| `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
+| `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
+| `execApprovals.agents.allowlist.expected`   | Aggregate `agents.*.allowlist[]` pattern and optional argPattern entries               | Require the approvals allowlist to match the reviewed pattern set.                      |
+
+For example, require the approvals artifact, deny permissive defaults, and
+allow only reviewed exec approval posture for selected agents:
+
+```jsonc
+{
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": {
+      // Security modes: "deny", "allowlist", or "full".
+      // This default permits only the locked-down deny posture.
+      "allowSecurity": ["deny"],
+    },
+  },
+  "scopes": {
+    "restricted-shell": {
+      "agentIds": ["family-agent", "groups-agent"],
+      "execApprovals": {
+        "agents": {
+          // Selected agents may use reviewed allowlist posture, but not "full".
+          "allowSecurity": ["allowlist"],
+          // false means skill CLIs must appear in the reviewed allowlist instead of
+          // being implicitly approved by autoAllowSkills.
+          "allowAutoAllowSkills": false,
+          "allowlist": {
+            "expected": [
+              // Simple entry: exact reviewed executable pattern with no argPattern.
+              "travel-hub",
+              // Constrained entry: pattern plus reviewed argument regex.
+              { "pattern": "calendar-cli", "argPattern": "^sync\\b" },
+              "/bin/date",
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 #### Auth profiles
 
@@ -31883,6 +32005,13 @@ Policy currently verifies:
 | `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
 | `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
 | `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
+| `policy/exec-approvals-missing`                          | Policy requires `exec-approvals.json`, but the artifact is missing.               |
+| `policy/exec-approvals-invalid`                          | The configured exec approvals artifact cannot be parsed.                          |
+| `policy/exec-approvals-default-security-unapproved`      | Exec approval defaults use a security mode outside the policy allowlist.          |
+| `policy/exec-approvals-agent-security-unapproved`        | A per-agent effective exec approval security mode is outside the allowlist.       |
+| `policy/exec-approvals-auto-allow-skills-enabled`        | An exec approval agent implicitly auto-allows skill CLIs when policy denies it.   |
+| `policy/exec-approvals-allowlist-missing`                | The approvals allowlist is missing a pattern required by policy.                  |
+| `policy/exec-approvals-allowlist-unexpected`             | The approvals allowlist includes a pattern not expected by policy.                |
 | `policy/tools-missing-risk-level`                        | A governed tool declaration is missing risk metadata.                             |
 | `policy/tools-unknown-risk-level`                        | A governed tool declaration uses an unknown risk value.                           |
 | `policy/tools-missing-sensitivity-token`                 | A governed tool declaration is missing sensitivity metadata.                      |
@@ -32711,7 +32840,7 @@ For webhook ingress, startup logs a non-fatal security warning and audit flags `
 If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
 Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 
-It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
+It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
 It also flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured) and `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
 It also warns when sandbox browser uses Docker `bridge` network without `sandbox.browser.cdpSourceRange`.
 It also flags dangerous sandbox Docker network modes (including `host` and `container:*` namespace joins).
@@ -32929,7 +33058,7 @@ openclaw sessions cleanup --json
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
-  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
@@ -35956,7 +36085,7 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedAgent` abort timer.
 - Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
-- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; owned silent model calls also stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not reported as stalled too early. Active work with no recent progress reports as `session.stalled`; owned model calls switch to `session.stalled` at or after the abort threshold, and ownerless stale model/tool activity is not hidden as long-running. `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 - Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but it is still bounded by any lower `agents.defaults.timeoutSeconds` or run-specific timeout because those control the whole agent run. Otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered runs with no explicit model or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 - Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout, and keep the agent/runtime timeout at least as high when the model request needs to run longer.
 
@@ -45411,8 +45540,9 @@ the resolved scenarios through `qa suite`. `--surface` and
 `--category` filter the selected profile instead of defining separate lanes.
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
-entries remain the source of truth for the tests, coverage roles, artifacts,
-and results:
+entries remain the source of truth for the tests, coverage roles, and results.
+Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
+`smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
 ```bash
 pnpm openclaw qa run \
@@ -46733,7 +46863,7 @@ keys.
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; owned silent model calls also stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not reported as stalled too early. Active work with no recent progress logs as `session.stalled`; owned model calls switch to `session.stalled` at or after the abort threshold, and ownerless stale model/tool activity is not hidden as long-running. `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 
@@ -48078,7 +48208,7 @@ If `userTimezone` is unset, OpenClaw resolves the host timezone at runtime (no c
 
 - **Use UTC envelopes** (`envelopeTimezone: "utc"`) when you want stable timestamps across hosts in different regions, or when you want UTC-aligned logs to match diagnostics output.
 - **Use a fixed IANA zone** (e.g. `"Europe/Vienna"`) when the gateway host is in one zone but the user is in another and you want envelopes to read in the user's zone regardless of host migration.
-- **Set `envelopeTimestamp: "off"`** for low-token envelopes when timestamp context is not useful for the conversation.
+- **Set `envelopeTimestamp: "off"`** when timestamp context is not useful for the conversation. This removes absolute timestamps from envelopes, direct agent prompt prefixes, and embedded model-input prefixes.
 
 For the full behavior reference, examples per provider, and elapsed-time formatting, see [Date & Time](/date-time).
 
@@ -49943,8 +50073,11 @@ You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
+openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
+
+`main` is the default agent id when no explicit agent list is configured. If
+you use multiple agents, replace it with the agent id you want to run.
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
 command path:
@@ -59687,7 +59820,7 @@ Optional request headers:
 
 - `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent. Shared-secret bearer callers can use this header. Identity-bearing callers, such as trusted-proxy or private no-auth ingress requests with `x-openclaw-scopes`, need `operator.admin`; write-only callers get `403 missing scope: operator.admin`.
 - `x-openclaw-agent-id: <agentId>` remains supported as a compatibility override.
-- `x-openclaw-session-key: <sessionKey>` fully controls session routing.
+- `x-openclaw-session-key: <sessionKey>` explicitly controls session routing. The value must not use reserved internal session namespaces such as `subagent:`, `cron:`, or `acp:`; those requests are rejected with `400 invalid_request_error`.
 - `x-openclaw-message-channel: <channel>` sets the synthetic ingress channel context for channel-aware prompts and policies.
 
 Compatibility aliases still accepted:
@@ -59733,7 +59866,7 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
 
-For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` when you need explicit routing control across multiple clients or threads.
+For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients or threads, and choose application-owned keys that do not start with reserved internal namespaces such as `subagent:`, `cron:`, or `acp:`.
 
 ## Why this surface matters
 
@@ -60897,12 +61030,18 @@ still be detected.
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls are
-  still making progress.
+  still making progress. Owned model calls that stay silent past
+  `diagnostics.stuckSessionWarnMs` also report as long-running before
+  `diagnostics.stuckSessionAbortMs` so slow or non-streaming model providers do
+  not look like stalled gateway sessions while they remain abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
-  recent progress. Stalled embedded runs stay observe-only at first, then
-  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
-  turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 5 minutes and 3x
+  recent progress. Owned model calls switch from `session.long_running` to
+  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  stale model/tool activity is not treated as harmless long-running work.
+  Stalled embedded runs stay observe-only at first, then abort-drain after
+  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind the
+  lane can resume. When unset, the abort threshold defaults to the safer
+  extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
@@ -62225,7 +62364,9 @@ runtime state.
 `TaskSummary` includes `id`, `status`, and optional metadata such as `kind`,
 `runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
 `runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
-terminal summary, and sanitized error text.
+terminal summary, and sanitized error text. `agentId` identifies the agent
+executing the task; `sessionKey` and `ownerKey` preserve requester and control
+context.
 
 ### Operator helper methods
 
@@ -66513,8 +66654,8 @@ exhaustive):
 | `skills.code_safety`                                          | warn/critical | Skill installer metadata/code contains suspicious or dangerous patterns              | skill install source                                                                                 | no       |
 | `skills.code_safety.scan_failed`                              | warn          | Skill code scan could not complete                                                   | skill scan environment                                                                               | no       |
 | `security.exposure.open_channels_with_exec`                   | warn/critical | Shared/public rooms can reach exec-enabled agents                                    | `channels.*.dmPolicy`, `channels.*.groupPolicy`, `tools.exec.*`, `agents.list[].tools.exec.*`        | no       |
-| `security.exposure.open_groups_with_elevated`                 | critical      | Open groups + elevated tools create high-impact prompt-injection paths               | `channels.*.groupPolicy`, `tools.elevated.*`                                                         | no       |
-| `security.exposure.open_groups_with_runtime_or_fs`            | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards            | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode`    | no       |
+| `security.exposure.open_groups_with_elevated`                 | critical      | Open DMs/groups + elevated tools create high-impact prompt-injection paths           | top-level or nested DM policy paths, account overrides, `channels.*.groupPolicy`                     | no       |
+| `security.exposure.open_groups_with_runtime_or_fs`            | critical/warn | Open DMs/groups can reach command/file tools without sandbox/workspace guards        | DM/group policy paths, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode`       | no       |
 | `security.trust_model.multi_user_heuristic`                   | warn          | Config looks multi-user while gateway trust model is personal-assistant              | split trust boundaries, or shared-user hardening (`sandbox.mode`, tool deny/workspace scoping`)      | no       |
 | `tools.profile_minimal_overridden`                            | warn          | Agent overrides bypass global minimal profile                                        | `agents.list[].tools.profile`                                                                        | no       |
 | `plugins.tools_reachable_permissive_policy`                   | warn          | Extension tools reachable in permissive contexts                                     | `tools.profile` + tool allow/deny                                                                    | no       |
@@ -73646,6 +73787,8 @@ inside every shard.
     mixed flow, Vitest, and Playwright scenario selections.
   - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
     selected taxonomy profile scorecard in the same `qa-evidence.json`.
+    `smoke-ci` writes slim evidence, which sets `evidenceMode: "slim"` and omits
+    per-entry `execution`.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker
@@ -74279,7 +74422,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
 - Release typed onboarding smoke: `pnpm test:docker:release-typed-onboarding` installs the packed tarball, drives `openclaw onboard` through a real TTY, configures OpenAI as an env-ref provider, verifies no raw key persistence, and runs a mocked agent turn.
 - Release media/memory smoke: `pnpm test:docker:release-media-memory` installs the packed tarball, verifies image understanding from a PNG attachment, OpenAI-compatible image generation output, memory search recall, and recall survival across Gateway restart.
-- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs `openclaw@latest` by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
+- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published baseline older than the candidate tarball by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. If no older published baseline exists, it reuses the candidate version. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
 - Release plugin marketplace smoke: `pnpm test:docker:release-plugin-marketplace` installs from a local fixture marketplace, updates the installed plugin, uninstalls it, and verifies the plugin CLI disappears with install metadata pruned.
 - Skill install smoke: `pnpm test:docker:skill-install` installs the packed OpenClaw tarball globally in Docker, disables uploaded archive installs in config, resolves the current live ClawHub skill slug from search, installs it with `openclaw skills install`, and verifies the installed skill plus `.clawhub` origin/lock metadata.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
@@ -82410,7 +82553,7 @@ Notes:
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped `--env` values are reduced to an explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
+- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
@@ -85436,7 +85579,7 @@ Notes:
 - Choosing "Always Allow" in the prompt adds that command to the allowlist.
 - `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`) and then merged with the app's environment.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped environment overrides are reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
+- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 
 ## Deep links
 
@@ -85781,6 +85924,7 @@ into Windows.
 Inside WSL:
 
 ```bash
+sudo apt-get install -y dbus-x11
 sudo loginctl enable-linger "$(whoami)"
 openclaw gateway install
 ```
@@ -85788,7 +85932,7 @@ openclaw gateway install
 In PowerShell as Administrator:
 
 ```powershell
-schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
+schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec dbus-launch true" /sc onstart /ru "$env:USERNAME"
 ```
 
 Replace `Ubuntu` with your distro name from:
@@ -85796,6 +85940,11 @@ Replace `Ubuntu` with your distro name from:
 ```powershell
 wsl --list --verbose
 ```
+
+> **Note:** Two changes from older recipes:
+>
+> - **`dbus-launch true` instead of `/bin/true`** — On WSL ≥ 2.6.1.0 a regression ([microsoft/WSL #13416](https://github.com/microsoft/WSL/issues/13416)) causes the distro to idle-terminate 15–20 seconds after the last client exits, even with linger enabled. `dbus-launch true` keeps a child-of-init process alive as a workaround ([community discussion, microsoft/WSL #9245](https://github.com/microsoft/WSL/discussions/9245)).
+> - **`/ru "$env:USERNAME"` instead of `/ru SYSTEM`** — Per-user WSL distros (the default setup) are not visible to the SYSTEM account; the task appears to run but the distro is never started. Running as your own account avoids this. Windows will prompt for your password when the task is created.
 
 After reboot, verify from WSL:
 
@@ -91943,9 +92092,22 @@ Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
 dynamic tools that duplicate Codex-native workspace operations: `read`, `write`,
 `edit`, `apply_patch`, `exec`, `process`, and `update_plan`. Most remaining
 OpenClaw integration tools such as messaging, media, cron, browser, nodes,
-gateway, `heartbeat_respond`, and `web_search` are available through Codex tool
-search under the `openclaw` namespace, keeping the initial model context
-smaller.
+gateway, and `heartbeat_respond` are available through Codex tool search under
+the `openclaw` namespace, keeping the initial model context smaller. Web search
+uses Codex's hosted `web_search` tool by default when search is enabled and no
+managed provider is selected. Native hosted search and OpenClaw's managed
+`web_search` dynamic tool are mutually exclusive so managed search cannot bypass
+native domain restrictions. OpenClaw uses the managed tool when hosted search is
+unavailable, explicitly disabled, or replaced by a selected managed provider.
+OpenClaw keeps Codex's standalone `web.run` extension disabled because
+production app-server traffic rejects its user-defined `web` namespace.
+`tools.web.search.enabled: false` disables both paths, as do tool-disabled
+LLM-only runs. Codex treats `"cached"` as a preference and resolves it to live
+external access for unrestricted app-server turns. Automatic managed fallback
+fails closed when native `allowedDomains` are set so the allowlist cannot be
+bypassed. Persistent effective search-policy changes rotate the bound Codex
+thread before the next turn. Transient per-turn restrictions use a temporary
+restricted thread and preserve the existing binding for later resume.
 `sessions_yield` and message-tool-only source replies stay direct because
 those are turn-control contracts. `sessions_spawn` stays searchable so Codex's
 native `spawn_agent` remains the primary Codex subagent surface, while explicit
@@ -92750,6 +92912,9 @@ Current compatibility records include:
   `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
   `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
   `platform` contexts
+- WhatsApp `WebInboundMessage` top-level admission fields such as `from`,
+  `conversationId`, `accountId`, `accessControlPassed`, and `chatType` while
+  callback consumers migrate to the `admission` envelope
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
 - legacy memory-specific embedding provider registration while embedding
@@ -92808,6 +92973,23 @@ name its exact nested replacement. Common examples:
 `payload.untrustedStructuredContext` is extracted from inbound provider payloads.
 Plugins should inspect the `label`, `source`, and `type` before treating its
 `payload` as authoritative.
+
+### WhatsApp Inbound Admission Fields
+
+Accepted WhatsApp callback messages now carry `admission`, a public-safe
+envelope for the access-control decision that admitted the message. New callback
+code should read admission facts from `msg.admission` instead of the older
+top-level admission fields.
+
+The top-level fields remain available until **2026-08-30**. The TypeScript
+`@deprecated` annotations name each replacement:
+
+- `from` and `conversationId` move to `admission.conversation.id`.
+- `accountId` moves to `admission.accountId`.
+- `accessControlPassed` is a derived compatibility view of
+  `admission.ingress.decision === "allow"`; on messages that already carry
+  `admission`, writing the legacy boolean does not rewrite the ingress graph.
+- `chatType` moves to `admission.conversation.kind`.
 
 ## Release notes
 
@@ -97292,6 +97474,7 @@ Important examples:
 | `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                 |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
+| `openclaw.install.requiredPlatformPackages`                                                | npm package aliases that must materialize when their lockfile platform constraints match the current host.                                                                           |
 | `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
@@ -97303,6 +97486,13 @@ choices. Do not move install hints into `openclaw.plugin.json`.
 registry loading for non-bundled plugin sources. Invalid values are rejected;
 newer-but-valid values skip external plugins on older hosts. Bundled source
 plugins are assumed to be co-versioned with the host checkout.
+
+`openclaw.install.requiredPlatformPackages` is for npm packages that expose
+required native binaries through optional, platform-specific aliases. List the
+bare npm package name for every supported platform alias. During npm install,
+OpenClaw verifies only the declared alias whose lockfile constraints match the
+current host. If npm reports success but omits that alias, OpenClaw retries once
+with a fresh cache and rolls back the install if the alias is still missing.
 
 `openclaw.compat.pluginApi` is enforced during package install for non-bundled
 plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the
@@ -104919,6 +105109,7 @@ Example:
 | `minHostVersion`             | `string`                            | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
 | `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
 | `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
+| `requiredPlatformPackages`   | `string[]`                          | Required platform-specific npm aliases verified during npm install.               |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">
@@ -105561,7 +105752,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |
+    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma and WAL maintenance setup for plugin-owned databases |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -146273,10 +146464,11 @@ reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`,
 `NO_COLOR`, `FORCE_COLOR`).
 
 For `allow-always` decisions in allowlist mode, known dispatch wrappers (`env`,
-`nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path instead
-of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are unwrapped for
-shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or multiplexer
-cannot be safely unwrapped, no allowlist entry is persisted automatically.
+`flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path
+instead of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are
+unwrapped for shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted
+automatically.
 
 If you allowlist interpreters like `python3` or `node`, prefer
 `tools.exec.strictInlineEval=true` so inline eval still requires an explicit
@@ -153763,7 +153955,8 @@ plugins.
     | `/help` | Show the short help summary |
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
-    | `/status` | Show execution/runtime status, Gateway and system uptime, plus provider usage/quota |
+    | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel failures, dependency issues, compatibility notices |
     | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
@@ -157597,6 +157790,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
+  <Card title="Codex Hosted Search" icon="search" href="/plugins/codex-harness">
+    AI-synthesized grounded answers through your Codex app-server account.
+  </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
   </Card>
@@ -157643,6 +157839,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | Provider                                         | Result style                                                   | Filters                                          | API key                                                                                 |
 | ------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | [Brave](/tools/brave-search)                     | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
+| [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                                   | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
 | [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                            | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                         | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
 | [Firecrawl](/tools/firecrawl)                    | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
@@ -157665,13 +157862,43 @@ Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatical
 
 ## Native Codex web search
 
-Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
+The Codex app-server runtime uses Codex's hosted `web_search` tool automatically
+when web search is enabled and no managed provider is selected. Native hosted
+search and OpenClaw's managed `web_search` dynamic tool are mutually exclusive,
+so managed search cannot bypass native domain restrictions. OpenClaw uses the
+managed tool when hosted search is unavailable, explicitly disabled, or
+replaced by a selected managed provider. OpenClaw keeps Codex's standalone
+`web.run` extension disabled because production app-server traffic rejects its
+user-defined `web` namespace.
 
-- Configure it under `tools.web.search.openaiCodex`
-- It only activates for Codex-capable OpenAI models (`openai/*` models using `api: "openai-chatgpt-responses"`)
-- Managed `web_search` still applies to non-Codex models
-- `mode: "cached"` is the default and recommended setting
+- Configure native search under `tools.web.search.openaiCodex`
+- Set `tools.web.search.provider: "codex"` to provision Codex Hosted Search as
+  the managed `web_search` provider for any parent model. Each call runs a
+  bounded ephemeral Codex app-server turn and fails if Codex does not emit a
+  hosted `webSearch` item.
+- `mode: "cached"` is the default preference, but Codex resolves it to live
+  external access for unrestricted app-server turns; set `"live"` to request
+  live access explicitly
+- Set `tools.web.search.provider` to a managed provider such as `brave` to use
+  OpenClaw's managed `web_search` instead
+- Set `tools.web.search.openaiCodex.enabled: false` to opt out of Codex-hosted
+  search; other managed providers remain available
+- Restricting the Codex native tool surface also keeps managed `web_search`
+  available
+- When `allowedDomains` is set, automatic managed fallback fails closed if
+  hosted search is unavailable so the native allowlist cannot be bypassed
+- Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
+
+Persistent effective Codex search-policy changes start a fresh bound thread so
+an already loaded app-server thread cannot keep stale hosted-search access.
+Transient per-turn restrictions use a temporary restricted thread and preserve
+the existing binding for later resume.
+
+Direct OpenAI ChatGPT Responses traffic can also use OpenAI's hosted
+`web_search` tool. That separate path remains opt-in through
+`tools.web.search.openaiCodex.enabled: true` and only applies to eligible
+`openai/*` models using `api: "openai-chatgpt-responses"`.
 
 ```json5
 {
@@ -157679,6 +157906,8 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
     web: {
       search: {
         enabled: true,
+        // Optional: use Codex Hosted Search from non-Codex parent models too.
+        provider: "codex",
         openaiCodex: {
           enabled: true,
           mode: "cached",
@@ -157696,14 +157925,25 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
 }
 ```
 
-If native Codex search is enabled but the current model is not Codex-capable, OpenClaw keeps the normal managed `web_search` behavior.
+For runtimes and providers that do not support native Codex search, Codex can
+use the managed `web_search` fallback through OpenClaw's dynamic tool namespace.
+Use an explicit managed provider when you need OpenClaw's provider-specific
+network controls instead of Codex-hosted search.
+
+Selecting `provider: "codex"` enables the bundled `codex` plugin and uses the
+same `tools.web.search.openaiCodex` restrictions shown above. Authenticate the
+Codex app-server first with `openclaw models auth login --provider openai`.
+The parent agent can use any model or runtime; only the bounded search worker
+runs through Codex.
 
 ## Network safety
 
-Managed `web_search` provider calls use OpenClaw's guarded fetch path. For
+Managed HTTP `web_search` provider calls use OpenClaw's guarded fetch path. For
 trusted provider API hosts, OpenClaw allows Surge, Clash, and sing-box fake-IP
 DNS answers in `198.18.0.0/15` and `fc00::/7` only for that provider hostname.
 Other private, loopback, link-local, and metadata destinations remain blocked.
+Codex Hosted Search is the exception: its bounded worker delegates network
+access to Codex app-server's hosted `web_search` tool.
 
 This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
 `web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
@@ -157737,6 +157977,7 @@ Key-free fallbacks after that:
 12. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
 13. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
 14. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+15. **Codex Hosted Search** -- key-free provider contract that uses the active Codex/OpenAI sign-in (order 900)
 
 When no API-backed provider is configured, OpenClaw defaults to **Parallel
 Search (Free)**, so `web_search` works without an API key.
