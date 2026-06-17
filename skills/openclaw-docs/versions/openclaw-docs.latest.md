@@ -18179,7 +18179,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients.
+    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients. This compatibility mode supports normal bold, italic, links, code, spoilers, and quotes, but not Bot API 10.1 rich-only blocks such as native tables, details, rich media, and formulas.
 
     Set `channels.telegram.richMessages: true` to opt into Bot API 10.1 rich messages:
 
@@ -18193,13 +18193,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    When enabled:
+
+    - The agent is told that Telegram rich messages are available for this bot/account.
     - Markdown text is rendered through OpenClaw's Markdown IR and sent as Telegram rich HTML.
     - Explicit rich HTML payloads preserve supported Bot API 10.1 tags such as headings, tables, details, rich media, and formulas.
     - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
     This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
 
-    Rich messages require compatible Telegram clients. Some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported, so keep this option disabled unless every client used with the bot can render them.
+    Default: off for client compatibility. Rich messages require compatible Telegram clients; some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported. Keep this option disabled unless every client used with the bot can render them. `/status` shows whether the current Telegram session has rich messages on or off.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
@@ -20144,7 +20147,7 @@ handoff path over manual terminal capture.
 
 - Gateway owns the WhatsApp socket and reconnect loop.
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
-- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query waits plus OpenClaw's local outbound send/presence operation bound.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query waits plus OpenClaw's local outbound send/presence and inbound read-receipt operation bounds.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
@@ -27617,12 +27620,16 @@ sidebarTitle: "MCP"
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`
-- manage OpenClaw-owned outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
+- manage OpenClaw-managed outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
 
 In other words:
 
 - `serve` is OpenClaw acting as an MCP server
 - the other subcommands are OpenClaw acting as an MCP client-side registry for MCP servers its runtimes may consume later
+
+<Note>
+  `list`, `show`, `set`, and `unset` only read and write OpenClaw-managed `mcp.servers` entries in OpenClaw config. They do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
+</Note>
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
 
@@ -27974,7 +27981,7 @@ For broader testing context, see [Testing](/help/testing).
 This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `add`, `set`,
 `configure`, `tools`, `login`, `logout`, `reload`, and `unset` path.
 
-These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP server definitions under `mcp.servers` in OpenClaw config.
+These commands do not expose OpenClaw over MCP. They manage OpenClaw-managed MCP server definitions under `mcp.servers` in OpenClaw config. They do not read mcporter servers from `config/mcporter.json`.
 
 Those saved definitions are for runtimes that OpenClaw launches or configures later, such as embedded OpenClaw and other runtime adapters. OpenClaw stores the definitions centrally so those runtimes do not need to keep their own duplicate MCP server lists.
 
@@ -33291,6 +33298,10 @@ Notes:
   in the shared managed skills directory when combined with `--global`.
 - `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
   default. There is no `--json` flag because JSON is already the default.
+- When ClawHub returns server-resolved source provenance, verify JSON also
+  includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
+  self-declared source URLs stay only in the raw provenance envelope and are not
+  promoted.
 - `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it
   verifies the installed version against the registry it came from. `--version`
   and `--tag` override the version selector but keep that installed registry
@@ -37668,6 +37679,29 @@ Optional members:
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
+
+### Runtime settings
+
+Lifecycle hooks that run inside OpenClaw receive an optional
+`runtimeSettings` object. It is a versioned, read-only internal
+producer/consumer API surface: OpenClaw produces it for the selected context
+engine, and the context engine consumes it inside lifecycle hooks. It is not
+rendered directly to users and does not create a dedicated reporting surface.
+
+- `schemaVersion`: currently `1`
+- `runtime`: OpenClaw host, runtime mode (`normal`, `fallback`, or
+  `degraded`), and optional harness/runtime ids
+- `contextEngineSelection`: selected context engine id and selection source
+- `executionHost`: host id and label for the surface invoking the hook
+- `model`: requested model, resolved model, provider, and optional model family
+- `limits`: prompt token budget and max output tokens when known
+- `diagnostics`: closed fallback and degraded reason codes when known
+
+Fields that can be unknown are represented as `null`; discriminator fields such
+as runtime mode and selection source remain non-nullable. Older engines remain
+compatible: if a strict legacy engine rejects `runtimeSettings` as an unknown
+property, OpenClaw retries the lifecycle call without it instead of quarantining
+the engine.
 
 ### Host requirements
 
@@ -43042,7 +43076,9 @@ Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   </Step>
 </Steps>
 
-Gemini CLI JSON replies are parsed from `response`; usage falls back to `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
+Gemini CLI uses `stream-json` by default. OpenClaw reads assistant stream
+messages and normalizes `stats.cached` into `cacheRead`; legacy
+`--output-format json` overrides still read reply text from `response`.
 
 ### Z.AI (GLM)
 
@@ -43078,6 +43114,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                                     |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                             | `cohere/command-a-03-2025`                                 |
 | Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                          |
 | DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
 | DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                               |
@@ -50325,8 +50362,10 @@ load local files from plain paths.
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
-  usage from `stats` when `usage` is missing or empty.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage
+  from `stats` when `usage` is missing or empty. The bundled Gemini CLI default
+  uses `stream-json`, but old `--output-format json` overrides still use the
+  JSON parser.
 - `output: "jsonl"` parses JSONL streams and extracts the final agent message plus session
   identifiers when present.
 - `output: "text"` treats stdout as the final response.
@@ -50356,8 +50395,11 @@ The bundled Anthropic plugin registers a default for `claude-cli`:
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
 - `command: "gemini"`
-- `args: ["--output-format", "json", "--prompt", "{prompt}"]`
-- `resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
+- `args: ["--skip-trust", "--approval-mode", "auto_edit", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `resumeArgs: ["--skip-trust", "--approval-mode", "auto_edit", "--resume", "{sessionId}", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `output: "jsonl"`
+- `resumeOutput: "jsonl"`
+- `jsonlDialect: "gemini-stream-json"`
 - `imageArg: "@"`
 - `imagePathScope: "workspace"`
 - `modelArg: "--model"`
@@ -50368,9 +50410,13 @@ Prerequisite: the local Gemini CLI must be installed and available as
 `gemini` on `PATH` (`brew install gemini-cli` or
 `npm install -g @google/gemini-cli`).
 
-Gemini CLI JSON notes:
+Gemini CLI output notes:
 
-- Reply text is read from the JSON `response` field.
+- The default `stream-json` parser reads assistant `message` events, tool events,
+  final `result` usage, and fatal Gemini error events.
+- If you override Gemini args to `--output-format json`, OpenClaw normalizes that
+  backend back to `output: "json"` and reads reply text from the JSON `response`
+  field.
 - Usage falls back to `stats` when `usage` is absent or empty.
 - `stats.cached` is normalized into OpenClaw `cacheRead`.
 - If `stats.input` is missing, OpenClaw derives input tokens from
@@ -50410,8 +50456,10 @@ api.registerTextTransforms({
 rewrites streamed assistant deltas and parsed final text before OpenClaw handles
 its own control markers and channel delivery.
 
-For CLIs that emit Claude Code stream-json compatible JSONL, set
-`jsonlDialect: "claude-stream-json"` on that backend's config.
+For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that
+backend's config. Supported dialects are `claude-stream-json` for Claude
+Code-compatible streams and `gemini-stream-json` for Gemini CLI `stream-json`
+events.
 
 ## Native compaction ownership
 
@@ -85225,8 +85273,8 @@ export OPENCLAW_APNS_PRIVATE_KEY_P8="$(cat /path/to/AuthKey_KEYID.p8)"
 ```
 
 These are gateway-host runtime env vars, not Fastlane settings. `apps/ios/fastlane/.env` only stores
-App Store Connect / TestFlight auth such as `ASC_KEY_ID` and `ASC_ISSUER_ID`; it does not configure
-direct APNs delivery for local iOS builds.
+App Store Connect / TestFlight auth such as `APP_STORE_CONNECT_KEY_ID` and
+`APP_STORE_CONNECT_ISSUER_ID`; it does not configure direct APNs delivery for local iOS builds.
 
 Recommended gateway-host storage:
 
@@ -90928,7 +90976,45 @@ Supported `appServer` fields:
 | `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                    |
 | `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                         |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                  |
+| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                              |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                          |
+
+`appServer.networkProxy` is explicit because it changes the Codex sandbox
+contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
+`default_permissions` in the Codex thread config so the generated permission
+profile can start Codex managed networking. By default, OpenClaw generates a
+collision-resistant `openclaw-network-<fingerprint>` profile name from the
+profile body; use `profileName` only when a stable local name is required.
+
+```js
+export default {
+  plugins: {
+    entries: {
+      codex: {
+        config: {
+          appServer: {
+            sandbox: "workspace-write",
+            networkProxy: {
+              enabled: true,
+              domains: {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny",
+              },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+If the normal app-server runtime would be `danger-full-access`, enabling
+`networkProxy` uses workspace-style filesystem access for the generated
+permission profile. Codex managed network enforcement is sandboxed networking,
+so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
@@ -92148,7 +92234,51 @@ Supported `appServer` fields:
 | `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                                      |
 | `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                               |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                  |
+| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                              |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                          |
+
+`appServer.networkProxy` is explicit because it changes the Codex sandbox
+contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
+`default_permissions` in the Codex thread config so the generated permission
+profile can start Codex managed networking. By default, OpenClaw generates a
+collision-resistant `openclaw-network-<fingerprint>` profile name from the
+profile body; use `profileName` only when a stable local name is required.
+
+```js
+export default {
+  plugins: {
+    entries: {
+      codex: {
+        config: {
+          appServer: {
+            sandbox: "workspace-write",
+            networkProxy: {
+              enabled: true,
+              domains: {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny",
+              },
+              unixSockets: {
+                "/tmp/proxy.sock": "allow",
+                "/tmp/blocked.sock": "none",
+              },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+If the normal app-server runtime would be `danger-full-access`, enabling
+`networkProxy` uses workspace-style filesystem access for the generated
+permission profile. Codex managed network enforcement is sandboxed networking,
+so a full-access profile would not protect outbound traffic.
+Domain entries use `allow` or `deny`; Unix socket entries use Codex's
+`allow` or `none` values.
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
@@ -99344,7 +99474,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-90 plugins
+91 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -99373,6 +99503,8 @@ Each entry lists the package, distribution route, and description.
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - included in OpenClaw. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 - **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
+
+- **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - included in OpenClaw. Adds Cohere model provider support to OpenClaw.
 
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - included in OpenClaw. Adds ComfyUI model provider support to OpenClaw.
 
@@ -99829,7 +99961,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 127
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 128
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -103084,13 +103216,13 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
+| Method                                     | What it registers                                                                                                                                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 
@@ -108921,11 +109053,39 @@ OpenClaw Codex app-server harness and model provider plugin with a Codex-managed
 
 ## Surface
 
-providers: codex; contracts: mediaUnderstandingProviders, migrationProviders
+providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, webSearchProviders
 
 ## Related docs
 
 - [codex](/plugins/codex-harness)
+
+
+
+# Section: plugins/reference/cohere.md
+
+---
+summary: "Adds Cohere model provider support to OpenClaw."
+read_when:
+  - You are installing, configuring, or auditing the cohere plugin
+title: "Cohere plugin"
+---
+
+# Cohere plugin
+
+Adds Cohere model provider support to OpenClaw.
+
+## Distribution
+
+- Package: `@openclaw/cohere-provider`
+- Install route: included in OpenClaw
+
+## Surface
+
+providers: cohere
+
+## Related docs
+
+- [cohere](/providers/cohere)
 
 
 
@@ -114113,6 +114273,74 @@ openclaw onboard --non-interactive \
 
 
 
+# Section: providers/cohere.md
+
+---
+summary: "Cohere setup (auth + model selection)"
+title: "Cohere"
+read_when:
+  - You want to use Cohere with OpenClaw
+  - You need the Cohere API key env var or CLI auth choice
+---
+
+[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw includes a bundled Cohere provider plugin with the Command A model catalog.
+
+| Property        | Value                                    |
+| --------------- | ---------------------------------------- |
+| Provider id     | `cohere`                                 |
+| Plugin          | bundled, `enabledByDefault: true`        |
+| Auth env var    | `COHERE_API_KEY`                         |
+| Onboarding flag | `--auth-choice cohere-api-key`           |
+| Direct CLI flag | `--cohere-api-key <key>`                 |
+| API             | OpenAI-compatible (`openai-completions`) |
+| Base URL        | `https://api.cohere.ai/compatibility/v1` |
+| Default model   | `cohere/command-a-03-2025`               |
+
+## Get started
+
+1. Create a Cohere API key.
+2. Run onboarding:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice cohere-api-key \
+  --cohere-api-key "$COHERE_API_KEY"
+```
+
+3. Confirm the catalog is available:
+
+```bash
+openclaw models list --provider cohere
+```
+
+The default model is set only when no primary model is already configured.
+
+## Environment-only setup
+
+Make `COHERE_API_KEY` available to the Gateway process, then select the bundled model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "cohere/command-a-03-2025" },
+    },
+  },
+}
+```
+
+<Note>
+If the Gateway runs as a daemon or in Docker, configure `COHERE_API_KEY` for that service. Exporting it only in an interactive shell does not make it available to an already-running Gateway.
+</Note>
+
+## Related
+
+- [Model providers](/concepts/model-providers)
+- [Models CLI](/cli/models)
+- [Provider directory](/providers)
+
+
+
 # Section: providers/comfy.md
 
 ---
@@ -116558,11 +116786,14 @@ WebSocket endpoint, sends the initial setup payload, and waits for
 
   </Accordion>
 
-  <Accordion title="Gemini CLI JSON usage notes">
-    When using the `google-gemini-cli` OAuth provider, OpenClaw normalizes
-    the CLI JSON output as follows:
+  <Accordion title="Gemini CLI usage notes">
+    When using the `google-gemini-cli` OAuth provider, OpenClaw uses Gemini
+    CLI `stream-json` output by default and normalizes usage from the final
+    `stats` payload. Legacy `--output-format json` overrides still use the
+    JSON parser.
 
-    - Reply text comes from the CLI JSON `response` field.
+    - Streamed reply text comes from assistant `message` events.
+    - For legacy JSON output, reply text comes from the CLI JSON `response` field.
     - Usage falls back to `stats` when the CLI leaves `usage` empty.
     - `stats.cached` is normalized into OpenClaw `cacheRead`.
     - If `stats.input` is missing, OpenClaw derives input tokens from
@@ -117177,6 +117408,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
+- [Cohere](/providers/cohere)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [ComfyUI](/providers/comfy)
 - [DeepSeek](/providers/deepseek)
@@ -119054,6 +119286,7 @@ model as `provider/model`.
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
+- [Cohere](/providers/cohere)
 - [ComfyUI](/providers/comfy)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepInfra](/providers/deepinfra)
@@ -130691,7 +130924,29 @@ the maintainer-only release runbook.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
-    and run the release announcement steps.
+    run the release announcement steps, then complete [Stable main
+    closeout](#stable-main-closeout) before calling a stable release finished.
+
+## Stable main closeout
+
+Stable publication is not complete until `main` carries the actual shipped
+release state.
+
+1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+   forward-port real fixes that are absent from `main`. Do not blindly merge
+   release-only compatibility, test, or validation adapters into newer `main`.
+2. Set `main` to the shipped stable version, not a speculative next train. Run
+   `pnpm release:prep` after the root version change, then
+   `pnpm deps:shrinkwrap:generate`.
+3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
+   tagged release branch. Include the stable `appcast.xml` update when the mac
+   release published one.
+4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
+   section to `main` until the operator explicitly starts that release train.
+5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
+   contains the shipped version and changelog before calling the stable release
+   done.
 
 ## Release preflight
 
@@ -131464,9 +131719,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 - `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows
   still show tokens only unless that runtime supplies compatible usage metadata
   and an explicit local price is configured.
-- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
-  `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
-  from `stats.input_tokens - stats.cached` when needed.
+- Gemini CLI note: the default `stream-json` output and legacy JSON overrides
+  both read usage from `stats`, normalize `stats.cached` into `cacheRead`, and
+  derive input tokens from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
 allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
@@ -131573,7 +131828,7 @@ See [Memory](/concepts/memory).
 - **Ollama Web Search**: key-free for a reachable signed-in local Ollama host; direct `https://ollama.com` search uses `OLLAMA_API_KEY`, and auth-protected hosts can reuse normal Ollama provider bearer auth
 - **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 - **Tavily**: `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
-- **DuckDuckGo**: key-free fallback (no API billing, but unofficial and HTML-based)
+- **DuckDuckGo**: key-free provider when explicitly selected (no API billing, but unofficial and HTML-based)
 - **SearXNG**: `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (key-free/self-hosted; no hosted API billing)
 
 Legacy `tools.web.search.*` provider paths still load through the temporary compatibility shim, but they are no longer the recommended config surface.
@@ -134024,10 +134279,11 @@ If the provider does not support this cache mode, `cacheRetention` has no effect
   OpenClaw manages a provider-native `cachedContents` resource rather than
   injecting cache markers into the request.
 
-### Gemini CLI JSON usage
+### Gemini CLI usage
 
-- Gemini CLI JSON output can also surface cache hits through `stats.cached`;
-  OpenClaw maps that to `cacheRead`.
+- Gemini CLI `stream-json` output can surface cache hits through `stats.cached`;
+  OpenClaw maps that to `cacheRead`. Legacy `--output-format json` overrides use
+  the same usage normalization.
 - If the CLI omits a direct `stats.input` value, OpenClaw derives input tokens
   from `stats.input_tokens - stats.cached`.
 - This is usage normalization only. It does not mean OpenClaw is creating
@@ -134804,6 +135060,7 @@ Scope intent:
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.exa.config.webSearch.apiKey`
+- `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
@@ -135290,8 +135547,8 @@ OpenClaw also enforces a safety floor for embedded runs:
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensureAgentCompactionReserveTokens()` in `src/agents/agent-settings.ts`
-(called from `src/agents/embedded-agent-runner.ts`).
+Implementation: `applyAgentCompactionSettingsFromConfig()` in `src/agents/agent-settings.ts`
+(called from embedded-runner turn and compaction setup paths).
 
 ---
 
@@ -135752,9 +136009,11 @@ Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
 `output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
 field names do not change `/status`, `/usage`, or session summaries.
-Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
-`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
-used when the CLI omits an explicit `stats.input` field.
+Gemini CLI usage is normalized too: the default `stream-json` parser reads
+assistant `message` events, and `stats.cached` maps to `cacheRead` with
+`stats.input_tokens - stats.cached` used when the CLI omits an explicit
+`stats.input` field. Legacy JSON overrides still read reply text from
+`response`.
 For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
 normalized the same way, and totals fall back to normalized input + output when
 `total_tokens` is missing or `0`.
@@ -145970,11 +146229,11 @@ Diff rendering engine powered by [Diffs](https://diffs.com).
 # Section: tools/duckduckgo-search.md
 
 ---
-summary: "DuckDuckGo web search -- key-free fallback provider (experimental, HTML-based)"
+summary: "DuckDuckGo web search -- key-free provider (experimental, HTML-based)"
 read_when:
   - You want a web search provider that requires no API key
   - You want to use DuckDuckGo for web_search
-  - You need a zero-config search fallback
+  - You want an explicitly selected key-free search provider
 title: "DuckDuckGo search"
 ---
 
@@ -146056,16 +146315,16 @@ parameters override config values per-query.
 
 ## Notes
 
-- **No API key** - works out of the box, zero configuration
+- **No API key** - works after you select DuckDuckGo as your `web_search`
+  provider
 - **Experimental** - gathers results from DuckDuckGo's non-JavaScript HTML
   search pages, not an official API or SDK
 - **Bot-challenge risk** - DuckDuckGo may serve CAPTCHAs or block requests
   under heavy or automated use
 - **HTML parsing** - results depend on page structure, which can change without
   notice
-- **Auto-detection order** - DuckDuckGo is the first key-free fallback
-  (order 100) in auto-detection. API-backed providers with configured keys run
-  first, then Ollama Web Search (order 110), then SearXNG (order 200)
+- **Explicit selection** - OpenClaw does not choose DuckDuckGo automatically
+  when no API-backed provider is configured
 - **SafeSearch defaults to moderate** when not configured
 
 <Tip>
@@ -151006,8 +151265,9 @@ Direct hosted Ollama Web Search:
   that env key to the local host.
 - OpenClaw warns during setup if Ollama is unreachable or not signed in, but
   it does not block selection.
-- Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
-  credentialed provider is configured.
+- OpenClaw does not auto-select Ollama Web Search when no higher-priority
+  credentialed provider is configured; choose it explicitly with
+  `tools.web.search.provider: "ollama"`.
 - Local Ollama daemon hosts use the local proxy endpoint
   `/api/experimental/web_search`, which signs and forwards to Ollama Cloud.
 - `https://ollama.com` hosts use the public hosted endpoint
@@ -151035,8 +151295,8 @@ OpenClaw bundles two [Parallel](https://parallel.ai/) `web_search` providers:
 
 - **Parallel Search (Free)** (`parallel-free`) -- Parallel's free
   [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Requires no
-  account or API key. OpenClaw selects it automatically when no other web search
-  provider is configured, so `web_search` works without setup.
+  account or API key. Select it explicitly when you want Parallel's hosted
+  key-free search path.
 - **Parallel Search** (`parallel`) -- Parallel's paid Search API. Requires a
   `PARALLEL_API_KEY` and offers higher rate limits and objective tuning.
 
@@ -151053,8 +151313,8 @@ explicitly.
 
 ## API key (paid provider)
 
-`parallel-free` requires no setup. The paid `parallel` provider needs an API
-key:
+`parallel-free` requires no API key, but it still must be selected as the
+managed provider. The paid `parallel` provider needs an API key:
 
 <Steps>
   <Step title="Create an account">
@@ -151090,6 +151350,8 @@ key:
   tools: {
     web: {
       search: {
+        // Use "parallel-free" for the free Search MCP, or "parallel" for
+        // the paid API-backed provider shown here.
         provider: "parallel",
       },
     },
@@ -152352,9 +152614,9 @@ key wins first).
 - **Network guard** -- private/internal SearXNG endpoints opt in to
   private-network access; public `https://` SearXNG endpoints keep strict SSRF
   protection
-- **Auto-detection order** -- SearXNG is checked last (order 200) in
-  auto-detection. API-backed providers with configured keys run first, then
-  DuckDuckGo (order 100), then Ollama Web Search (order 110)
+- **Auto-detection order** -- SearXNG is checked after API-backed providers
+  with configured keys (order 200). Key-free providers such as DuckDuckGo or
+  Ollama Web Search are not auto-selected without an explicit provider choice
 - **Self-hosted** -- you control the instance, queries, and upstream search engines
 - **Categories** default to `general` when not configured
 - **Category fallback** -- if a non-`general` category request succeeds but
@@ -152369,7 +152631,7 @@ key wins first).
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
-- [DuckDuckGo Search](/tools/duckduckgo-search) -- another key-free fallback
+- [DuckDuckGo Search](/tools/duckduckgo-search) -- another key-free provider
 - [Brave Search](/tools/brave-search) -- structured results with free tier
 
 
@@ -157736,7 +157998,7 @@ read_when:
   - You want to enable or configure web_search
   - You want to enable or configure x_search
   - You need to choose a search provider
-  - You want to understand auto-detection and provider fallback
+  - You want to understand auto-detection and provider selection
 ---
 
 The `web_search` tool searches the web using your configured provider and
@@ -157794,7 +158056,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     AI-synthesized grounded answers through your Codex app-server account.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
-    Key-free fallback. No API key needed. Unofficial HTML-based integration.
+    Key-free provider. No API key needed. Unofficial HTML-based integration.
   </Card>
   <Card title="Exa" icon="brain" href="/tools/exa-search">
     Neural + keyword search with content extraction (highlights, text, summaries).
@@ -157821,7 +158083,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     Paid Parallel Search API (`PARALLEL_API_KEY`); higher rate limits and objective tuning.
   </Card>
   <Card title="Parallel Search (Free)" icon="layer-group" href="/tools/parallel-search">
-    Zero-config default. Parallel's free Search MCP, with LLM-optimized dense excerpts and no API key.
+    Key-free opt-in. Parallel's free Search MCP, with LLM-optimized dense excerpts and no API key.
   </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
@@ -157971,16 +158233,16 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
-Key-free fallbacks after that:
+Configured endpoint providers after that:
 
-11. **Parallel Search (Free)** -- the zero-config default: works with no account or API key via Parallel's free hosted [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) (order 76)
-12. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-13. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-14. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
-15. **Codex Hosted Search** -- key-free provider contract that uses the active Codex/OpenAI sign-in (order 900)
+11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
-When no API-backed provider is configured, OpenClaw defaults to **Parallel
-Search (Free)**, so `web_search` works without an API key.
+Key-free providers such as **Parallel Search (Free)**, **DuckDuckGo**,
+**Ollama Web Search**, and **Codex Hosted Search** are available only when you
+select them explicitly with `tools.web.search.provider` or through
+`openclaw configure --section web`. OpenClaw does not send managed
+`web_search` queries to a key-free provider just because no API-backed provider
+is configured.
 
 OpenAI Responses models are an exception: while `tools.web.search.provider` is
 unset, they use OpenAI's native web search instead of the managed providers
