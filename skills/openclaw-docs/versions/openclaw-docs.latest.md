@@ -477,7 +477,7 @@ Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs keep exhaustive live/E2E and Docker release-path coverage behind `run_release_soak=true`; `release_profile=full` forces that soak coverage on so broad advisory validation remains broad. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -520,9 +520,9 @@ different SHA.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
-intentionally want the broad advisory provider/media matrix. `run_release_soak`
-controls whether stable/default release checks run the exhaustive live/E2E and
-Docker release-path soak; `full` forces soak on.
+intentionally want the broad advisory provider/media matrix. Stable and full
+release checks always run the exhaustive live/E2E and Docker release-path soak;
+the beta profile can opt in with `run_release_soak=true`.
 
 - `minimum` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
@@ -16081,7 +16081,7 @@ Notes:
 - `socketMode` is ignored in HTTP Request URL mode.
 - Base `channels.slack.socketMode` settings apply to all Slack accounts unless overridden. Per-account overrides use `channels.slack.accounts.<accountId>.socketMode`; because this is an object override, include every socket tuning field you want for that account.
 - Only `clientPingTimeout` has an OpenClaw default (`15000`). `serverPingTimeout` and `pingPongLoggingEnabled` are passed to the Slack SDK only when configured.
-- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Consecutive recoverable start/start-wait failures stop after 12 attempts; after a successful connection, later recoverable disconnects start a fresh retry cycle. Non-recoverable Slack auth errors such as `invalid_auth`, revoked tokens, or missing scopes fail fast instead of retrying forever.
+- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Recoverable start, start-wait, and disconnect failures retry until the channel stops. Permanent account and credential errors such as invalid auth, revoked tokens, or missing scopes fail fast instead of retrying forever.
 
 ## Manifest and scope checklist
 
@@ -24791,7 +24791,7 @@ Retention and pruning are controlled in config:
 ## Migrating older jobs
 
 <Note>
-If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from `cron.webhook` to explicit webhook delivery. Jobs that already announce to a chat keep that delivery and get a completion webhook destination.
+If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from `cron.webhook` to explicit webhook delivery. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. When `cron.webhook` is unset, the inert top-level `notify` marker is removed for jobs with no migration target (the existing delivery is preserved unchanged), so `doctor --fix` no longer keeps re-warning about them.
 </Note>
 
 ## Common edits
@@ -27356,6 +27356,7 @@ Use `image` for generation, edit, and description.
 openclaw infer image generate --prompt "friendly lobster illustration" --json
 openclaw infer image generate --prompt "cinematic product photo of headphones" --json
 openclaw infer image generate --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "simple red circle sticker on a transparent background" --json
+openclaw infer image generate --model openai/gpt-image-2 --quality low --openai-moderation low --prompt "low-cost draft poster" --json
 openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 --json
 openclaw infer image edit --file ./logo.png --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "keep the logo, remove the background" --json
 openclaw infer image edit --file ./poster.png --prompt "make this a vertical story ad" --size 2160x3840 --aspect-ratio 9:16 --resolution 4K --json
@@ -27376,6 +27377,9 @@ Notes:
   `--model openai/gpt-image-1.5` for transparent-background OpenAI PNG output;
   `--openai-background` remains available as an OpenAI-specific alias. Providers
   that do not declare background support report the hint as an ignored override.
+- Use `--quality low|medium|high|auto` for providers that support image quality
+  hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto` for
+  the provider-specific moderation hint.
 - Use `image providers --json` to verify which bundled image providers are
   discoverable, configured, selected, and which generation/edit capabilities
   each provider exposes.
@@ -43119,7 +43123,6 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
 | DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                               |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                          |
-| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                                | `gmi/google/gemini-3.1-flash-lite`                         |
 | Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                          |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`                      |
 | Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                                       |
@@ -46463,7 +46466,12 @@ Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
 scenario set. Scenarios that declare `execution.kind: vitest` or
 `execution.kind: playwright` run the matching test path and also write
-per-scenario logs. When `qa suite` is reached through
+per-scenario logs. Scenarios that declare `execution.kind: script` run the
+evidence producer at `execution.path` through `node --import tsx` (with
+`${outputDir}` and `${scenarioId}` expanded in `execution.args`); the producer
+writes its own `qa-evidence.json`, whose entries are imported into the suite
+output and whose artifact paths are resolved relative to that producer
+`qa-evidence.json`. When `qa suite` is reached through
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
@@ -57515,11 +57523,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     - top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
-    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from `cron.webhook`; announce jobs keep their chat delivery and get `delivery.completionDestination`
+    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from `cron.webhook` when set; announce jobs keep their chat delivery and get `delivery.completionDestination`. When `cron.webhook` is unset, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it
 
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Raw malformed rows are copied to `jobs-quarantine.json` next to the active store before they are removed from `jobs.json`; doctor reports quarantined rows so you can review or repair them manually.
 
-    Doctor and Gateway startup use the same `notify: true` migration before the scheduler runs. If `cron.webhook` is missing, doctor warns and leaves the legacy notify marker for manual repair.
+    Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves the persisted cron config for doctor repair. When `cron.webhook` is unset, doctor removes the inert marker for jobs with no migration target (`delivery.mode` none/absent, an unusable webhook target, or existing announce/chat delivery), leaving the existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job. If `cron.webhook` is set but not a valid HTTP(S) URL, doctor still warns and leaves the marker so you can fix the URL.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
 
@@ -64378,6 +64386,8 @@ the config fields that accept SecretRefs.
     - `BWS_ACCESS_TOKEN` available to the Gateway service.
     - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
       binary path.
+    - `BWS_SERVER_URL` must be set in the environment when using a self-hosted
+      Bitwarden instance.
 
     ```json5
     {
@@ -64386,7 +64396,7 @@ the config fields that accept SecretRefs.
           bws: {
             source: "exec",
             command: "/usr/local/bin/openclaw-bws-resolver.mjs",
-            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            passEnv: ["BWS_ACCESS_TOKEN", "BWS_SERVER_URL", "PATH", "BWS_BIN"],
             jsonOnly: true,
           },
         },
@@ -76462,6 +76472,29 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     Pre-built images are published at the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
     Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
+
+  </Step>
+
+  <Step title="Airgapped rerun">
+    On offline hosts, transfer and load the image first:
+
+    ```bash
+    docker load -i openclaw-image.tar
+    export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh --offline
+    ```
+
+    `--offline` verifies that `OPENCLAW_IMAGE` already exists locally, disables
+    implicit Compose pulls and builds, then runs the normal setup flow such as
+    `.env` synchronization, permission fixes, onboarding, gateway config sync,
+    and Compose startup.
+
+    If `OPENCLAW_SANDBOX=1`, offline setup also checks the configured default
+    and active per-agent sandbox images on the daemon behind
+    `OPENCLAW_DOCKER_SOCKET`. Docker-backed browser images must also carry the
+    current OpenClaw browser contract label. When a required image is missing or
+    incompatible, setup exits without changing sandbox configuration instead of
+    reporting success with an unusable sandbox.
 
   </Step>
 
@@ -90958,26 +90991,27 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                         |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                           |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                   |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                        |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                            |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                         |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                              |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                      |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                     |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                  |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                             |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                                        |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                    |
-| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                         |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                  |
-| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                              |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                          |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                                        |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                          |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
+| `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                 |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                            |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                                                                       |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                                                   |
+| `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                                                        |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                                                 |
+| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                             |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                         |
 
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
@@ -91018,6 +91052,14 @@ so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
+
+OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
+identity-bearing WebSocket auth through `appServer.authToken` or an
+`Authorization` header. When native Codex plugins are configured, OpenClaw uses
+the connected app-server's plugin control plane to install or refresh those
+plugins and then refreshes app inventory so plugin-owned apps are visible to the
+Codex thread. Only connect OpenClaw to remote app-servers that are trusted to
+accept OpenClaw-managed plugin installs and app inventory refreshes.
 
 ## Approval and sandbox modes
 
@@ -92136,6 +92178,9 @@ Explicit Codex API-key profiles and local stdio env-key fallback use app-server
 login instead of inherited child-process env. WebSocket app-server connections
 do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
+When native Codex plugins are configured, OpenClaw installs or refreshes those
+plugins through the connected app-server before exposing plugin-owned apps to
+the Codex thread.
 
 If a subscription profile hits a Codex usage limit, OpenClaw records the reset
 time when Codex reports one and tries the next ordered auth profile for the same
@@ -92216,26 +92261,27 @@ Supported top-level Codex plugin fields:
 
 Supported `appServer` fields:
 
-| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                         |
-| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                                                                     |
-| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                   |
-| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                        |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                            |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                         |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                               |
-| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                               |
-| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                      |
-| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                     |
-| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
-| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                                                                            |
-| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                                                                             |
-| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                                      |
-| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                               |
-| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                  |
-| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                              |
-| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                          |
+| Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                                        |
+| `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                                                                                                    |
+| `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
+| `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                                                              |
+| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                                                              |
+| `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
+| `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
+| `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
+| `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
+| `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                                                                                                           |
+| `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                                                                                                            |
+| `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                                                                     |
+| `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                                                              |
+| `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                                                 |
+| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                             |
+| `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                         |
 
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
@@ -99474,7 +99520,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-91 plugins
+90 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -99504,7 +99550,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
 
-- **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - included in OpenClaw. Adds Cohere model provider support to OpenClaw.
+- **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`. OpenClaw Cohere provider plugin.
 
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - included in OpenClaw. Adds ComfyUI model provider support to OpenClaw.
 
@@ -99533,8 +99579,6 @@ Each entry lists the package, distribution route, and description.
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - included in OpenClaw. Adds Fireworks model provider support to OpenClaw.
 
 - **[github-copilot](/plugins/reference/github-copilot)** (`@openclaw/github-copilot-provider`) - included in OpenClaw. Adds GitHub Copilot model provider support to OpenClaw.
-
-- **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - included in OpenClaw. Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw.
 
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
 
@@ -99660,7 +99704,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-35 plugins
+36 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -99687,6 +99731,8 @@ Each entry lists the package, distribution route, and description.
 - **[discord](/plugins/reference/discord)** (`@openclaw/discord`) - npm; ClawHub. OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 - **[feishu](/plugins/reference/feishu)** (`@openclaw/feishu`) - npm; ClawHub. OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).
+
+- **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm; ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
 - **[google-meet](/plugins/reference/google-meet)** (`@openclaw/google-meet`) - npm; ClawHub. OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.
 
@@ -109064,7 +109110,7 @@ providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, we
 # Section: plugins/reference/cohere.md
 
 ---
-summary: "Adds Cohere model provider support to OpenClaw."
+summary: "OpenClaw Cohere provider plugin."
 read_when:
   - You are installing, configuring, or auditing the cohere plugin
 title: "Cohere plugin"
@@ -109072,12 +109118,12 @@ title: "Cohere plugin"
 
 # Cohere plugin
 
-Adds Cohere model provider support to OpenClaw.
+OpenClaw Cohere provider plugin.
 
 ## Distribution
 
 - Package: `@openclaw/cohere-provider`
-- Install route: included in OpenClaw
+- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`
 
 ## Surface
 
@@ -109668,7 +109714,7 @@ providers: github-copilot; contracts: memoryEmbeddingProviders
 # Section: plugins/reference/gmi.md
 
 ---
-summary: "Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw."
+summary: "OpenClaw GMI Cloud provider plugin."
 read_when:
   - You are installing, configuring, or auditing the gmi plugin
 title: "Gmi plugin"
@@ -109676,12 +109722,12 @@ title: "Gmi plugin"
 
 # Gmi plugin
 
-Adds Gmi, Gmi Cloud, Gmicloud model provider support to OpenClaw.
+OpenClaw GMI Cloud provider plugin.
 
 ## Distribution
 
 - Package: `@openclaw/gmi-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/gmi-provider`
 
 ## Surface
 
@@ -111116,7 +111162,7 @@ OpenClaw QA lab plugin with private debugger UI and scenario runner.
 
 ## Surface
 
-plugin
+contracts: webSearchProviders
 
 
 
@@ -114283,23 +114329,30 @@ read_when:
   - You need the Cohere API key env var or CLI auth choice
 ---
 
-[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw includes a bundled Cohere provider plugin with the Command A model catalog.
+[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw ships the Cohere provider during its externalization transition and also publishes it as an official external plugin with the Command A model catalog.
 
-| Property        | Value                                    |
-| --------------- | ---------------------------------------- |
-| Provider id     | `cohere`                                 |
-| Plugin          | bundled, `enabledByDefault: true`        |
-| Auth env var    | `COHERE_API_KEY`                         |
-| Onboarding flag | `--auth-choice cohere-api-key`           |
-| Direct CLI flag | `--cohere-api-key <key>`                 |
-| API             | OpenAI-compatible (`openai-completions`) |
-| Base URL        | `https://api.cohere.ai/compatibility/v1` |
-| Default model   | `cohere/command-a-03-2025`               |
+| Property        | Value                                                |
+| --------------- | ---------------------------------------------------- |
+| Provider id     | `cohere`                                             |
+| Plugin          | bundled during transition; official external package |
+| Auth env var    | `COHERE_API_KEY`                                     |
+| Onboarding flag | `--auth-choice cohere-api-key`                       |
+| Direct CLI flag | `--cohere-api-key <key>`                             |
+| API             | OpenAI-compatible (`openai-completions`)             |
+| Base URL        | `https://api.cohere.ai/compatibility/v1`             |
+| Default model   | `cohere/command-a-03-2025`                           |
 
 ## Get started
 
-1. Create a Cohere API key.
-2. Run onboarding:
+1. Cohere is included in current OpenClaw packages. If it is unavailable, install the external package and restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/cohere-provider
+openclaw gateway restart
+```
+
+2. Create a Cohere API key.
+3. Run onboarding:
 
 ```bash
 openclaw onboard --non-interactive \
@@ -114307,7 +114360,7 @@ openclaw onboard --non-interactive \
   --cohere-api-key "$COHERE_API_KEY"
 ```
 
-3. Confirm the catalog is available:
+4. Confirm the catalog is available:
 
 ```bash
 openclaw models list --provider cohere
@@ -114317,7 +114370,7 @@ The default model is set only when no primary model is already configured.
 
 ## Environment-only setup
 
-Make `COHERE_API_KEY` available to the Gateway process, then select the bundled model:
+Make `COHERE_API_KEY` available to the Gateway process, then select the Cohere model:
 
 ```json5
 {
@@ -116261,9 +116314,9 @@ title: "GMI Cloud"
 ---
 
 GMI Cloud is a hosted inference platform for frontier and open-weight models
-behind an OpenAI-compatible API. In OpenClaw it is a bundled model provider,
-which means you can select it with the provider id `gmi`, store credentials
-through normal model auth, and use model refs like
+behind an OpenAI-compatible API. In OpenClaw it is an official external provider
+plugin, which means you install it once, select it with the provider id `gmi`,
+store credentials through normal model auth, and use model refs like
 `gmi/google/gemini-3.1-flash-lite`.
 
 Use GMI when you want one API key for several hosted model families, including
@@ -116278,7 +116331,14 @@ model availability, billing, rate limits, and any provider-side routing policy.
 
 ## Setup
 
-Create an API key in GMI Cloud, then run:
+Install the plugin, restart the gateway, then create an API key in GMI Cloud:
+
+```bash
+openclaw plugins install @openclaw/gmi-provider
+openclaw gateway restart
+```
+
+Then run:
 
 ```bash
 openclaw onboard --auth-choice gmi-api-key
@@ -116314,7 +116374,7 @@ GPU control matters more than hosted convenience.
 
 ## Models
 
-The bundled catalog seeds commonly available GMI Cloud route ids, including:
+The plugin catalog seeds commonly available GMI Cloud route ids, including:
 
 - `gmi/zai-org/GLM-5.1-FP8`
 - `gmi/deepseek-ai/DeepSeek-V3.2`
@@ -121939,6 +121999,9 @@ openclaw infer image generate \
 Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
+Use `--quality low|medium|high|auto` when you need to control OpenAI Images
+quality and cost. Use `--openai-moderation low|auto` to pass OpenAI's
+provider-specific moderation hint from either `image generate` or `image edit`.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -129125,11 +129188,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files and removes
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
-- Doctor and Gateway startup translate legacy `notify: true` webhook fallback
-  into explicit SQLite delivery before the scheduler runs. Jobs that already
-  announce to a chat keep that delivery and receive a webhook
-  `completionDestination`; jobs without `cron.webhook` are reported for manual
-  repair.
+- Gateway startup ignores legacy `notify: true` markers in the runtime
+  projection. Doctor translates them into explicit SQLite delivery when
+  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
+  them with a warning when the configured webhook is invalid.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared
@@ -130887,8 +130949,8 @@ the maintainer-only release runbook.
    `CHANGELOG.md` section. Stable releases published to npm `latest` become the
    GitHub latest release; stable maintenance releases kept on npm `beta` are
    created with GitHub `latest=false`. The workflow also uploads the preflight
-   dependency evidence to the GitHub release as
-   `openclaw-<version>-dependency-evidence.zip` for post-release incident
+   dependency evidence, the full-validation manifest, and postpublish registry
+   verification evidence to the GitHub release for post-release incident
    response. The publish workflow prints child run IDs immediately, auto-approves
    release environment gates the workflow token is allowed to approve, summarizes
    failed child jobs with log tails, closes out the GitHub release and dependency
@@ -130947,6 +131009,27 @@ release state.
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
    contains the shipped version and changelog before calling the stable release
    done.
+6. Keep the repository variables `RELEASE_ROLLBACK_DRILL_ID` and
+   `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
+   `OpenClaw Stable Main Closeout` starts from the `main` push that carries the
+   shipped version, changelog, and appcast after stable publication. It reads
+   immutable postpublish evidence to bind the shipped tag to its Full Release
+   Validation and Publish runs, then verifies the stable main state, release,
+   mandatory stable soak, and blocking performance evidence. It attaches an
+   immutable closeout manifest and checksum to the GitHub release. The automatic
+   push trigger skips legacy releases that predate immutable postpublish
+   evidence; it never treats that skip as a completed closeout. A complete
+   closeout requires both assets and a matching checksum. A partial manifest
+   replays its recorded `main` SHA and rollback drill to regenerate identical
+   bytes, then attaches the missing checksum; an invalid pair, or a checksum
+   without a manifest, stays blocking. A missing or more-than-90-day-old drill
+   record blocks a new evidence-backed closeout; private recovery commands
+   remain in the maintainer-only runbook. Use manual dispatch only to repair or
+   replay an evidence-backed stable closeout.
+   A legacy fallback correction tag may reuse base-package evidence only when
+   the correction tag resolves to the same source commit as the base stable tag.
+   A correction with different source must publish and verify its own package
+   evidence.
 
 ## Release preflight
 
@@ -130974,9 +131057,9 @@ release state.
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches
   `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS
-  package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs
-  keep exhaustive live/E2E and Docker release-path soak behind
-  `run_release_soak=true`; `release_profile=full` forces soak on. With
+  package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full
+  runs always include exhaustive live/E2E and Docker release-path soak;
+  `run_release_soak=true` is retained for an explicit beta soak. With
   `release_profile=full` and `rerun_group=all`, it also runs package Telegram
   E2E against the `release-package-under-test` artifact from release checks.
   Provide `release_package_spec` after publishing a beta to reuse the shipped
@@ -131241,13 +131324,12 @@ Use `release_profile` to select live/provider breadth:
 - `stable`: minimum plus stable provider/backend coverage for release approval
 - `full`: stable plus broad advisory provider/media coverage
 
-Use `run_release_soak=true` with `stable` when the release-blocking lanes are
-green and you want the exhaustive live/E2E, Docker release-path, and
-bounded published upgrade-survivor sweep before promotion. That sweep covers
+Stable and full validation always run the exhaustive live/E2E, Docker
+release-path, and bounded published upgrade-survivor sweep before promotion.
+Use `run_release_soak=true` to request that same sweep for a beta. That sweep covers
 the latest four stable packages plus pinned `2026.4.23` and `2026.5.2`
 baselines plus older `2026.4.15` coverage, with duplicate baselines removed and
-each baseline sharded into its own Docker runner job. `full` implies
-`run_release_soak=true`.
+each baseline sharded into its own Docker runner job.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
 ref once as `release-package-under-test` and reuses that artifact in cross-OS,
@@ -131438,7 +131520,7 @@ prepared release package artifact, `suite_profile=custom`,
 configured-auth update restart, live ClawHub skill install, stale plugin dependency cleanup, offline plugin
 fixtures, plugin update, and Telegram package QA against the same resolved
 tarball. Blocking release checks use the default latest published package
-baseline; `run_release_soak=true` or
+baseline; the beta profile with `run_release_soak=true`, `release_profile=stable`, or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
 Package Acceptance with `source=npm` for an already shipped candidate,
@@ -131604,8 +131686,8 @@ package cannot ship without every publishable official plugin, including
   require the resolved commit to be reachable from an OpenClaw branch or
   release tag.
 - `run_release_soak`: opt into exhaustive live/E2E, Docker release-path, and
-  all-since upgrade-survivor soak on stable/default release checks. It is forced
-  on by `release_profile=full`.
+  all-since upgrade-survivor soak for beta release checks. It is forced on by
+  `release_profile=stable` and `release_profile=full`.
 
 Rules:
 
@@ -132789,9 +132871,10 @@ is disabled, uninstalled, or rolled back:
 clearCodeModeNamespacesForPlugin(pluginId);
 ```
 
-Use `unregisterCodeModeNamespace(namespaceId)` only when removing one known
-namespace. Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
-registrations across cases.
+Code-mode cleanup is plugin-owned; clear the plugin's namespace registrations
+when its lifecycle ends instead of keeping per-namespace teardown handles. Tests
+can call `clearCodeModeNamespacesForTest()` to avoid leaking registrations
+across cases.
 
 ### Test checklist
 
@@ -133297,10 +133380,10 @@ Child workflows use the trusted workflow ref for the harness and the input
 `ref` for the candidate under test. That keeps new validation logic available
 when validating an older release branch or tag.
 
-By default, `release_profile=stable` runs the release-blocking lanes and skips
-the exhaustive live/Docker soak. Pass `run_release_soak=true` to include the
-soak lanes on a stable run. `release_profile=full` always enables soak lanes so
-the broad advisory profile never drops coverage silently.
+`release_profile=stable` and `release_profile=full` always run the exhaustive
+live/Docker soak. Pass `run_release_soak=true` to include the same soak lanes
+with the beta profile. Stable publication rejects a validation manifest without this
+soak and blocking product-performance evidence.
 
 Package Acceptance normally builds the candidate tarball from the resolved
 `ref`, including full-SHA runs dispatched with `pnpm ci:full-release`. After a
@@ -133317,15 +133400,15 @@ that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 
 ## Top-level stages
 
-| Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target resolution    | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                               |
-| Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.             |
-| Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                          |
-| Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram. With `run_release_soak=true` or `release_profile=full`, also runs exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
-| Package artifact     | **Job:** `Prepare release package artifact`<br />**Child workflow:** none<br />**Proves:** creates the parent `release-package-under-test` tarball early enough for package-facing checks that do not need to wait for `OpenClaw Release Checks`.<br />**Rerun:** rerun the umbrella or provide `release_package_spec` for published-package reruns.                                                                                           |
-| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** parent-artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `release_package_spec` or `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                           |
-| Umbrella verifier    | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                    |
+| Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Target resolution    | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                             |
+| Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                           |
+| Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                        |
+| Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks; beta can opt in with `run_release_soak=true`.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
+| Package artifact     | **Job:** `Prepare release package artifact`<br />**Child workflow:** none<br />**Proves:** creates the parent `release-package-under-test` tarball early enough for package-facing checks that do not need to wait for `OpenClaw Release Checks`.<br />**Rerun:** rerun the umbrella or provide `release_package_spec` for published-package reruns.                                                                                                         |
+| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** parent-artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `release_package_spec` or `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                         |
+| Umbrella verifier    | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                  |
 
 For `ref=main` and `rerun_group=all`, a newer umbrella supersedes an older one.
 When the parent is cancelled, its monitor cancels any child workflow it already
@@ -133375,11 +133458,11 @@ commands with package artifact and image reuse inputs when available.
 
 `release_profile` mostly controls live/provider breadth inside release checks.
 It does not remove normal full CI, Plugin Prerelease, install smoke, package
-acceptance, or QA Lab. For `stable`, exhaustive repo/live E2E and Docker
-release-path chunks are soak coverage and run when `run_release_soak=true`.
-`full` forces soak coverage on and also makes the umbrella run package Telegram
-E2E against the parent release package artifact when `rerun_group=all`, so a full
-pre-publish candidate does not silently skip that Telegram package lane.
+acceptance, or QA Lab. Stable and full profiles always run exhaustive repo/live
+E2E and Docker release-path soak coverage. The beta profile can opt in with
+`run_release_soak=true`. The full profile also makes the umbrella run package
+Telegram E2E against the parent release package artifact when `rerun_group=all`,
+so a full pre-publish candidate does not silently skip that Telegram package lane.
 
 | Profile   | Intended use                      | Included live/provider coverage                                                                                                                                                     |
 | --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -149051,6 +149134,23 @@ openclaw infer image generate \
 ```
 
   </Tab>
+  <Tab title="Generate (OpenAI low quality)">
+```text
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="Low-cost draft poster for a quiet productivity app" quality=low openai='{"moderation":"low"}'
+```
+
+Equivalent CLI:
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-2 \
+  --quality low \
+  --openai-moderation low \
+  --prompt "Low-cost draft poster for a quiet productivity app" \
+  --json
+```
+
+  </Tab>
   <Tab title="Generate (two square)">
 ```text
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="Two visual directions for a calm productivity app icon" size=1024x1024 count=2
@@ -149073,11 +149173,11 @@ openclaw infer image generate \
   </Tab>
 </Tabs>
 
-The same `--output-format` and `--background` flags are available on
-`openclaw infer image edit`; `--openai-background` remains as an
-OpenAI-specific alias. Bundled providers other than OpenAI do not declare
-explicit background control today, so `background: "transparent"` is reported
-as ignored for them.
+The same `--output-format`, `--background`, `--quality`, and
+`--openai-moderation` flags are available on `openclaw infer image edit`;
+`--openai-background` remains as an OpenAI-specific alias. Bundled providers
+other than OpenAI do not declare explicit background control today, so
+`background: "transparent"` is reported as ignored for them.
 
 ## Related
 
