@@ -1520,8 +1520,10 @@ model-call traces become children of the active request trace, so local logs,
 diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
 be joined by `traceId` without logging raw request or model content.
 
-Talk lifecycle log records also flow to OTLP logs when OpenTelemetry log export
-is enabled, using the same bounded attributes as file logs.
+Talk lifecycle log records also flow to diagnostics-otel log export when
+OpenTelemetry log export is enabled, using the same bounded attributes as file
+logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
+both sinks.
 
 ### Model call size and timing
 
@@ -40073,7 +40075,8 @@ Set `memorySearch.provider` to switch away from OpenAI.
 OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
-- **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Index location:** the owning agent database at
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 - **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).
@@ -43100,50 +43103,28 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 - Example models: `vercel-ai-gateway/anthropic/claude-opus-4.6`, `vercel-ai-gateway/moonshotai/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
-### Kilo Gateway
-
-- Provider: `kilocode`
-- Auth: `KILOCODE_API_KEY`
-- Example model: `kilocode/kilo/auto`
-- CLI: `openclaw onboard --auth-choice kilocode-api-key`
-- Base URL: `https://api.kilo.ai/api/gateway/`
-- Static fallback catalog ships `kilocode/kilo/auto`; live `https://api.kilo.ai/api/gateway/models` discovery can expand the runtime catalog further.
-- Exact upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway, not hard-coded in OpenClaw.
-
-See [/providers/kilocode](/providers/kilocode) for setup details.
-
 ### Other bundled provider plugins
 
-| Provider                                | Id                               | Auth env                                                     | Example model                                              |
-| --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
-| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                            |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                                     |
-| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                             | `cohere/command-a-03-2025`                                 |
-| Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                          |
-| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
-| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                               |
-| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | -                                                          |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                          |
-| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`                      |
-| Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                                       |
-| Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                                     |
-| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M3`                                       |
-| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                             |
-| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                                       |
-| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
-| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                         |
-| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                                   |
-| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`                     | `openrouter/auto`                                          |
-| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                                    |
-| Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                        |
-| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                                  |
-| StepFun                                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                                   |
-| Together                                | `together`                       | `TOGETHER_API_KEY`                                           | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
-| Venice                                  | `venice`                         | `VENICE_API_KEY`                                             | -                                                          |
-| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6`              |
-| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`                          |
-| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                             |
-| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`               | `xiaomi/mimo-v2-flash` / `xiaomi-token-plan/mimo-v2.5-pro` |
+| Provider                                | Id                               | Auth env                                             | Example model                                              |
+| --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                            |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-03-2025`                                 |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                          |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                      |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`            | `minimax/MiniMax-M3`                                       |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                    | `mistral/mistral-large-latest`                             |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                   | `moonshot/kimi-k2.6`                                       |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                     | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                     | `novita/deepseek/deepseek-v3-0324`                         |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                     | `ollama-cloud/kimi-k2.6`                                   |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`             | `openrouter/auto`                                          |
+| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                       | `qwen-oauth/qwen3.5-plus`                                  |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                                   | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                                     | -                                                          |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                 | `vercel-ai-gateway/anthropic/claude-opus-4.6`              |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                             | `volcengine-plan/ark-code-latest`                          |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | `xai/grok-4.3`                                             |
+| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`       | `xiaomi/mimo-v2-flash` / `xiaomi-token-plan/mimo-v2.5-pro` |
 
 #### Quirks worth knowing
 
@@ -43162,9 +43143,6 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   </Accordion>
   <Accordion title="xAI">
     Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config, and Grok `web_search` reuses the same auth profile before API-key fallback. `grok-4.3` is the bundled default chat model, and `grok-build-0.1` is selectable for build/coding-focused work. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
-  </Accordion>
-  <Accordion title="Cerebras">
-    Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
   </Accordion>
 </AccordionGroup>
 
@@ -45581,6 +45559,11 @@ the resolved scenarios through `qa suite`. `--surface` and
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
 entries remain the source of truth for the tests, coverage roles, and results.
+Taxonomy feature coverage IDs are exact proof targets, not aliases. Primary
+scenario coverage fulfills matching IDs; secondary coverage stays advisory.
+Coverage IDs use dotted `namespace.behavior` form with lowercase
+alphanumeric/dash segments; profile, surface, and category IDs may still use
+the existing dashed or dotted taxonomy IDs.
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
@@ -48197,9 +48180,15 @@ The same section also includes the OpenClaw source location. Git checkouts expos
 source root so the agent can inspect code directly. Package installs include the GitHub
 source URL and tell the agent to review source there whenever the docs are incomplete or
 stale. The prompt also notes the public docs mirror, community Discord, and ClawHub
-([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
-consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
-run `openclaw status` itself when possible (asking the user only when it lacks access).
+([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It frames docs as the
+authority for OpenClaw self-knowledge before the model understands how OpenClaw works,
+including memory/daily notes, sessions, tools, Gateway, config, commands, or project
+context. The prompt tells the model to use local docs (or the docs mirror when local docs
+are unavailable) first, and to treat AGENTS.md, project context, workspace/profile/memory
+notes, and `memory_search` as instruction context or user memory rather than OpenClaw
+design or implementation knowledge. If docs are silent or stale, the model should say so
+and inspect source. The prompt also tells the model to run `openclaw status` itself when
+possible, asking the user only when it lacks access.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`
@@ -51003,7 +50992,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
   - If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order.
   - If you select a provider/model directly, configure the matching provider auth/API key too.
-  - The bundled Qwen video-generation provider supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
+  - The official Qwen video-generation plugin supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
@@ -53634,7 +53623,7 @@ Interactive custom-provider onboarding infers image input for common vision mode
 
 <AccordionGroup>
   <Accordion title="Cerebras (GLM 4.7 / GPT OSS)">
-    The bundled `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
+    The official external `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
 
     ```json5
     {
@@ -54906,7 +54895,7 @@ session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
-  - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
   - `onlyMainContent`: extract only the main content from pages (default: `true`).
   - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).
@@ -55662,6 +55651,7 @@ Notes:
       traces: true,
       metrics: true,
       logs: false,
+      logsExporter: "otlp",
       sampleRate: 1.0,
       flushIntervalMs: 5000,
       captureContent: {
@@ -55698,6 +55688,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
+- `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `systemPrompt`, and `toolDefinitions` explicitly.
@@ -57547,6 +57538,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O and lock/sync races.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD or eMMC-backed random I/O can be slower and wear faster under session and credential writes.
+    - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state with its WAL/journal sidecars will disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
     - **Transcript mismatch**: warns when recent session entries have missing transcript files.
     - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).
@@ -60836,7 +60828,7 @@ the intended remote workspace.
 # Section: gateway/opentelemetry.md
 
 ---
-summary: "Export OpenClaw diagnostics to any OpenTelemetry collector via the diagnostics-otel plugin (OTLP/HTTP)"
+summary: "Export OpenClaw diagnostics to OpenTelemetry collectors or stdout JSONL via the diagnostics-otel plugin"
 title: "OpenTelemetry export"
 read_when:
   - You want to send OpenClaw model usage, message flow, or session metrics to an OpenTelemetry collector
@@ -60845,9 +60837,10 @@ read_when:
 ---
 
 OpenClaw exports diagnostics through the official `diagnostics-otel` plugin
-using **OTLP/HTTP (protobuf)**. Any collector or backend that accepts OTLP/HTTP
-works without code changes. For local file logs and how to read them, see
-[Logging](/logging).
+using **OTLP/HTTP (protobuf)**. Logs can also be written as stdout JSONL for
+container and sandbox log pipelines. Any collector or backend that accepts
+OTLP/HTTP works without code changes. For local file logs and how to read them,
+see [Logging](/logging).
 
 ## How it fits together
 
@@ -60855,7 +60848,8 @@ works without code changes. For local file logs and how to read them, see
   Gateway and bundled plugins for model runs, message flow, sessions, queues,
   and exec.
 - **`diagnostics-otel` plugin** subscribes to those events and exports them as
-  OpenTelemetry **metrics**, **traces**, and **logs** over OTLP/HTTP.
+  OpenTelemetry **metrics**, **traces**, and **logs** over OTLP/HTTP. It can
+  also mirror diagnostic log records to stdout JSONL.
 - **Provider calls** receive a W3C `traceparent` header from OpenClaw's
   trusted model-call span context when the provider transport accepts custom
   headers. Plugin-emitted trace context is not propagated.
@@ -60911,11 +60905,13 @@ openclaw plugins enable diagnostics-otel
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Metrics** | Counters and histograms for token usage, cost, run duration, failover, skill usage, message flow, Talk events, queue lanes, session state/recovery, tool execution, oversized payloads, exec, and memory pressure. |
 | **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                                                            |
-| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                                                |
+| **Logs**    | Structured `logging.file` records exported over OTLP or stdout JSONL when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                                |
 
 Toggle `traces`, `metrics`, and `logs` independently. Traces and metrics
 default to on when `diagnostics.otel.enabled` is true. Logs default to off and
-are exported only when `diagnostics.otel.logs` is explicitly `true`.
+are exported only when `diagnostics.otel.logs` is explicitly `true`. Log export
+defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
+stdout, or `both` to send each diagnostic log record to OTLP and stdout.
 
 ## Configuration reference
 
@@ -60935,6 +60931,7 @@ are exported only when `diagnostics.otel.logs` is explicitly `true`.
       traces: true,
       metrics: true,
       logs: true,
+      logsExporter: "otlp", // otlp | stdout | both
       sampleRate: 0.2, // root-span sampler, 0.0..1.0
       flushIntervalMs: 60000, // metric export interval (min 1000ms)
       captureContent: {
@@ -61013,6 +61010,11 @@ on the public diagnostic event bus.
 - **Logs:** OTLP logs respect `logging.level` (file log level). They use the
   diagnostic log-record redaction path, not console formatting. High-volume
   installs should prefer OTLP collector sampling/filtering over local sampling.
+  Set `diagnostics.otel.logsExporter: "stdout"` when your platform already
+  ships stdout/stderr to a log processor and you do not have an OTLP logs
+  collector. Stdout records are one JSON object per line with `ts`, `signal`,
+  `service.name`, severity, body, redacted attributes, and trusted trace fields
+  when available.
 - **File-log correlation:** JSONL file logs include top-level `traceId`,
   `spanId`, `parentSpanId`, and `traceFlags` when the log call carries a valid
   diagnostic trace context, which lets log processors join local log lines with
@@ -71384,7 +71386,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
-    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. The official Firecrawl plugin provides that fallback.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
@@ -81757,7 +81759,7 @@ OpenClaw auto-detects in this order and stops at the first working option:
    - `whisper` (Python CLI; downloads models automatically)
 3. **Provider auth**
    - Configured `models.providers.*` entries that support audio are tried first
-   - Bundled fallback order: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
+   - Provider fallback order: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
 
 As of 2026-05-22, Gemini CLI auto-detect is no longer supported for media understanding. Google is transitioning Gemini CLI users to Antigravity CLI; audio should use local or provider transcription, while image/video CLI fallback should move to Antigravity CLI (`agy`).
 
@@ -90997,8 +90999,8 @@ Supported `appServer` fields:
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                          |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
@@ -91055,11 +91057,15 @@ must report stable version `0.125.0` or newer.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
-`Authorization` header. When native Codex plugins are configured, OpenClaw uses
-the connected app-server's plugin control plane to install or refresh those
-plugins and then refreshes app inventory so plugin-owned apps are visible to the
-Codex thread. Only connect OpenClaw to remote app-servers that are trusted to
-accept OpenClaw-managed plugin installs and app inventory refreshes.
+`Authorization` header. `appServer.authToken` and each `appServer.headers.*`
+value can be a SecretInput; the secrets runtime resolves SecretRefs and env
+shorthand before OpenClaw builds app-server start options, and unresolved
+structured SecretRefs fail before any token or header is sent. When native Codex
+plugins are configured, OpenClaw uses the connected app-server's plugin control
+plane to install or refresh those plugins and then refreshes app inventory so
+plugin-owned apps are visible to the Codex thread. Only connect OpenClaw to
+remote app-servers that are trusted to accept OpenClaw-managed plugin installs
+and app inventory refreshes.
 
 ## Approval and sandbox modes
 
@@ -92267,8 +92273,8 @@ Supported `appServer` fields:
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                                                                                                    |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                                                              |
 | `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                                                              |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
@@ -93358,8 +93364,7 @@ The harness reads its config from per-attempt input
   registered with `overridesBuiltInTool: true` and
   `skipPermission: true` so 100% of tool calls flow through OpenClaw's
   wrapped `execute()`. See [Permissions and ask_user](#permissions-and-ask_user).
-- `enableSessionTelemetry` — opt-in OpenTelemetry routing via
-  `telemetry-bridge.ts`.
+- `enableSessionTelemetry` — optional SDK session telemetry flag.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other
 plugins, channels, and core code only see the standard
@@ -93446,9 +93451,7 @@ real Copilot CLI or touch the host fs.
   decisions from the initial prompt rather than asking clarifying
   questions mid-turn. A follow-up will port the codex pattern at
   `extensions/codex/src/app-server/user-input-bridge.ts` to route SDK
-  `UserInputRequest`s through the OpenClaw channel/TUI prompt path; the
-  dormant scaffolding in `extensions/copilot/src/user-input-bridge.ts`
-  is the surface that follow-up will wire.
+  `UserInputRequest`s through the OpenClaw channel/TUI prompt path.
 
 ## Permissions and ask_user
 
@@ -99520,15 +99523,13 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-90 plugins
+72 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
 - **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Adds Anthropic model provider support to OpenClaw.
-
-- **[arcee](/plugins/reference/arcee)** (`@openclaw/arcee-provider`) - included in OpenClaw. Adds Arcee model provider support to OpenClaw.
 
 - **[azure-speech](/plugins/reference/azure-speech)** (`@openclaw/azure-speech`) - included in OpenClaw. Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
@@ -99540,13 +99541,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
-- **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - included in OpenClaw. Adds Cerebras model provider support to OpenClaw.
-
-- **[chutes](/plugins/reference/chutes)** (`@openclaw/chutes-provider`) - included in OpenClaw. Adds Chutes model provider support to OpenClaw.
-
 - **[clickclack](/plugins/reference/clickclack)** (`@openclaw/clickclack`) - included in OpenClaw. Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
-
-- **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - included in OpenClaw. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 - **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
 
@@ -99558,23 +99553,15 @@ Each entry lists the package, distribution route, and description.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
 
-- **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - included in OpenClaw. Adds DeepInfra model provider support to OpenClaw.
-
-- **[deepseek](/plugins/reference/deepseek)** (`@openclaw/deepseek-provider`) - included in OpenClaw. Adds DeepSeek model provider support to OpenClaw.
-
 - **[document-extract](/plugins/reference/document-extract)** (`@openclaw/document-extract-plugin`) - included in OpenClaw. Extract text and fallback page images from local document attachments.
 
 - **[duckduckgo](/plugins/reference/duckduckgo)** (`@openclaw/duckduckgo-plugin`) - included in OpenClaw. Adds web search provider support.
 
 - **[elevenlabs](/plugins/reference/elevenlabs)** (`@openclaw/elevenlabs-speech`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.
 
-- **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - included in OpenClaw. Adds web search provider support.
-
 - **[fal](/plugins/reference/fal)** (`@openclaw/fal-provider`) - included in OpenClaw. Adds fal model provider support to OpenClaw.
 
 - **[file-transfer](/plugins/reference/file-transfer)** (`@openclaw/file-transfer`) - included in OpenClaw. Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
-
-- **[firecrawl](/plugins/reference/firecrawl)** (`@openclaw/firecrawl-plugin`) - included in OpenClaw. Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.
 
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - included in OpenClaw. Adds Fireworks model provider support to OpenClaw.
 
@@ -99582,21 +99569,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
 
-- **[gradium](/plugins/reference/gradium)** (`@openclaw/gradium-speech`) - included in OpenClaw. Adds text-to-speech provider support.
-
-- **[groq](/plugins/reference/groq)** (`@openclaw/groq-provider`) - included in OpenClaw. Adds Groq model provider support to OpenClaw.
-
 - **[huggingface](/plugins/reference/huggingface)** (`@openclaw/huggingface-provider`) - included in OpenClaw. Adds Hugging Face model provider support to OpenClaw.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - included in OpenClaw. Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
-- **[inworld](/plugins/reference/inworld)** (`@openclaw/inworld-speech`) - included in OpenClaw. Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
-
 - **[irc](/plugins/reference/irc)** (`@openclaw/irc`) - included in OpenClaw. Adds the IRC channel surface for sending and receiving OpenClaw messages.
-
-- **[kilocode](/plugins/reference/kilocode)** (`@openclaw/kilocode-provider`) - included in OpenClaw. Adds Kilocode model provider support to OpenClaw.
-
-- **[kimi](/plugins/reference/kimi)** (`@openclaw/kimi-provider`) - included in OpenClaw. Adds Kimi, Kimi Coding model provider support to OpenClaw.
 
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
 
@@ -99642,15 +99619,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
-- **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - included in OpenClaw. Adds web search provider support.
-
-- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - included in OpenClaw. Adds web search provider support.
-
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
-
-- **[qianfan](/plugins/reference/qianfan)** (`@openclaw/qianfan-provider`) - included in OpenClaw. Adds Qianfan model provider support to OpenClaw.
-
-- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - included in OpenClaw. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
@@ -99663,8 +99632,6 @@ Each entry lists the package, distribution route, and description.
 - **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - included in OpenClaw. Adds the Signal channel surface for sending and receiving OpenClaw messages.
 
 - **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - included in OpenClaw. Twilio SMS channel plugin for OpenClaw text messages.
-
-- **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - included in OpenClaw. Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 - **[synthetic](/plugins/reference/synthetic)** (`@openclaw/synthetic-provider`) - included in OpenClaw. Adds Synthetic model provider support to OpenClaw.
 
@@ -99704,7 +99671,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-36 plugins
+54 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -99714,13 +99681,25 @@ Each entry lists the package, distribution route, and description.
 
 - **[anthropic-vertex](/plugins/reference/anthropic-vertex)** (`@openclaw/anthropic-vertex-provider`) - npm; ClawHub. OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
+- **[arcee](/plugins/reference/arcee)** (`@openclaw/arcee-provider`) - npm; ClawHub: `clawhub:@openclaw/arcee-provider`. Adds Arcee model provider support to OpenClaw.
+
 - **[brave](/plugins/reference/brave)** (`@openclaw/brave-plugin`) - npm; ClawHub. OpenClaw Brave Search provider plugin for web search.
+
+- **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - npm; ClawHub: `clawhub:@openclaw/cerebras-provider`. Adds Cerebras model provider support to OpenClaw.
+
+- **[chutes](/plugins/reference/chutes)** (`@openclaw/chutes-provider`) - npm; ClawHub: `clawhub:@openclaw/chutes-provider`. Adds Chutes model provider support to OpenClaw.
+
+- **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 - **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
-- **[diagnostics-otel](/plugins/reference/diagnostics-otel)** (`@openclaw/diagnostics-otel`) - npm; ClawHub: `clawhub:@openclaw/diagnostics-otel`. OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.
+- **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`. Adds DeepInfra model provider support to OpenClaw.
+
+- **[deepseek](/plugins/reference/deepseek)** (`@openclaw/deepseek-provider`) - npm; ClawHub: `clawhub:@openclaw/deepseek-provider`. Adds DeepSeek model provider support to OpenClaw.
+
+- **[diagnostics-otel](/plugins/reference/diagnostics-otel)** (`@openclaw/diagnostics-otel`) - npm; ClawHub: `clawhub:@openclaw/diagnostics-otel`. OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs.
 
 - **[diagnostics-prometheus](/plugins/reference/diagnostics-prometheus)** (`@openclaw/diagnostics-prometheus`) - npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus`. OpenClaw diagnostics Prometheus exporter for runtime metrics.
 
@@ -99730,13 +99709,27 @@ Each entry lists the package, distribution route, and description.
 
 - **[discord](/plugins/reference/discord)** (`@openclaw/discord`) - npm; ClawHub. OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
+- **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - npm; ClawHub: `clawhub:@openclaw/exa-plugin`. Adds web search provider support.
+
 - **[feishu](/plugins/reference/feishu)** (`@openclaw/feishu`) - npm; ClawHub. OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).
+
+- **[firecrawl](/plugins/reference/firecrawl)** (`@openclaw/firecrawl-plugin`) - npm; ClawHub: `clawhub:@openclaw/firecrawl-plugin`. Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.
 
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm; ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
 - **[google-meet](/plugins/reference/google-meet)** (`@openclaw/google-meet`) - npm; ClawHub. OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.
 
 - **[googlechat](/plugins/reference/googlechat)** (`@openclaw/googlechat`) - npm; ClawHub. OpenClaw Google Chat channel plugin for spaces and direct messages.
+
+- **[gradium](/plugins/reference/gradium)** (`@openclaw/gradium-speech`) - npm; ClawHub: `clawhub:@openclaw/gradium-speech`. Adds text-to-speech provider support.
+
+- **[groq](/plugins/reference/groq)** (`@openclaw/groq-provider`) - npm; ClawHub: `clawhub:@openclaw/groq-provider`. Adds Groq model provider support to OpenClaw.
+
+- **[inworld](/plugins/reference/inworld)** (`@openclaw/inworld-speech`) - npm; ClawHub: `clawhub:@openclaw/inworld-speech`. Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
+
+- **[kilocode](/plugins/reference/kilocode)** (`@openclaw/kilocode-provider`) - npm; ClawHub: `clawhub:@openclaw/kilocode-provider`. Adds Kilocode model provider support to OpenClaw.
+
+- **[kimi](/plugins/reference/kimi)** (`@openclaw/kimi-provider`) - npm; ClawHub: `clawhub:@openclaw/kimi-provider`. Adds Kimi, Kimi Coding model provider support to OpenClaw.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
 
@@ -99756,11 +99749,21 @@ Each entry lists the package, distribution route, and description.
 
 - **[openshell](/plugins/reference/openshell)** (`@openclaw/openshell-sandbox`) - npm; ClawHub. OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
 
+- **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm; ClawHub: `clawhub:@openclaw/parallel-plugin`. Adds web search provider support.
+
+- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm; ClawHub: `clawhub:@openclaw/perplexity-plugin`. Adds web search provider support.
+
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm; ClawHub: `clawhub:@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
+
+- **[qianfan](/plugins/reference/qianfan)** (`@openclaw/qianfan-provider`) - npm; ClawHub: `clawhub:@openclaw/qianfan-provider`. Adds Qianfan model provider support to OpenClaw.
 
 - **[qqbot](/plugins/reference/qqbot)** (`@openclaw/qqbot`) - npm; ClawHub. OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
+- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.
+
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
+
+- **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm. Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm; ClawHub. Synology Chat channel plugin for OpenClaw channels and direct messages.
 
@@ -104600,7 +104603,9 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
-    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. `loadSessionStore(...)` remains as a deprecated compatibility escape hatch for callers that intentionally need a mutable whole-store clone.
+    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
+
+    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are kept only during the transition before SQLite migration for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers must migrate to entry helpers before the SQLite storage flip.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -105927,7 +105932,8 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and transition-only whole-store/file-path compatibility helpers |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma and WAL maintenance setup for plugin-owned databases |
@@ -105986,6 +105992,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/session-store-runtime` | Session-store helpers without broad config writes/maintenance imports |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers without database lifecycle controls |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
@@ -108767,7 +108774,7 @@ Adds Arcee model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/arcee-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/arcee-provider`
 
 ## Surface
 
@@ -108951,7 +108958,7 @@ Adds Cerebras model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/cerebras-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/cerebras-provider`
 
 ## Surface
 
@@ -108979,7 +108986,7 @@ Adds Chutes model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/chutes-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/chutes-provider`
 
 ## Surface
 
@@ -109035,7 +109042,7 @@ Adds Cloudflare AI Gateway model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/cloudflare-ai-gateway-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`
 
 ## Surface
 
@@ -109259,7 +109266,7 @@ Adds DeepInfra model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/deepinfra-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`
 
 ## Surface
 
@@ -109287,7 +109294,7 @@ Adds DeepSeek model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/deepseek-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/deepseek-provider`
 
 ## Surface
 
@@ -109302,7 +109309,7 @@ providers: deepseek
 # Section: plugins/reference/diagnostics-otel.md
 
 ---
-summary: "OpenClaw diagnostics OpenTelemetry exporter for metrics and traces."
+summary: "OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs."
 read_when:
   - You are installing, configuring, or auditing the diagnostics-otel plugin
 title: "Diagnostics OpenTelemetry plugin"
@@ -109310,7 +109317,7 @@ title: "Diagnostics OpenTelemetry plugin"
 
 # Diagnostics OpenTelemetry plugin
 
-OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.
+OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs.
 
 ## Distribution
 
@@ -109535,7 +109542,7 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/exa-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/exa-plugin`
 
 ## Surface
 
@@ -109643,7 +109650,7 @@ Adds agent-callable tools. Adds web fetch provider support. Adds web search prov
 ## Distribution
 
 - Package: `@openclaw/firecrawl-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/firecrawl-plugin`
 
 ## Surface
 
@@ -109839,7 +109846,7 @@ Adds text-to-speech provider support.
 ## Distribution
 
 - Package: `@openclaw/gradium-speech`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/gradium-speech`
 
 ## Surface
 
@@ -109867,7 +109874,7 @@ Adds Groq model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/groq-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/groq-provider`
 
 ## Surface
 
@@ -109951,7 +109958,7 @@ Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
 ## Distribution
 
 - Package: `@openclaw/inworld-speech`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/inworld-speech`
 
 ## Surface
 
@@ -110007,7 +110014,7 @@ Adds Kilocode model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/kilocode-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/kilocode-provider`
 
 ## Surface
 
@@ -110035,7 +110042,7 @@ Adds Kimi, Kimi Coding model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/kimi-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/kimi-provider`
 
 ## Surface
 
@@ -110990,7 +110997,7 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/perplexity-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/perplexity-plugin`
 
 ## Surface
 
@@ -111206,7 +111213,7 @@ Adds Qianfan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/qianfan-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/qianfan-provider`
 
 ## Surface
 
@@ -111262,7 +111269,7 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CL
 ## Distribution
 
 - Package: `@openclaw/qwen-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/qwen-provider`
 
 ## Surface
 
@@ -111483,7 +111490,7 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/stepfun-provider`
-- Install route: included in OpenClaw
+- Install route: npm
 
 ## Surface
 
@@ -112787,6 +112794,15 @@ Arcee AI models can be accessed directly via the Arcee platform or through [Open
 | API      | OpenAI-compatible                                                                     |
 | Base URL | `https://api.arcee.ai/api/v1` (direct) or `https://openrouter.ai/api/v1` (OpenRouter) |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/arcee-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Tabs>
@@ -112866,7 +112882,7 @@ Arcee AI models can be accessed directly via the Arcee platform or through [Open
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Arcee catalog:
+OpenClaw currently ships this Arcee static catalog:
 
 | Model ref                      | Name                   | Input | Context | Cost (in/out per 1M) | Notes                                     |
 | ------------------------------ | ---------------------- | ----- | ------- | -------------------- | ----------------------------------------- |
@@ -113716,18 +113732,27 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. OpenClaw includes a bundled Cerebras provider plugin with a static four-model catalog.
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The Cerebras provider plugin includes a static four-model catalog.
 
 | Property        | Value                                    |
 | --------------- | ---------------------------------------- |
 | Provider id     | `cerebras`                               |
-| Plugin          | bundled, `enabledByDefault: true`        |
+| Plugin          | official external package                |
 | Auth env var    | `CEREBRAS_API_KEY`                       |
 | Onboarding flag | `--auth-choice cerebras-api-key`         |
 | Direct CLI flag | `--cerebras-api-key <key>`               |
 | API             | OpenAI-compatible (`openai-completions`) |
 | Base URL        | `https://api.cerebras.ai/v1`             |
 | Default model   | `cerebras/zai-glm-4.7`                   |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/cerebras-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -113760,7 +113785,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    The list should include all four bundled models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list should include all four static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -113791,7 +113816,7 @@ OpenClaw ships a static Cerebras catalog that mirrors the public OpenAI-compatib
 
 ## Manual config
 
-The bundled plugin usually means you only need the API key. Use explicit `models.providers.cerebras` config when you want to override model metadata or run in `mode: "merge"` against the static catalog:
+The plugin usually means you only need the API key. Use explicit `models.providers.cerebras` config when you want to override model metadata or run in `mode: "merge"` against the static catalog:
 
 ```json5
 {
@@ -113854,7 +113879,7 @@ read_when:
 
 [Chutes](https://chutes.ai) exposes open-source model catalogs through an
 OpenAI-compatible API. OpenClaw supports both browser OAuth and direct API-key
-auth for the bundled `chutes` provider.
+auth for the `chutes` provider.
 
 | Property | Value                        |
 | -------- | ---------------------------- |
@@ -113862,6 +113887,15 @@ auth for the bundled `chutes` provider.
 | API      | OpenAI-compatible            |
 | Base URL | `https://llm.chutes.ai/v1`   |
 | Auth     | OAuth or API key (see below) |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/chutes-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -113878,7 +113912,7 @@ auth for the bundled `chutes` provider.
       </Step>
       <Step title="Verify the default model">
         After onboarding, the default model is set to
-        `chutes/zai-org/GLM-4.7-TEE` and the bundled Chutes catalog is
+        `chutes/zai-org/GLM-4.7-TEE` and the Chutes static catalog is
         registered.
       </Step>
     </Steps>
@@ -113896,7 +113930,7 @@ auth for the bundled `chutes` provider.
       </Step>
       <Step title="Verify the default model">
         After onboarding, the default model is set to
-        `chutes/zai-org/GLM-4.7-TEE` and the bundled Chutes catalog is
+        `chutes/zai-org/GLM-4.7-TEE` and the Chutes static catalog is
         registered.
       </Step>
     </Steps>
@@ -113904,7 +113938,7 @@ auth for the bundled `chutes` provider.
 </Tabs>
 
 <Note>
-Both auth paths register the bundled Chutes catalog and set the default model to
+Both auth paths register the Chutes static catalog and set the default model to
 `chutes/zai-org/GLM-4.7-TEE`. Runtime environment variables: `CHUTES_API_KEY`,
 `CHUTES_OAUTH_TOKEN`.
 </Note>
@@ -113913,11 +113947,11 @@ Both auth paths register the bundled Chutes catalog and set the default model to
 
 When Chutes auth is available, OpenClaw queries the Chutes catalog with that
 credential and uses the discovered models. If discovery fails, OpenClaw falls
-back to a bundled static catalog so onboarding and startup still work.
+back to a static catalog so onboarding and startup still work.
 
 ## Default aliases
 
-OpenClaw registers three convenience aliases for the bundled Chutes catalog:
+OpenClaw registers three convenience aliases for the Chutes static catalog:
 
 | Alias           | Target model                                          |
 | --------------- | ----------------------------------------------------- |
@@ -113927,7 +113961,7 @@ OpenClaw registers three convenience aliases for the bundled Chutes catalog:
 
 ## Built-in starter catalog
 
-The bundled fallback catalog includes current Chutes refs:
+The static fallback catalog includes current Chutes refs:
 
 | Model ref                                             |
 | ----------------------------------------------------- |
@@ -113975,7 +114009,7 @@ The bundled fallback catalog includes current Chutes refs:
   <Accordion title="Notes">
     - API-key and OAuth discovery both use the same `chutes` provider id.
     - Chutes models are registered as `chutes/<model-id>`.
-    - If discovery fails at startup, the bundled static catalog is used automatically.
+    - If discovery fails at startup, the static catalog is used automatically.
 
   </Accordion>
 </AccordionGroup>
@@ -114222,6 +114256,15 @@ When thinking is enabled for Anthropic Messages models, OpenClaw strips trailing
 assistant prefill turns before sending the payload through Cloudflare AI Gateway.
 Anthropic rejects response prefilling with extended thinking, while ordinary
 non-thinking prefill remains available.
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/cloudflare-ai-gateway-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -114963,6 +115006,15 @@ title: "DeepInfra"
 DeepInfra provides a **unified API** that routes requests to the most popular open source and frontier models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/deepinfra-provider
+openclaw gateway restart
+```
+
 ## Getting an API key
 
 1. Go to [https://deepinfra.com/](https://deepinfra.com/)
@@ -114996,7 +115048,7 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
 
 ## Supported OpenClaw surfaces
 
-The bundled plugin registers all DeepInfra surfaces that match current
+The plugin registers all DeepInfra surfaces that match current
 OpenClaw provider contracts. Chat, image generation, and video generation
 refresh their model catalogues live from `/v1/openai/models?sort_by=openclaw&filter=with_meta`
 when `DEEPINFRA_API_KEY` is configured; the other surfaces use the curated
@@ -115066,6 +115118,15 @@ read_when:
 | API      | OpenAI-compatible          |
 | Base URL | `https://api.deepseek.com` |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/deepseek-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -115085,7 +115146,7 @@ read_when:
     openclaw models list --provider deepseek
     ```
 
-    To inspect the bundled static catalog without requiring a running Gateway,
+    To inspect the plugin's static catalog without requiring a running Gateway,
     use:
 
     ```bash
@@ -116897,7 +116958,7 @@ read_when:
 title: "Gradium"
 ---
 
-[Gradium](https://gradium.ai) is a bundled text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
+[Gradium](https://gradium.ai) is a text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
 
 | Property      | Value                                |
 | ------------- | ------------------------------------ |
@@ -116905,6 +116966,15 @@ title: "Gradium"
 | Auth          | `GRADIUM_API_KEY` or config `apiKey` |
 | Base URL      | `https://api.gradium.ai` (default)   |
 | Default voice | `Emma` (`YTpq7expH9539ERJ`)          |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/gradium-speech
+openclaw gateway restart
+```
 
 ## Setup
 
@@ -117026,18 +117096,26 @@ read_when:
   - You are configuring Whisper audio transcription on Groq
 ---
 
-[Groq](https://groq.com) provides ultra-fast inference on open-weight models (Llama, Gemma, Kimi, Qwen, GPT OSS, and more) using custom LPU hardware. OpenClaw includes a bundled Groq plugin that registers both an OpenAI-compatible chat provider and an audio media-understanding provider.
+[Groq](https://groq.com) provides ultra-fast inference on open-weight models (Llama, Gemma, Kimi, Qwen, GPT OSS, and more) using custom LPU hardware. The Groq plugin registers both an OpenAI-compatible chat provider and an audio media-understanding provider.
 
 | Property               | Value                                    |
 | ---------------------- | ---------------------------------------- |
 | Provider id            | `groq`                                   |
-| Plugin                 | bundled, `enabledByDefault: true`        |
+| Plugin                 | official external package                |
 | Auth env var           | `GROQ_API_KEY`                           |
-| Onboarding flag        | `--auth-choice groq-api-key`             |
 | API                    | OpenAI-compatible (`openai-completions`) |
 | Base URL               | `https://api.groq.com/openai/v1`         |
 | Audio transcription    | `whisper-large-v3-turbo` (default)       |
 | Suggested chat default | `groq/llama-3.3-70b-versatile`           |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/groq-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -117046,18 +117124,9 @@ read_when:
     Create an API key at [console.groq.com/keys](https://console.groq.com/keys).
   </Step>
   <Step title="Set the API key">
-    <CodeGroup>
-
-```bash Onboarding
-openclaw onboard --auth-choice groq-api-key
-```
-
-```bash Env only
+    ```bash
 export GROQ_API_KEY=gsk_...
 ```
-
-    </CodeGroup>
-
   </Step>
   <Step title="Set a default model">
     ```json5
@@ -117092,7 +117161,7 @@ export GROQ_API_KEY=gsk_...
 
 ## Built-in catalog
 
-OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the bundled rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
+OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the static rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
 
 | Model ref                                        | Name                    | Reasoning | Input        | Context |
 | ------------------------------------------------ | ----------------------- | --------- | ------------ | ------- |
@@ -117122,7 +117191,7 @@ See [Thinking modes](/tools/thinking) for the shared `/think` levels and how Ope
 
 ## Audio transcription
 
-Groq's bundled plugin also registers an **audio media-understanding provider** so voice messages can be transcribed through the shared `tools.media.audio` surface.
+Groq's plugin also registers an **audio media-understanding provider** so voice messages can be transcribed through the shared `tools.media.audio` surface.
 
 | Property           | Value                                     |
 | ------------------ | ----------------------------------------- |
@@ -117157,7 +117226,7 @@ To make Groq the default audio backend:
   </Accordion>
 
   <Accordion title="Custom Groq model ids">
-    OpenClaw accepts any Groq model id at runtime. Use the exact id shown by Groq and prefix it with `groq/`. The bundled catalog covers the common cases; uncatalogued ids fall through to the default OpenAI-compatible template.
+    OpenClaw accepts any Groq model id at runtime. Use the exact id shown by Groq and prefix it with `groq/`. The static catalog covers the common cases; uncatalogued ids fall through to the default OpenAI-compatible template.
 
     ```json5
     {
@@ -117840,7 +117909,7 @@ the standard reply-audio pipeline.
 | Property      | Value                                                           |
 | ------------- | --------------------------------------------------------------- |
 | Provider id   | `inworld`                                                       |
-| Plugin        | bundled, `enabledByDefault: true`                               |
+| Plugin        | official external package                                       |
 | Contract      | `speechProviders` (TTS only)                                    |
 | Auth env var  | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)     |
 | Base URL      | `https://api.inworld.ai`                                        |
@@ -117849,6 +117918,15 @@ the standard reply-audio pipeline.
 | Output        | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
 | Website       | [inworld.ai](https://inworld.ai)                                |
 | Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)      |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/inworld-speech
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -117935,7 +118013,7 @@ the standard reply-audio pipeline.
     Full config reference including `messages.tts` settings.
   </Card>
   <Card title="Providers" href="/providers" icon="grid">
-    All bundled OpenClaw providers.
+    All supported OpenClaw providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     Common issues and debugging steps.
@@ -117963,6 +118041,15 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 | Auth     | `KILOCODE_API_KEY`                 |
 | API      | OpenAI-compatible                  |
 | Base URL | `https://api.kilo.ai/api/gateway/` |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/kilocode-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -118018,7 +118105,7 @@ Any model available on the gateway can be used with the `kilocode/` prefix:
 
 <Tip>
 At startup, OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges
-discovered models ahead of the static fallback catalog. The bundled fallback always
+discovered models ahead of the static fallback catalog. The static fallback always
 includes `kilocode/kilo/auto` (`Kilo Auto`) with `input: ["text", "image"]`,
 `reasoning: true`, `contextWindow: 1000000`, and `maxTokens: 128000`.
 </Tip>
@@ -118061,7 +118148,7 @@ includes `kilocode/kilo/auto` (`Kilo Auto`) with `input: ["text", "image"]`,
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If model discovery fails at startup, OpenClaw falls back to the bundled static catalog containing `kilocode/kilo/auto`.
+    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo/auto`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
     - When the Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
@@ -119589,6 +119676,12 @@ Choose your provider and follow the setup steps.
   </Tab>
 
   <Tab title="Kimi Coding">
+    Install the official plugin, then restart Gateway:
+
+    ```bash
+    openclaw plugins install @openclaw/kimi-provider
+    openclaw gateway restart
+    ```
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
@@ -123363,6 +123456,15 @@ This page is the Perplexity **provider** setup. For the Perplexity **tool** (how
 | Auth        | `PERPLEXITY_API_KEY` (direct) or `OPENROUTER_API_KEY` (via OpenRouter) |
 | Config path | `plugins.entries.perplexity.config.webSearch.apiKey`                   |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/perplexity-plugin
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -123658,6 +123760,15 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 | API      | OpenAI-compatible                 |
 | Base URL | `https://qianfan.baidubce.com/v2` |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/qianfan-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -123687,7 +123798,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 | `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000     | Yes       | Multimodal    |
 
 <Tip>
-The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
+The default model ref is `qianfan/deepseek-v3.2`. You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
 </Tip>
 
 ## Config example
@@ -123740,7 +123851,7 @@ The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to overr
   </Accordion>
 
   <Accordion title="Catalog and overrides">
-    The bundled catalog currently includes `deepseek-v3.2` and `ernie-5.0-thinking-preview`. Add or override `models.providers.qianfan` only when you need a custom base URL or model metadata.
+    The static catalog currently includes `deepseek-v3.2` and `ernie-5.0-thinking-preview`. Add or override `models.providers.qianfan` only when you need a custom base URL or model metadata.
 
     <Note>
     Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v3.2`).
@@ -123843,11 +123954,11 @@ provider instead.
 - You need to test compatibility with the Qwen Portal endpoint specifically.
 
 Choose [Qwen](/providers/qwen) for new setup, broader endpoint choices, Standard
-ModelStudio, Coding Plan, and the full bundled Qwen catalog.
+ModelStudio, Coding Plan, and the full Qwen plugin catalog.
 
 ## Models
 
-The bundled catalog seeds the Qwen Portal default:
+The Qwen plugin catalog seeds the Qwen Portal default:
 
 - `qwen-oauth/qwen3.5-plus`
 
@@ -123898,15 +124009,15 @@ https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 # Section: providers/qwen.md
 
 ---
-summary: "Use Qwen Cloud via OpenClaw's bundled qwen provider"
+summary: "Use Qwen Cloud through its OpenClaw plugin"
 read_when:
   - You want to use Qwen with OpenClaw
   - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
-OpenClaw now treats Qwen as a first-class bundled provider with canonical id
-`qwen`. The bundled provider targets the Qwen Cloud / Alibaba DashScope and
+OpenClaw now treats Qwen as a first-class provider plugin with canonical id
+`qwen`. The provider plugin targets the Qwen Cloud / Alibaba DashScope and
 Coding Plan endpoints, keeps legacy `modelstudio` ids working as a compatibility
 alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 
@@ -123920,6 +124031,15 @@ alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 If you want `qwen3.6-plus`, prefer the **Standard (pay-as-you-go)** endpoint.
 Coding Plan support can lag behind the public catalog.
 </Tip>
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/qwen-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -124084,7 +124204,7 @@ You can override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
+OpenClaw currently ships this Qwen static catalog. The configured catalog is
 endpoint-aware: Coding Plan configs omit models that are only known to work on
 the Standard endpoint.
 
@@ -124103,12 +124223,12 @@ the Standard endpoint.
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
-present in the bundled catalog.
+present in the static catalog.
 </Note>
 
 ## Thinking Controls
 
-For reasoning-enabled Qwen Cloud models, the bundled provider maps OpenClaw
+For reasoning-enabled Qwen Cloud models, the provider maps OpenClaw
 thinking levels to DashScope's top-level `enable_thinking` request flag. Disabled
 thinking sends `enable_thinking: false`; other thinking levels send
 `enable_thinking: true`.
@@ -124141,7 +124261,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 <AccordionGroup>
   <Accordion title="Image and video understanding">
-    The bundled Qwen plugin registers media understanding for images and video
+    The Qwen plugin registers media understanding for images and video
     on the **Standard** DashScope endpoints (not the Coding Plan endpoints).
 
     | Property      | Value                 |
@@ -124166,7 +124286,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     `qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
     endpoint/key pair.
 
-    OpenClaw's bundled Qwen catalog does not advertise `qwen3.6-plus` on Coding
+    OpenClaw's Qwen static catalog does not advertise `qwen3.6-plus` on Coding
     Plan endpoints, but explicitly configured `qwen/qwen3.6-plus` entries under
     `models.providers.qwen.models` are honored on Coding Plan baseUrls so you
     can opt that model in if Aliyun enables it on your subscription. The
@@ -124178,13 +124298,13 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     The `qwen` plugin is being positioned as the vendor home for the full Qwen
     Cloud surface, not just coding/text models.
 
-    - **Text/chat models:** bundled now
+    - **Text/chat models:** available through the plugin
     - **Tool calling, structured output, thinking:** inherited from the OpenAI-compatible transport
     - **Image generation:** planned at the provider-plugin layer
-    - **Image/video understanding:** bundled now on the Standard endpoint
+    - **Image/video understanding:** available through the plugin on the Standard endpoint
     - **Speech/audio:** planned at the provider-plugin layer
     - **Memory embeddings/reranking:** planned through the embedding adapter surface
-    - **Video generation:** bundled now through the shared video-generation capability
+    - **Video generation:** available through the plugin through the shared video-generation capability
 
   </Accordion>
 
@@ -124199,7 +124319,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     Coding Plan or Standard Qwen hosts still keeps video generation on the correct
     regional DashScope video endpoint.
 
-    Current bundled Qwen video-generation limits:
+    Current Qwen video-generation limits:
 
     - Up to **1** output video per request
     - Up to **1** input image
@@ -124621,7 +124741,7 @@ read_when:
 title: "StepFun"
 ---
 
-OpenClaw includes a bundled StepFun provider plugin with two provider ids:
+The StepFun provider plugin supports two provider ids:
 
 - `stepfun` for the standard endpoint
 - `stepfun-plan` for the Step Plan endpoint
@@ -124629,6 +124749,15 @@ OpenClaw includes a bundled StepFun provider plugin with two provider ids:
 <Warning>
 Standard and Step Plan are **separate providers** with different endpoints and model ref prefixes (`stepfun/...` vs `stepfun-plan/...`). Use a China key with the `.com` endpoints and a global key with the `.ai` endpoints.
 </Warning>
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/stepfun-provider
+openclaw gateway restart
+```
 
 ## Region and endpoint overview
 
@@ -124814,7 +124943,7 @@ Choose your provider surface and follow the setup steps.
   </Accordion>
 
   <Accordion title="Notes">
-    - The provider is bundled with OpenClaw, so there is no separate plugin install step.
+    - The provider is an official external package; install it before setup.
     - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
     - A single auth flow writes region-matched profiles for both `stepfun` and `stepfun-plan`, so both surfaces can be discovered together.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
@@ -128473,15 +128602,16 @@ The branch already has a real shared SQLite base:
   exact transcript event row.
 - Memory-core indexes now use explicit agent-database tables
   `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, and
-  `memory_embedding_cache`; optional FTS/vector side indexes use the same
-  `memory_index_*` prefix instead of generic `meta`, `files`, `chunks`, or
-  `chunks_vec` tables. `memory_index_sources` is keyed by
-  `(source_kind, source_key)` and carries optional `session_id` ownership, so
-  session-derived sources and chunks cascade when a session is deleted. Cached
-  chunk embeddings are stored as Float32 SQLite BLOBs, not JSON text arrays.
-  These tables are derived/search cache, not canonical transcript storage; they
-  can be deleted and rebuilt from `sessions`, `transcript_events`, and memory
-  workspace files.
+  `memory_embedding_cache`, with `memory_index_state` tracking revision changes.
+  Optional FTS/vector side indexes are named `memory_index_chunks_fts` and
+  `memory_index_chunks_vec` instead of generic `meta`, `files`, `chunks`,
+  `chunks_fts`, or `chunks_vec` tables. The canonical names retain the current
+  path/source row shape and serialized embedding compatibility. These tables
+  are derived/search cache, not canonical transcript storage; they can be
+  deleted and rebuilt from memory workspace files and configured sources.
+  Opening a shipped generic-name memory index migrates its metadata, sources,
+  chunks, and embedding cache into the canonical tables; derived FTS/vector
+  tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
   `subagents/runs.json` file is doctor migration input only.
@@ -128969,9 +129099,9 @@ sessionId}` and session key context.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
   plugin code uses SQLite row helpers and scope values.
 - The public `session-store-runtime` SDK surface now only exports session row
-  and transcript row helpers. Raw SQLite database open/path and close/reset
-  helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
-  longer pull the deprecated broad testing barrel for database cleanup.
+  and transcript row helpers. Focused SQLite schema/path/transaction helpers
+  live in `sqlite-runtime`; raw open/close/reset helpers remain local-only for
+  first-party tests.
 - Legacy `.jsonl` trajectory/checkpoint filename classifiers now live in the
   doctor legacy session-file module. Core session validation no longer imports
   file-artifact helpers to decide normal SQLite session ids.
@@ -129582,10 +129712,11 @@ vfs_entries(namespace, path, kind, content_blob, metadata_json, updated_at)
 tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
 run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
 trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
-memory_index_meta(meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
-memory_index_sources(source_kind, source_key, path, session_id, hash, mtime, size)
-memory_index_chunks(id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
+memory_index_meta(key, value)
+memory_index_sources(path, source, hash, mtime, size)
+memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
+memory_index_state(id, revision)
 cache_entries(scope, key, value_json, blob, expires_at, updated_at)
 ```
 
@@ -129813,9 +129944,12 @@ Keep shared coordination state in `state/openclaw.sqlite`:
   `media_blobs` and removes the source files after successful row writes.
 - Debug proxy capture sessions, events, and payload blobs. Done: captures live
   in the shared state DB and open through the shared state DB bootstrap, schema,
-  WAL, and busy-timeout settings. There is no debug proxy runtime sidecar DB
-  override, blob directory, or proxy-capture-only generated schema/codegen
-  target.
+  WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
+  `capture_blobs.data`; there is no debug proxy runtime sidecar DB override,
+  blob directory, or proxy-capture-only generated schema/codegen target.
+  Doctor/startup migration imports shipped `debug-proxy/capture.sqlite` rows
+  and referenced payload blobs, including active legacy DB/blob environment
+  overrides, then archives those sources while leaving CA certificates intact.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.
@@ -131924,7 +132058,8 @@ See [Web tools](/tools/web).
 
 ### 5) Web fetch tool (Firecrawl)
 
-`web_fetch` can call **Firecrawl** when an API key is present:
+`web_fetch` can call **Firecrawl** with keyless starter access. Add an API key
+for higher limits:
 
 - `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 
@@ -134024,10 +134159,12 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 ## Index storage
 
-| Key                   | Type     | Default                               | Description                                 |
-| --------------------- | -------- | ------------------------------------- | ------------------------------------------- |
-| `store.path`          | `string` | `~/.openclaw/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
-| `store.fts.tokenizer` | `string` | `unicode61`                           | FTS5 tokenizer (`unicode61` or `trigram`)   |
+Built-in memory indexes live in each agent's OpenClaw SQLite database at
+`agents/<agentId>/agent/openclaw-agent.sqlite`.
+
+| Key                   | Type     | Default     | Description                               |
+| --------------------- | -------- | ----------- | ----------------------------------------- |
+| `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
 ---
 
@@ -135142,6 +135279,8 @@ Scope intent:
 - `tools.web.fetch.firecrawl.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
+- `plugins.entries.codex.config.appServer.authToken`
+- `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
@@ -146571,6 +146710,15 @@ OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
 offers neural, keyword, and hybrid search modes with built-in content
 extraction (highlights, text, summaries).
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/exa-plugin
+openclaw gateway restart
+```
+
 ## Get an API key
 
 <Steps>
@@ -148006,7 +148154,8 @@ Notes:
 summary: "Firecrawl search, scrape, and web_fetch fallback"
 read_when:
   - You want Firecrawl-backed web extraction
-  - You need a Firecrawl API key
+  - You want keyless Firecrawl web_fetch
+  - You need a Firecrawl API key for search or higher limits
   - You want Firecrawl as a web_search provider
   - You want anti-bot extraction for web_fetch
 title: "Firecrawl"
@@ -148021,10 +148170,21 @@ OpenClaw can use **Firecrawl** in three ways:
 It is a hosted extraction/search service that supports bot circumvention and caching,
 which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
-## Get an API key
+## Install plugin
 
-1. Create a Firecrawl account and generate an API key.
-2. Store it in config or set `FIRECRAWL_API_KEY` in the gateway environment.
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/firecrawl-plugin
+openclaw gateway restart
+```
+
+## Keyless web_fetch and API keys
+
+The explicitly selected hosted Firecrawl `web_fetch` fallback supports starter
+access without an API key. Add `FIRECRAWL_API_KEY` in the gateway environment
+or configure it when you need higher limits. Firecrawl `web_search` and
+`firecrawl_scrape` require an API key.
 
 ## Configure Firecrawl search
 
@@ -148055,23 +148215,29 @@ which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
 Notes:
 
-- Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the bundled Firecrawl plugin automatically.
+- Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the installed Firecrawl plugin automatically.
 - `web_search` with Firecrawl supports `query` and `count`.
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
 - `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
 
-## Configure Firecrawl scrape + web_fetch fallback
+## Configure Firecrawl web_fetch fallback
 
 ```json5
 {
+  tools: {
+    web: {
+      fetch: {
+        provider: "firecrawl", // explicit selection enables keyless fallback
+      },
+    },
+  },
   plugins: {
     entries: {
       firecrawl: {
         enabled: true,
         config: {
           webFetch: {
-            apiKey: "FIRECRAWL_API_KEY_HERE",
             baseUrl: "https://api.firecrawl.dev",
             onlyMainContent: true,
             maxAgeMs: 172800000,
@@ -148086,13 +148252,15 @@ Notes:
 
 Notes:
 
-- Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
+- The explicitly selected Firecrawl `web_fetch` fallback works without an API key. When configured, OpenClaw sends `plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY` for higher limits.
+- Choosing Firecrawl during onboarding or `openclaw configure --section web` enables the plugin and selects Firecrawl for `web_fetch` unless another fetch provider is already configured.
+- `firecrawl_scrape` requires an API key.
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
 - Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
 - `firecrawl_scrape` rejects obvious private, loopback, metadata, and non-HTTP(S) target URLs before forwarding them to Firecrawl, matching the `web_fetch` target-safety contract for explicit Firecrawl scrape calls.
 
-`firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
+`firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars, including its required API key.
 
 ### Self-hosted Firecrawl
 
@@ -148145,12 +148313,12 @@ than basic-only scraping.
 `web_fetch` extraction order:
 
 1. Readability (local)
-2. Firecrawl (if selected or auto-detected as the active web-fetch fallback)
+2. Firecrawl (when selected, or auto-detected from configured credentials)
 3. Basic HTML cleanup (last fallback)
 
 The selection knob is `tools.web.fetch.provider`. If you omit it, OpenClaw
 auto-detects the first ready web-fetch provider from available credentials.
-Today the bundled provider is Firecrawl.
+The official Firecrawl plugin provides that fallback.
 
 ## Related
 
@@ -151391,7 +151559,7 @@ read_when:
 title: "Parallel search"
 ---
 
-OpenClaw bundles two [Parallel](https://parallel.ai/) `web_search` providers:
+The Parallel plugin provides two [Parallel](https://parallel.ai/) `web_search` providers:
 
 - **Parallel Search (Free)** (`parallel-free`) -- Parallel's free
   [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Requires no
@@ -151410,6 +151578,15 @@ explicitly.
   Set `tools.web.search.provider` to `parallel-free` or `parallel` to route them
   through Parallel.
 </Note>
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/parallel-plugin
+openclaw gateway restart
+```
 
 ## API key (paid provider)
 
@@ -151890,6 +152067,15 @@ It returns structured results with `title`, `url`, and `snippet` fields.
 
 For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups.
 If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/perplexity-plugin
+openclaw gateway restart
+```
 
 ## Getting a Perplexity API key
 
@@ -154259,6 +154445,7 @@ plugins.
     | --- | --- |
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
+    | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -157461,7 +157648,7 @@ the shared live sweep:
 | Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                              |
-| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the bundled contract                                                    |
+| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                                     |
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
@@ -157925,7 +158112,7 @@ Truncate output to this many characters.
     Runs Readability (main-content extraction) on the HTML response.
   </Step>
   <Step title="Fallback (optional)">
-    If Readability fails and Firecrawl is configured, retries through the
+    If Readability fails and Firecrawl is selected, retries through the
     Firecrawl API with bot-circumvention mode.
   </Step>
   <Step title="Cache">
@@ -157997,7 +158184,7 @@ If Readability extraction fails, `web_fetch` can fall back to
         enabled: true,
         config: {
           webFetch: {
-            apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
+            // apiKey: "fc-...", // optional; omit for keyless starter access
             baseUrl: "https://api.firecrawl.dev",
             onlyMainContent: true,
             maxAgeMs: 86400000, // cache duration (1 day)
@@ -158010,11 +158197,11 @@ If Readability extraction fails, `web_fetch` can fall back to
 }
 ```
 
-`plugins.entries.firecrawl.config.webFetch.apiKey` supports SecretRef objects.
+`plugins.entries.firecrawl.config.webFetch.apiKey` is optional and supports SecretRef objects.
 Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 
 <Note>
-  If Firecrawl is enabled and its SecretRef is unresolved with no
+  If you configure a Firecrawl API-key SecretRef and it is unresolved with no
   `FIRECRAWL_API_KEY` env fallback, gateway startup fails fast.
 </Note>
 
@@ -158028,10 +158215,13 @@ Current runtime behavior:
 
 - `tools.web.fetch.provider` selects the fetch fallback provider explicitly.
 - If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
-  provider from available credentials. Non-sandboxed `web_fetch` can use
+  provider from configured credentials. Non-sandboxed `web_fetch` can use
   installed plugins that declare `contracts.webFetchProviders` and register a
-  matching provider at runtime. Today the bundled provider is Firecrawl.
-- Sandboxed `web_fetch` calls stay limited to bundled providers.
+  matching provider at runtime. The official Firecrawl plugin provides this
+  fallback.
+- Sandboxed `web_fetch` calls allow bundled providers plus installed providers
+  whose official npm or ClawHub provenance is verified. Today that permits the
+  official Firecrawl plugin; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
@@ -158352,7 +158542,7 @@ to route them through the managed path.
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  bundled API-backed web search providers, including Brave, Exa, Firecrawl,
+  installed API-backed web search providers, including Brave, Exa, Firecrawl,
   Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
@@ -158399,10 +158589,11 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
 
 - choose it with `tools.web.fetch.provider`
 - or omit that field and let OpenClaw auto-detect the first ready web-fetch
-  provider from available credentials
+  provider from configured credentials
 - non-sandboxed `web_fetch` can use installed plugin providers that declare
-  `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
-- today the bundled web-fetch provider is Firecrawl, configured under
+  `contracts.webFetchProviders`; sandboxed fetches allow bundled providers and
+  verified official plugin installs, but exclude third-party external plugins
+- the official Firecrawl plugin provides web-fetch fallback, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
 When you choose **Kimi** during `openclaw onboard` or
