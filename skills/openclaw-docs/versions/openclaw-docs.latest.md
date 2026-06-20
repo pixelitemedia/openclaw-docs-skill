@@ -335,33 +335,21 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 For pull request runs, the terminal timing-summary job runs the helper from the trusted base revision before passing `GH_TOKEN` to `gh run view`. That keeps the tokened query out of branch-controlled code while still summarizing the pull request's current CI run.
 
-## Real behavior proof
+## PR context and evidence
 
-External contributor PRs run a `Real behavior proof` gate from
+External contributor PRs run a PR context and evidence gate from
 `.github/workflows/real-behavior-proof.yml`. The workflow checks out the trusted
 base commit and evaluates the PR body only; it does not execute code from the
 contributor branch.
 
 The gate applies to PR authors who are not repository owners, members,
-collaborators, or bots. It passes when the PR body contains a
-`Real behavior proof` section with filled values for:
-
-- `Behavior or issue addressed`
-- `Real environment tested`
-- `Exact steps or command run after this patch`
-- `Evidence after fix`
-- `Observed result after fix`
-- `What was not tested`
-
-The evidence must show the changed behavior after the patch in a real OpenClaw
-setup. Screenshots, recordings, terminal captures, console output, copied live
-output, redacted runtime logs, and linked artifacts all count. Unit tests, mocks,
-snapshots, lint, typechecks, and CI results are useful supporting verification,
-but they do not satisfy this gate by themselves.
+collaborators, or bots. It passes when the PR body contains authored
+`What Problem This Solves` and `Evidence` sections. Evidence can be a focused
+test, CI result, screenshot, recording, terminal output, live observation,
+redacted log, or artifact link. The body provides intent and useful validation;
+reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
-Maintainers can apply `proof: override` only when the proof gate should not
-apply to that PR.
 
 ## Scope and routing
 
@@ -10246,6 +10234,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WhatsApp](/channels/whatsapp) - Most popular; uses Baileys and requires QR pairing.
 - [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (bundled plugin).
+- [Zalo ClawBot](/channels/zaloclawbot) - Personal Zalo assistant via QR login; owner-bound (external plugin).
 - [Zalo Personal](/channels/zalouser) - Zalo personal account via QR login (bundled plugin).
 
 ## Notes
@@ -16963,9 +16952,13 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
-- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+- Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - global shortcuts: callback and actor metadata, routed to the actor's direct session
+  - message shortcuts: callback, actor, channel, thread, and selected-message context
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
 ## Configuration reference
 
@@ -21495,6 +21488,106 @@ Multi-account options:
 
 
 
+# Section: channels/zaloclawbot.md
+
+---
+summary: "Zalo ClawBot channel setup through the external openclaw-zaloclawbot plugin"
+read_when:
+  - You want a personal Zalo assistant bot with QR-code login
+  - You are installing or troubleshooting the openclaw-zaloclawbot channel plugin
+title: "Zalo ClawBot"
+---
+
+OpenClaw connects to Zalo ClawBot through the catalog-listed external
+`@zalo-platforms/openclaw-zaloclawbot` plugin. Login uses a Zalo Mini App QR
+code.
+
+## Compatibility
+
+| Plugin Version | OpenClaw Version | npm dist-tag | Status        |
+| -------------- | ---------------- | ------------ | ------------- |
+| 0.1.x          | >=2026.4.10      | `latest`     | Active / Beta |
+
+## Prerequisites
+
+- Node.js **>= 22**
+- [OpenClaw](https://docs.openclaw.ai/install) must be installed (`openclaw` CLI available).
+- A Zalo account on a mobile device to scan the login QR code.
+
+## Install with onboard (recommended)
+
+Run the OpenClaw onboarding wizard and pick **Zalo ClawBot** from the channel menu:
+
+```bash
+openclaw onboard
+```
+
+The wizard installs the plugin from the official catalog (integrity-verified), renders the login QR right in the terminal, and finishes the channel once you scan it with the Zalo app. No extra commands are needed.
+
+## Manual Installation
+
+To add the channel to an already-onboarded gateway, follow these steps:
+
+### 1. Install the plugin
+
+```bash
+openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot@0.1.4"
+```
+
+Use the exact pinned version shown above (it matches the official catalog entry), so OpenClaw verifies the package against the catalog integrity hash during install.
+
+### 2. Enable the plugin in config
+
+```bash
+openclaw config set plugins.entries.openclaw-zaloclawbot.enabled true
+```
+
+### 3. Generate QR code and log in
+
+```bash
+openclaw channels login --channel openclaw-zaloclawbot
+```
+
+Scan the terminal-rendered QR code using the Zalo mobile app, accept the Terms of Use inside the Zalo Mini App, and authorize the session.
+
+### 4. Restart the gateway
+
+```bash
+openclaw gateway restart
+```
+
+---
+
+## How It Works
+
+Unlike the standard developer Zalo channel which requires you to register your own Zalo Official Account (OA) and paste static developer credentials, Zalo ClawBot operates as an **owner-bound personal assistant** using a shared, official infrastructure:
+
+1. **Secure Onboarding:** The QR code resolves to a secure Zalo Mini App that binds a newly-provisioned, private bot under a shared official OA directly to your Zalo User ID.
+2. **Owner-Bound Privacy:** By design, the bot is restricted to communicating _only_ with its owner. Messages from other users are dropped at the platform level, making the connection private and secure.
+3. **Official API path:** The plugin uses Zalo Bot Platform APIs instead of
+   browser or web-session automation.
+
+## Under the Hood
+
+The Zalo ClawBot plugin communicates with Zalo APIs via a persistent long-polling message loop. To maintain a clean and lightweight runtime:
+
+- Long-poll connections utilize the `getUpdates` endpoint.
+- Webhooks are disabled by default for local desktop/terminal gateway runs.
+- Messages are processed client-side and mapped directly to your local agent runtime.
+
+The external plugin manages bot credentials under the OpenClaw state directory.
+Treat that directory as sensitive and include it in the same access-control and
+backup policy as the rest of your OpenClaw state.
+
+---
+
+## Troubleshooting
+
+- **QR Login Timeout:** The login token (`zbsk`) expires after 5 minutes for security reasons. If the QR code expires before you scan it, simply rerun the login command to generate a new one.
+- **Gateway Fails to Load:** Ensure your OpenClaw host version is `2026.4.10` or higher. Older versions do not support the external npm-plugin installation ledger.
+
+
+
 # Section: channels/zalouser.md
 
 ---
@@ -23274,7 +23367,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
+- `wait --load networkidle` is not supported on existing-session profiles (works on managed and raw/remote CDP)
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`
@@ -29790,7 +29883,13 @@ openclaw nodes status --last-connected 24h
 `nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
 Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
 filter to nodes that connected within a duration (e.g. `24h`, `7d`).
-Use `nodes remove --node <id|name|ip>` to delete a stale gateway-owned node pairing record.
+Use `nodes remove --node <id|name|ip>` to remove a node pairing. For a
+device-backed node this revokes the device's `node` role in `devices/paired.json`
+and disconnects its node-role sessions (a mixed-role device keeps its row and
+only loses the `node` role; a node-only device is deleted); it also clears any
+matching legacy gateway-owned node pairing record. `operator.pairing` can remove
+non-operator node rows; a device-token caller revoking its own node role on a
+mixed-role device additionally needs `operator.admin`.
 
 Approval note:
 
@@ -33117,12 +33216,63 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
 }
 ```
 
-Related:
+## Compact a session
 
-- Session config: [Configuration reference](/gateway/config-agents#session)
+Reclaim context budget for a wedged or oversized session. `openclaw sessions compact <key>` is the first-class wrapper around the `sessions.compact` gateway RPC and requires a running gateway.
+
+```bash
+openclaw sessions compact "agent:main:main"
+openclaw sessions compact "agent:main:main" --max-lines 200
+openclaw sessions compact "agent:work:main" --agent work --json
+```
+
+- Without `--max-lines`, the gateway LLM-summarizes the transcript. This can be slow, so the default `--timeout` is `180000` ms.
+- With `--max-lines <n>`, it truncates to the last `n` transcript lines and archives the prior transcript as a `.bak` sidecar.
+- `--agent <id>`: agent that owns the session; required for `global` keys.
+- `--url` / `--token` / `--password`: gateway connection overrides.
+- `--timeout <ms>`: RPC timeout in milliseconds.
+- `--json`: print the raw RPC payload.
+
+The command exits non-zero when the gateway reports a failed compaction or is unreachable, so crons and scripts never mistake a silent no-op for success.
+
+> Note: `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash commands from the CLI are rejected by the authorized-sender check; that invocation exits non-zero with guidance pointing here instead of silently no-opping.
+
+### sessions.compact RPC
+
+`openclaw gateway call sessions.compact --params '<json>'` accepts:
+
+| Field      | Type        | Required | Description                                                |
+| ---------- | ----------- | -------- | ---------------------------------------------------------- |
+| `key`      | string      | yes      | Session key to compact (for example `agent:main:main`).    |
+| `agentId`  | string      | no       | Agent id that owns the session (for `global` keys).        |
+| `maxLines` | integer ≥ 1 | no       | Truncate to the last N lines instead of LLM summarization. |
+
+Example LLM-summarize response:
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "result": { "tokensBefore": 243868, "tokensAfter": 34941 }
+}
+```
+
+Example truncate response (`--max-lines 200`):
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "archived": "/home/user/.openclaw/agents/main/sessions/transcripts/<id>.jsonl.bak",
+  "kept": 200
+}
+```
 
 ## Related
 
+- Session config: [Configuration reference](/gateway/config-agents#session)
 - [CLI reference](/cli)
 - [Session management](/concepts/session)
 
@@ -37316,7 +37466,7 @@ Configure compaction under `agents.defaults.compaction` in your `openclaw.json`.
 
 ### Using a different model
 
-By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts any `provider/model-id` string:
+By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
 
 ```json
 {
@@ -37329,6 +37479,8 @@ By default, compaction uses the agent's primary model. Set `agents.defaults.comp
   }
 }
 ```
+
+Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
 This works with local models too, for example a second Ollama model dedicated to summarization:
 
@@ -43942,7 +44094,7 @@ that agent; if you copy credentials manually, copy only portable static
 `api_key` or `token` profiles.
 </Warning>
 
-Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
+Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-allowlists).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -51222,7 +51374,7 @@ Periodic heartbeat runs.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
 - `midTurnPrecheck`: optional tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Reinjection is disabled when unset or set to `[]`. Explicitly setting `["Session Startup", "Red Lines"]` enables that pair and preserves the legacy `Every Session`/`Safety` fallback. Enable this only when the extra context is worth the risk of duplicating project guidance already captured in the compaction summary.
-- `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
+- `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
@@ -61472,7 +61624,14 @@ Methods:
 - `node.pair.list` - list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` - approve a pending request (issues token).
 - `node.pair.reject` - reject a pending request.
-- `node.pair.remove` - remove a stale paired node entry.
+- `node.pair.remove` - remove a paired node. For device-backed pairings this
+  revokes the device's `node` role: it mutates `devices/paired.json` and
+  invalidates/disconnects that device's node-role sessions. A **mixed-role**
+  device (e.g. it also holds `operator`) keeps its row and only loses the `node`
+  role; a node-only device row is deleted. It also removes any matching legacy
+  gateway-owned node pairing entry. Authz: `operator.pairing` may remove
+  non-operator node rows; a device-token caller revoking its **own** node role on
+  a mixed-role device additionally needs `operator.admin`.
 - `node.pair.verify` - verify `{ nodeId, token }`.
 
 Notes:
@@ -65390,7 +65549,7 @@ it disabled for read-only shared skill roots.
 
 Related:
 
-- [Skills config](/tools/skills-config#symlinked-sibling-repos)
+- [Skills config](/tools/skills-config#symlinked-skill-roots)
 - [Configuration examples](/gateway/configuration-examples#symlinked-sibling-skill-repo)
 
 ## Anthropic 429 extra usage required for long context
@@ -82256,8 +82415,14 @@ Notes:
   different role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
-- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
-  separate gateway-owned node pairing store.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a
+  device-backed node it revokes the device's `node` role in `devices/paired.json`
+  and disconnects that device's node-role sessions — a mixed-role device keeps
+  its row and only loses the `node` role, while a node-only device row is
+  deleted. It also clears any matching entry from the separate gateway-owned node
+  pairing store. `operator.pairing` may remove non-operator node rows; a
+  device-token caller revoking its own node role on a mixed-role device
+  additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -127172,9 +127337,10 @@ Legacy aliases still normalize to the canonical bundled ids:
       sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
       the consent page may show Grok Build even though OpenClaw does not require
       the Grok Build app.
-    - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
-      normal xAI provider path because it requires a different upstream API
-      surface than the standard OpenClaw xAI transport.
+    - OpenClaw does not currently expose the xAI multi-agent model family. xAI
+      serves these models through the Responses API, but they do not accept the
+      client-side or custom tools used by OpenClaw's shared agent loop. See the
+      [xAI multi-agent limitations](https://docs.x.ai/developers/model-capabilities/text/multi-agent#limitations).
     - xAI Realtime voice is not registered as an OpenClaw provider yet. It
       needs a different bidirectional voice session contract than batch STT or
       streaming transcription.
@@ -143812,6 +143978,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - Supported on managed `openclaw` and raw/remote CDP profiles. The `user` and `existing-session` profiles reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
@@ -145141,7 +145308,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 
