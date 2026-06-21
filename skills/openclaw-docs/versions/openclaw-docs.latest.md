@@ -465,7 +465,7 @@ Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -25732,10 +25732,12 @@ A finding includes:
 | `ocPath`          | Precise `oc://` address when a check can point to one. |
 | `fixHint`         | Suggested operator action or repair summary.           |
 
-This release registers the modernized core doctor checks on the structured
-health path. The `openclaw/plugin-sdk/health` subpath exposes the same
-contract for bundled follow-up consumers, but plugin-backed checks only run
-after their owning package registers them in the active command path.
+Modernized core doctor checks stay attached to the ordered doctor contribution
+that owns their human `doctor` / `doctor --fix` behavior. The shared structured
+health registry is the extension point: bundled and plugin-backed checks run
+after core doctor checks once their owning package registers them in the active
+command path. The `openclaw/plugin-sdk/health` subpath exposes the same
+contract for those extension consumers.
 
 ## Check Selection
 
@@ -36507,8 +36509,8 @@ canonical subscription `github-copilot` provider and is **never** selected by
 The harness claims its provider, runtime, CLI session key, and auth profile
 prefix in `extensions/copilot/doctor-contract-api.ts`, which
 `openclaw doctor` auto-loads. For configuration, auth, transcript mirroring,
-compaction, the doctor probe surface, and the broader PI vs Codex vs Copilot
-SDK decision, see [GitHub Copilot agent runtime](/plugins/copilot).
+compaction, the declarative doctor contract, and the broader PI vs Codex vs
+Copilot SDK decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Compatibility contract
 
@@ -93383,15 +93385,12 @@ For the broader model/provider/runtime split, start with
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
 - A writable `copilotHome` directory. The harness defaults to
-  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation. The
-  platform default (`%APPDATA%\copilot` on Windows, `$XDG_CONFIG_HOME/copilot`
-  or `~/.config/copilot` elsewhere) is used as the doctor probe fallback when
-  no explicit home is set.
+  `<agentDir>/copilot` when OpenClaw provides an agent directory, otherwise
+  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation.
 
 `openclaw doctor` runs the plugin
-[doctor contract](#doctor-and-probes) for the extension; failures there are
-the canonical way to confirm the environment is ready before opting an agent
-in.
+[doctor contract](#doctor) for declarative session-state ownership and future
+compatibility migrations. It does not run Copilot CLI environment probes.
 
 ## Plugin install
 
@@ -93429,9 +93428,9 @@ Pin one model (or one provider) to the harness:
 {
   agents: {
     defaults: {
-      model: "github-copilot/gpt-5.5",
+      model: "github-copilot/auto",
       models: {
-        "github-copilot/gpt-5.5": {
+        "github-copilot/auto": {
           agentRuntime: { id: "copilot" },
         },
       },
@@ -93444,6 +93443,10 @@ Both routes are equivalent. Use `agentRuntime.id` on a single model entry
 when only that model should be routed through the harness; set
 `agentRuntime.id` on a provider when every model under that provider should
 use it.
+
+`github-copilot/auto` is the portable starting point. Named Copilot models are
+account- and organization-policy-dependent, so only pin one after confirming
+that the authenticated Copilot CLI exposes it.
 
 ## Supported providers
 
@@ -93499,10 +93502,6 @@ the same directory), or `~/.openclaw/agents/<agentId>/copilot` otherwise.
 Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
-`probeCopilotAuthShape` (see [Doctor and probes](#doctor-and-probes)) is the
-pure shape check that validates which of the modes above will be used.
-It does not perform a live SDK handshake.
-
 ## Configuration surface
 
 The harness reads its config from per-attempt input
@@ -93519,8 +93518,9 @@ The harness reads its config from per-attempt input
 - `infiniteSessionConfig` — optional override for the SDK
   `infiniteSessions` block driven by `harness.compact`. Defaults are safe to
   leave as-is.
-- `hooksConfig` — optional bridge config exposing OpenClaw
-  before/after-message-write hooks to the SDK loop.
+- `hooksConfig` — optional native Copilot SDK `SessionHooks` compatibility
+  config for tool/MCP, user-prompt, session, and error callbacks.
+  It is separate from OpenClaw's portable lifecycle hooks.
 - `permissionPolicy` — optional override for the SDK's
   `onPermissionRequest` handler used for built-in SDK tool kinds
   (`shell`, `write`, `read`, `url`, `mcp`, `memory`, `hook`). Defaults
@@ -93530,6 +93530,14 @@ The harness reads its config from per-attempt input
   `skipPermission: true` so 100% of tool calls flow through OpenClaw's
   wrapped `execute()`. See [Permissions and ask_user](#permissions-and-ask_user).
 - `enableSessionTelemetry` — optional SDK session telemetry flag.
+
+OpenClaw plugin hooks do not need Copilot-specific attempt configuration. The
+harness runs `before_prompt_build` (and the legacy `before_agent_start`
+compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+standard harness helpers. Successful SDK compactions also run
+`before_compaction` and `after_compaction`. Bridged OpenClaw tools continue to
+run `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
+native SDK-only callbacks that have no portable equivalent.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other
 plugins, channels, and core code only see the standard
@@ -93576,7 +93584,7 @@ asserted in
 [`extensions/copilot/harness.test.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/copilot/harness.test.ts)
 under `describe("runSideQuestion")`.
 
-## Doctor and probes
+## Doctor
 
 `extensions/copilot/doctor-contract-api.ts` is auto-loaded by
 `src/plugins/doctor-contract-registry.ts`. It contributes:
@@ -93587,18 +93595,6 @@ under `describe("runSideQuestion")`.
 - One `sessionRouteStateOwners` entry claiming provider `github-copilot`;
   runtime `copilot`; CLI session key `copilot`; auth profile
   prefix `github-copilot:`.
-
-`extensions/copilot/src/doctor-probes.ts` exports three imperative probes
-that hosts (including `openclaw doctor`) can call to verify the environment:
-
-| Probe                      | What it checks                                                                    | Reasons it can fail                                                              |
-| -------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `probeCopilotCliVersion`   | `copilot --version` exits 0 with a non-empty version string                       | `non-zero-exit`, `empty-version`, `spawn-failed`, `spawn-error`, `probe-timeout` |
-| `probeCopilotHomeWritable` | `mkdir -p copilotHome` + write + rm a marker file                                 | `copilothome-not-writable` (with the underlying fs error in `details.rawError`)  |
-| `probeCopilotAuthShape`    | At least one of `useLoggedInUser`, `gitHubToken`, or `profileId`+`profileVersion` | `no-auth-source`                                                                 |
-
-Each probe accepts a DI seam (`spawnFn`, `fsApi`) so tests do not spawn the
-real Copilot CLI or touch the host fs.
 
 ## Limitations
 
@@ -99928,7 +99924,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
 
-- **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm. Adds StepFun, StepFun Plan model provider support to OpenClaw.
+- **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm; ClawHub: `clawhub:@openclaw/stepfun-provider`. Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm; ClawHub. Synology Chat channel plugin for OpenClaw channels and direct messages.
 
@@ -100368,6 +100364,17 @@ different model. `planning-only` requires the harness's explicit `planText`
 field; OpenClaw does not infer it from assistant prose. The helper intentionally
 leaves prompt errors, in-flight turns, and intentional silent replies such as
 `NO_REPLY` unclassified.
+
+### Agent-end side effects
+
+Native harnesses must call `runAgentEndSideEffects(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
+dispatches the portable `agent_end` hook and OpenClaw's research capture without
+delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for local,
+non-interactive runs where the attempt must not resolve until those side effects
+finish. Both helpers accept the same `{ event, ctx }` payload as
+`runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
+attempt result.
 
 ### Native Codex harness mode
 
@@ -104770,7 +104777,9 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
 
-    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are kept only during the transition before SQLite migration for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers must migrate to entry helpers before the SQLite storage flip.
+    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Pass `sessionFile` only when adapting code that already receives an active transcript artifact and needs each helper to operate on that same artifact.
+
+    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are compatibility helpers for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers should migrate to entry helpers.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -106098,6 +106107,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and transition-only whole-store/file-path compatibility helpers |
+    | `plugin-sdk/session-transcript-runtime` | Transcript identity, scoped target/read/write helpers, update publishing, write locks, and transcript memory hit keys |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
@@ -111655,7 +111665,7 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/stepfun-provider`
-- Install route: npm
+- Install route: npm; ClawHub: `clawhub:@openclaw/stepfun-provider`
 
 ## Surface
 
@@ -122879,8 +122889,10 @@ The provider includes:
 | ------------------------------- | --------------------- |
 | `opencode-go/glm-5`             | GLM-5                 |
 | `opencode-go/glm-5.1`           | GLM-5.1               |
+| `opencode-go/glm-5.2`           | GLM-5.2               |
 | `opencode-go/kimi-k2.5`         | Kimi K2.5             |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6 (3x limits) |
+| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code        |
 | `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro       |
 | `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash     |
 | `opencode-go/mimo-v2-omni`      | MiMo V2 Omni          |
@@ -122889,6 +122901,8 @@ The provider includes:
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7          |
 | `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus          |
 | `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus          |
+
+GLM-5.2 uses a 1M-token context window and supports up to 131K output tokens.
 
 ## Getting started
 
@@ -127827,6 +127841,11 @@ The manifest-backed catalog currently includes:
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 </Tip>
 
+<Tip>
+GLM-5.2 supports `off`, `low`, `high`, and `max` thinking levels. OpenClaw maps
+`low` and `high` to Z.AI high reasoning effort, and `max` to max effort.
+</Tip>
+
 <Note>
 Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
 `zai/glm-5.1`. Endpoint auto-detection falls back to `glm-5.1` or `glm-4.7`
@@ -131359,9 +131378,9 @@ release state.
   `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS
   package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full
   runs always include exhaustive live/E2E and Docker release-path soak;
-  `run_release_soak=true` is retained for an explicit beta soak. With
-  `release_profile=full` and `rerun_group=all`, it also runs package Telegram
-  E2E against the `release-package-under-test` artifact from release checks.
+  `run_release_soak=true` is retained for an explicit beta soak. Package
+  Acceptance provides the canonical package Telegram E2E during candidate
+  validation, avoiding a second concurrent live poller.
   Provide `release_package_spec` after publishing a beta to reuse the shipped
   npm package across release checks, Package Acceptance, and package Telegram
   E2E without rebuilding the release tarball. Provide
@@ -131591,20 +131610,16 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
-parent `release-package-under-test` artifact for package-facing checks, and
-dispatches standalone package Telegram E2E when `release_profile=full` with
-`rerun_group=all` or when `release_package_spec` or
-`npm_telegram_package_spec` is set. `OpenClaw Release
-Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
-release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
-only acceptable when the `Full Release Validation` summary shows `normal_ci`,
-`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
-intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
-the `npm_telegram` child must also be successful; outside full/all it is skipped
-unless a published `release_package_spec` or `npm_telegram_package_spec` was
-provided. The final
+`target_ref=<release-ref>`, then dispatches `OpenClaw Release Checks`.
+`OpenClaw Release Checks` fans out install smoke, cross-OS release checks,
+live/E2E Docker release-path coverage when soak is enabled, Package Acceptance
+with the canonical Telegram package E2E, QA Lab parity, live Matrix, and live
+Telegram. A full/all run is only acceptable when the `Full Release Validation`
+summary shows `normal_ci`, `plugin_prerelease`, and `release_checks` as
+successful, unless a focused rerun intentionally skipped the separate `Plugin
+Prerelease` child. Use the standalone `npm-telegram` child only for a focused
+published-package rerun with `release_package_spec` or
+`npm_telegram_package_spec`. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
 See [Full release validation](/reference/full-release-validation) for the
@@ -131689,8 +131704,8 @@ runs only the release-only plugin child, `release-checks` runs every release
 box, and the narrower release groups are `install-smoke`, `cross-os`,
 `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`.
 Focused `npm-telegram` reruns require `release_package_spec` or
-`npm_telegram_package_spec`; full/all runs with `release_profile=full` use the
-release-checks package artifact. Focused
+`npm_telegram_package_spec`; full/all runs use the canonical package Telegram
+E2E inside Package Acceptance. Focused
 cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
 another OS/suite filter. QA release-check failures block normal release
 validation, including required OpenClaw dynamic tool drift in the standard tier.
@@ -133707,8 +133722,7 @@ that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 | Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                           |
 | Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                        |
 | Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks; beta can opt in with `run_release_soak=true`.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
-| Package artifact     | **Job:** `Prepare release package artifact`<br />**Child workflow:** none<br />**Proves:** creates the parent `release-package-under-test` tarball early enough for package-facing checks that do not need to wait for `OpenClaw Release Checks`.<br />**Rerun:** rerun the umbrella or provide `release_package_spec` for published-package reruns.                                                                                                         |
-| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** parent-artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `release_package_spec` or `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                         |
+| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                               |
 | Umbrella verifier    | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                  |
 
 For `ref=main` and `rerun_group=all`, a newer umbrella supersedes an older one.
@@ -133730,7 +133744,7 @@ or Docker-facing stages need it.
 | Cross-OS            | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                  |
 | Repo and live E2E   | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`. |
 | Docker release path | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                      |
-| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, mock-OpenAI Telegram package acceptance, and published-upgrade survivor checks against the same tarball. Blocking release checks use the default latest published baseline; soak checks expand to every stable npm release at or after `2026.4.23` plus reported-issue fixtures.<br />**Rerun:** `rerun_group=package`.                          |
+| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, the canonical mock-OpenAI Telegram package E2E, and published-upgrade survivor checks against the same tarball. Blocking release checks use the default latest published baseline; soak checks expand to every stable npm release at or after `2026.4.23` plus reported-issue fixtures.<br />**Rerun:** `rerun_group=package`.                   |
 | QA parity           | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                                                          |
 | QA live Matrix      | **Job:** `Run QA Lab live Matrix lane`<br />**Backing workflow:** direct job<br />**Tests:** fast live Matrix QA profile in the `qa-live-shared` environment.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                           |
 | QA live Telegram    | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** direct job<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                       |
@@ -133761,9 +133775,9 @@ commands with package artifact and image reuse inputs when available.
 It does not remove normal full CI, Plugin Prerelease, install smoke, package
 acceptance, or QA Lab. Stable and full profiles always run exhaustive repo/live
 E2E and Docker release-path soak coverage. The beta profile can opt in with
-`run_release_soak=true`. The full profile also makes the umbrella run package
-Telegram E2E against the parent release package artifact when `rerun_group=all`,
-so a full pre-publish candidate does not silently skip that Telegram package lane.
+`run_release_soak=true`. Package Acceptance supplies the canonical package
+Telegram E2E for every full candidate, so the umbrella does not duplicate that
+live poller.
 
 | Profile   | Intended use                      | Included live/provider coverage                                                                                                                                                     |
 | --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -133843,7 +133857,7 @@ workflow first, then rerun the smallest matching handle above.
 
 Useful artifacts:
 
-- `release-package-under-test` from the Full Release Validation parent and `OpenClaw Release Checks`
+- `release-package-under-test` from `OpenClaw Release Checks`
 - Docker release-path artifacts under `.artifacts/docker-tests/`
 - Package Acceptance `package-under-test` and Docker acceptance artifacts
 - Cross-OS release-check artifacts for each OS and suite
@@ -155906,7 +155920,7 @@ title: "Thinking levels"
   - Stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
-  - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
+  - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 is the exception: it exposes `/think off|low|high|max`, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`.
   - Moonshot Kimi K2.7 Code (`moonshot/kimi-k2.7-code`) always thinks. Its profile exposes only `on`, and OpenClaw omits the outbound `thinking` field as required by Moonshot. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
