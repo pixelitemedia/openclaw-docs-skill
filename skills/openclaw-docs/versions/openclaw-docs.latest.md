@@ -296,38 +296,51 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
-OpenClaw CI runs on every push to `main` and every pull request. The `preflight` job classifies the diff and turns expensive lanes off when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full graph for release candidates and broad validation. Android lanes stay opt-in through `include_android`. Release-only plugin coverage lives in the separate [`Plugin Prerelease`](#plugin-prerelease) workflow and only runs from [`Full Release Validation`](#full-release-validation) or an explicit manual dispatch.
+OpenClaw CI runs on every push to `main` and every pull request. Canonical
+`main` pushes first pass through a 90-second hosted-runner admission window.
+The existing `CI` concurrency group cancels that waiting run when a newer
+commit lands, so sequential merges do not each register a full Blacksmith
+matrix. Pull requests and manual dispatches skip the wait. The `preflight` job
+then classifies the diff and turns expensive lanes off when only unrelated
+areas changed. Manual `workflow_dispatch` runs intentionally bypass smart
+scoping and fan out the full graph for release candidates and broad
+validation. Android lanes stay opt-in through `include_android`. Release-only
+plugin coverage lives in the separate [`Plugin Prerelease`](#plugin-prerelease)
+workflow and only runs from [`Full Release Validation`](#full-release-validation)
+or an explicit manual dispatch.
 
 ## Pipeline overview
 
-| Job                                | Purpose                                                                                                   | When it runs                       |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
-| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs |
-| `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
-| `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes              |
-| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes              |
-| `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes              |
-| `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes              |
-| `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes              |
-| `check-*`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                | Node-relevant changes              |
-| `check-additional-*`               | Architecture, sharded boundary/prompt drift, extension guards, package boundary, and runtime topology     | Node-relevant changes              |
-| `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                | Manual CI dispatch for releases    |
-| `check-docs`                       | Docs formatting, lint, and broken-link checks                                                             | Docs changed                       |
-| `skills-python`                    | Ruff + pytest for Python-backed skills                                                                    | Python-skill-relevant changes      |
-| `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes           |
-| `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes             |
-| `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes             |
-| `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes           |
-| `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch |
-| `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch      |
+| Job                                | Purpose                                                                                                   | When it runs                                        |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs                  |
+| `runner-admission`                 | Hosted 90-second debounce for canonical `main` pushes before Blacksmith work is registered                | Every CI run; sleep only on canonical `main` pushes |
+| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs                  |
+| `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes                               |
+| `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes                               |
+| `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes                               |
+| `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes                               |
+| `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes                               |
+| `check-*`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                | Node-relevant changes                               |
+| `check-additional-*`               | Architecture, sharded boundary/prompt drift, extension guards, package boundary, and runtime topology     | Node-relevant changes                               |
+| `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                | Manual CI dispatch for releases                     |
+| `check-docs`                       | Docs formatting, lint, and broken-link checks                                                             | Docs changed                                        |
+| `skills-python`                    | Ruff + pytest for Python-backed skills                                                                    | Python-skill-relevant changes                       |
+| `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes                            |
+| `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes                              |
+| `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes                              |
+| `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes                            |
+| `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch                  |
+| `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch                       |
 
 ## Fail-fast order
 
-1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
-3. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+1. `runner-admission` waits only for canonical `main` pushes; a newer push cancels the run before Blacksmith registration.
+2. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
+3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
+4. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
+5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
@@ -362,7 +375,15 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Normal CI then packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites; heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU. Pull requests on the canonical repository use an additional compact admission plan: the same per-config groups run in isolated subprocesses inside the current 34-job Linux Node plan, so a single PR does not register the full 70-plus-job Node matrix. `main` pushes, manual dispatches, and release gates retain the full matrix. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
+
+Once admitted, canonical Linux CI permits up to 12 concurrent Node jobs and 8 for
+the smaller fast/check lanes; Windows and Android stay at two because those
+runner pools are narrower.
+
+The compact PR plan emits 18 Node jobs for the current suite: whole-config
+groups are batched in isolated subprocesses with a 120-minute batch timeout,
+while include-pattern groups share the same bounded job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
@@ -399,15 +420,15 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runners
 
-| Runner                           | Jobs                                                                                                                                                                                                                                |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                   | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                               |
-| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, `checks-node-compat-node22`, `check-guards`, `check-prod-types`, and `check-test-types` |
-| `blacksmith-8vcpu-ubuntu-2404`   | Linux Node test shards, bundled plugin test shards, `check-additional-*` shards, `check-dependencies`, and `android`                                                                                                                |
-| `blacksmith-16vcpu-ubuntu-2404`  | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                              |
-| `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                    |
-| `blacksmith-6vcpu-macos-15`      | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                  |
-| `blacksmith-12vcpu-macos-26`     | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                 |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                                            |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                                                                           |
+| `blacksmith-4vcpu-ubuntu-2404`  | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                           |
+| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                                                          |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                              |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                             |
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -2449,7 +2470,7 @@ Model-selection precedence for isolated jobs is:
 3. User-selected stored cron session model override
 4. Agent/default model selection
 
-Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction.
+Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction. Auto mode uses the selected model's `params.fastAutoOnSeconds` cutoff when present, defaulting to 60 seconds.
 
 If an isolated run hits a live model-switch handoff, cron retries with the switched provider/model and persists that live selection for the active run before retrying. When the switch also carries a new auth profile, cron persists that auth profile override for the active run too. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping forever.
 
@@ -5528,9 +5549,9 @@ If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
 appends `clickclack` to that list. Onboarding installation uses the same
 explicit-selection behavior. These paths do not override `plugins.deny` or a
-global `plugins.enabled: false` setting. Direct `openclaw plugins install
-clickclack` follows the normal plugin-install policy and also records ClickClack
-in an existing allowlist.
+global `plugins.enabled: false` setting. Direct
+`openclaw plugins install @openclaw/clickclack` follows the normal
+plugin-install policy and also records ClickClack in an existing allowlist.
 
 ## Multiple bots
 
@@ -9143,28 +9164,28 @@ Use this checklist when you already know your old BlueBubbles config and want th
 
 iMessage and BlueBubbles share a lot of channel-level config. The keys that change are mostly transport (REST server vs local CLI). Behavior keys (`dmPolicy`, `groupPolicy`, `allowFrom`, etc.) keep the same meaning.
 
-| BlueBubbles                                                | bundled iMessage                          | Notes                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `channels.bluebubbles.enabled`                             | `channels.imessage.enabled`               | Same semantics.                                                                                                                                                                                                                                                                                                                              |
-| `channels.bluebubbles.serverUrl`                           | _(removed)_                               | No REST server — the plugin spawns `imsg rpc` over stdio.                                                                                                                                                                                                                                                                                    |
-| `channels.bluebubbles.password`                            | _(removed)_                               | No webhook authentication needed.                                                                                                                                                                                                                                                                                                            |
-| _(implicit)_                                               | `channels.imessage.cliPath`               | Path to `imsg` (default `imsg`); use a wrapper script for SSH.                                                                                                                                                                                                                                                                               |
-| _(implicit)_                                               | `channels.imessage.dbPath`                | Optional Messages.app `chat.db` override; auto-detected when omitted.                                                                                                                                                                                                                                                                        |
-| _(implicit)_                                               | `channels.imessage.remoteHost`            | `host` or `user@host` — only needed when `cliPath` is an SSH wrapper and you want SCP attachment fetches.                                                                                                                                                                                                                                    |
-| `channels.bluebubbles.dmPolicy`                            | `channels.imessage.dmPolicy`              | Same values (`pairing` / `allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                                                                 |
-| `channels.bluebubbles.allowFrom`                           | `channels.imessage.allowFrom`             | Pairing approvals carry over by handle, not by token.                                                                                                                                                                                                                                                                                        |
-| `channels.bluebubbles.groupPolicy`                         | `channels.imessage.groupPolicy`           | Same values (`allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                                                                             |
-| `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same.                                                                                                                                                                                                                                                                                                                                        |
-| `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | **Copy this verbatim, including any `groups: { "*": { ... } }` wildcard entry.** Per-group `requireMention`, `tools`, `toolsBySender` carry over. With `groupPolicy: "allowlist"`, an empty or missing `groups` block silently drops every group message — see "Group registry footgun" below.                                               |
-| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. With the bundled plugin this only fires when the private API probe is up.                                                                                                                                                                                                                                                    |
-| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same shape, **same off-by-default**. If you had attachments flowing on BlueBubbles you must re-set this explicitly on the iMessage block — it does not carry over implicitly, and inbound photos/media will be silently dropped with no `Inbound message` log line until you do.                                                             |
-| `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                                                                                                                                                                            |
-| _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                                                                                                                                                                          |
-| `channels.bluebubbles.mediaMaxMb`                          | `channels.imessage.mediaMaxMb`            | Default 16 MB on iMessage (BlueBubbles default was 8 MB). Set explicitly if you want to keep the lower cap.                                                                                                                                                                                                                                  |
-| `channels.bluebubbles.textChunkLimit`                      | `channels.imessage.textChunkLimit`        | Default 4000 on both.                                                                                                                                                                                                                                                                                                                        |
-| `channels.bluebubbles.coalesceSameSenderDms`               | `channels.imessage.coalesceSameSenderDms` | Same opt-in. DM-only — group chats keep instant per-message dispatch on both channels. Widens the default inbound debounce to 2500 ms when enabled without an explicit `messages.inbound.byChannel.imessage`. See [iMessage docs § Coalescing split-send DMs](/channels/imessage#coalescing-split-send-dms-command--url-in-one-composition). |
-| `channels.bluebubbles.enrichGroupParticipantsFromContacts` | _(N/A)_                                   | iMessage already reads sender display names from `chat.db`.                                                                                                                                                                                                                                                                                  |
-| `channels.bluebubbles.actions.*`                           | `channels.imessage.actions.*`             | Per-action toggles: `reactions`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`.                                                                                                                                                          |
+| BlueBubbles                                                | bundled iMessage                          | Notes                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `channels.bluebubbles.enabled`                             | `channels.imessage.enabled`               | Same semantics.                                                                                                                                                                                                                                                                                                                                                                      |
+| `channels.bluebubbles.serverUrl`                           | _(removed)_                               | No REST server — the plugin spawns `imsg rpc` over stdio.                                                                                                                                                                                                                                                                                                                            |
+| `channels.bluebubbles.password`                            | _(removed)_                               | No webhook authentication needed.                                                                                                                                                                                                                                                                                                                                                    |
+| _(implicit)_                                               | `channels.imessage.cliPath`               | Path to `imsg` (default `imsg`); use a wrapper script for SSH.                                                                                                                                                                                                                                                                                                                       |
+| _(implicit)_                                               | `channels.imessage.dbPath`                | Optional Messages.app `chat.db` override; auto-detected when omitted.                                                                                                                                                                                                                                                                                                                |
+| _(implicit)_                                               | `channels.imessage.remoteHost`            | `host` or `user@host` — only needed when `cliPath` is an SSH wrapper and you want SCP attachment fetches.                                                                                                                                                                                                                                                                            |
+| `channels.bluebubbles.dmPolicy`                            | `channels.imessage.dmPolicy`              | Same values (`pairing` / `allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                                                                                                         |
+| `channels.bluebubbles.allowFrom`                           | `channels.imessage.allowFrom`             | Pairing approvals carry over by handle, not by token.                                                                                                                                                                                                                                                                                                                                |
+| `channels.bluebubbles.groupPolicy`                         | `channels.imessage.groupPolicy`           | Same values (`allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                                                                                                                     |
+| `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same.                                                                                                                                                                                                                                                                                                                                                                                |
+| `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | **Copy this verbatim, including any `groups: { "*": { ... } }` wildcard entry.** Per-group `requireMention`, `tools`, `toolsBySender` carry over. With `groupPolicy: "allowlist"`, an empty or missing `groups` block silently drops every group message — see "Group registry footgun" below.                                                                                       |
+| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. With the bundled plugin this only fires when the private API probe is up.                                                                                                                                                                                                                                                                                            |
+| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same shape, **same off-by-default**. If you had attachments flowing on BlueBubbles you must re-set this explicitly on the iMessage block — it does not carry over implicitly, and inbound photos/media will be silently dropped with no `Inbound message` log line until you do.                                                                                                     |
+| `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                                                                                                                                                                                                                    |
+| _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                                                                                                                                                                                                                  |
+| `channels.bluebubbles.mediaMaxMb`                          | `channels.imessage.mediaMaxMb`            | Default 16 MB on iMessage (BlueBubbles default was 8 MB). Set explicitly if you want to keep the lower cap.                                                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.textChunkLimit`                      | `channels.imessage.textChunkLimit`        | Default 4000 on both.                                                                                                                                                                                                                                                                                                                                                                |
+| `channels.bluebubbles.coalesceSameSenderDms`               | `channels.imessage.coalesceSameSenderDms` | Same opt-in. DM-only — group chats keep instant per-message dispatch on both channels. Widens the default inbound debounce to 7000 ms when enabled without an explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`. See [iMessage docs § Coalescing split-send DMs](/channels/imessage#coalescing-split-send-dms-command--url-in-one-composition). |
+| `channels.bluebubbles.enrichGroupParticipantsFromContacts` | _(N/A)_                                   | iMessage already reads sender display names from `chat.db`.                                                                                                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.actions.*`                           | `channels.imessage.actions.*`             | Per-action toggles: `reactions`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`.                                                                                                                                                                                                  |
 
 Multi-account configs (`channels.bluebubbles.accounts.*`) translate one-to-one to `channels.imessage.accounts.*`.
 
@@ -9994,7 +10015,7 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
     }
     ```
 
-    With the flag on and no explicit `messages.inbound.byChannel.imessage`, the debounce window widens to **2500 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's split-send cadence of 0.8-2.0 s does not fit in a tighter default.
+    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **7000 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's URL-preview split-send cadence can stretch to several seconds while Messages.app emits the preview row.
 
     To tune the window yourself:
 
@@ -10003,10 +10024,8 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
       messages: {
         inbound: {
           byChannel: {
-            // 2500 ms works for most setups; raise to 4000 ms if your Mac is
-            // slow or under memory pressure (observed gap can stretch past 2 s
-            // then).
-            imessage: 2500,
+            // 7000 ms covers observed Messages.app URL-preview delays.
+            imessage: 7000,
           },
         },
       },
@@ -10028,15 +10047,15 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
 The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
 
-| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)   |
-| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | ------------------------------------------------ |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com` |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns (legacy merge on metadata-less builds) |
-| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**             |
-| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                 |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)          |
-| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns (legacy merge on metadata-less builds)   |
-| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced         |
+| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)                                                      |
+| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                                                    |
+| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns after metadata is observed; one merged turn on old/pre-latch metadata-less sessions       |
+| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**                                                                |
+| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                                                                    |
+| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)                                                             |
+| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns after metadata is observed; one bounded merged turn on old/pre-latch metadata-less sessions |
+| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                                            |
 
 ## Inbound recovery after a bridge or gateway restart
 
@@ -10221,9 +10240,10 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Nextcloud Talk](/channels/nextcloud-talk) - Self-hosted chat via Nextcloud Talk (bundled plugin).
 - [Nostr](/channels/nostr) - Decentralized DMs via NIP-04 (bundled plugin).
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (bundled plugin).
+- [Raft](/channels/raft) - Raft CLI wake bridge for human and agent collaboration (external plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused.
 - [Slack](/channels/slack) - Bolt SDK; workspace apps.
-- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (bundled plugin).
+- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (official plugin).
 - [Synology Chat](/channels/synology-chat) - Synology NAS Chat via outgoing+incoming webhooks (bundled plugin).
 - [Telegram](/channels/telegram) - Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) - Urbit-based messenger (bundled plugin).
@@ -10260,12 +10280,18 @@ read_when:
 ---
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
-IRC ships as a bundled plugin, but it is configured in the main config under `channels.irc`.
+Install the official IRC plugin, then configure it under `channels.irc`.
 
 ## Quick start
 
-1. Enable IRC config in `~/.openclaw/openclaw.json`.
-2. Set at least:
+1. Install the plugin:
+
+```bash
+openclaw plugins install @openclaw/irc
+```
+
+2. Enable IRC config in `~/.openclaw/openclaw.json`.
+3. Set at least:
 
 ```json5
 {
@@ -10284,7 +10310,7 @@ IRC ships as a bundled plugin, but it is configured in the main config under `ch
 
 Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
-3. Start/restart gateway:
+4. Start/restart gateway:
 
 ```bash
 openclaw gateway run
@@ -11841,7 +11867,7 @@ If the homeserver requires UIA to upload cross-signing keys, OpenClaw tries no-a
 Useful flags:
 
 - `--recovery-key-stdin` (pair with `printf '%s\n' "$MATRIX_RECOVERY_KEY" | …`) or `--recovery-key <key>`
-- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only)
+- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only; requires the active recovery key to be stored or supplied with `--recovery-key-stdin`)
 
 ### Room-key backup
 
@@ -12424,7 +12450,7 @@ Details: [Plugins](/tools/plugin)
 
 <Steps>
   <Step title="Ensure plugin is available">
-    Current packaged OpenClaw releases already bundle it. Older/custom installs can add it manually with the commands above.
+    Install `@openclaw/mattermost` with the command above, then restart the Gateway if it is already running.
   </Step>
   <Step title="Create a Mattermost bot">
     Create a Mattermost bot account and copy the **bot token**.
@@ -15117,6 +15143,158 @@ Approval prompts generated by the bot itself (for example, "allow this action?" 
 
 
 
+# Section: channels/raft.md
+
+---
+summary: "Raft External Agent support through the Raft CLI wake bridge"
+read_when:
+  - You want to connect OpenClaw to a Raft workspace
+  - You are configuring a Raft External Agent
+  - You are debugging Raft wake delivery
+title: "Raft"
+sidebarTitle: "Raft"
+---
+
+Raft support connects an OpenClaw agent to a Raft External Agent through the local
+Raft CLI. Raft sends authenticated wake hints to the Gateway. The agent then uses
+the Raft CLI to check and send messages.
+
+## Install
+
+Raft is an official external plugin. Install it on the Gateway host:
+
+```bash
+openclaw plugins install @openclaw/raft
+openclaw gateway restart
+```
+
+Details: [Plugins](/tools/plugin)
+
+## Prerequisites
+
+- A Raft workspace with an External Agent.
+- The Raft CLI installed on the same host as the OpenClaw Gateway.
+- A Raft CLI profile that is already signed in and associated with that External Agent.
+
+The plugin does not store Raft credentials. The Raft CLI keeps that authentication
+in its own profile.
+
+## Configure
+
+Set the profile in config:
+
+```json5
+{
+  channels: {
+    raft: {
+      enabled: true,
+      profile: "openclaw",
+    },
+  },
+}
+```
+
+For the default account, you can instead set `RAFT_PROFILE` in the Gateway
+environment:
+
+```bash
+RAFT_PROFILE=openclaw
+```
+
+Use a named account when one Gateway connects to more than one Raft External Agent:
+
+```json5
+{
+  channels: {
+    raft: {
+      accounts: {
+        support: {
+          profile: "support-agent",
+        },
+        engineering: {
+          profile: "engineering-agent",
+        },
+      },
+    },
+  },
+}
+```
+
+The interactive setup flow records the same profile:
+
+```bash
+openclaw channels setup raft
+```
+
+## How It Works
+
+When the Gateway starts, the plugin:
+
+1. Opens a loopback-only HTTP wake endpoint on an ephemeral port.
+2. Starts `raft --profile <profile> agent bridge` with that endpoint and a
+   per-process token.
+3. Accepts only authenticated, content-free wake hints with a replay identity from the local bridge.
+4. Requires one of `eventId`, `attemptId`, `messageId`, `delivery_id`, `wake_id`, or `id`.
+5. Deduplicates recent retried wake deliveries by bridge event id, including across Gateway restarts.
+6. Returns a stable runtime session for the current bridge and an empty activity-drain batch for the Raft CLI protocol.
+7. Starts one serialized OpenClaw agent turn for each accepted wake.
+
+The bridge owns Raft delivery retries and reconnects. The OpenClaw turn receives
+only a wake notice, not a copied Raft message body. It uses the CLI to read
+pending messages and to send its response:
+
+```bash
+raft --profile openclaw message check
+raft --profile openclaw message send
+```
+
+<Note>
+Raft is not a normal push-message transport. OpenClaw does not automatically
+send the model's final text back through the bridge, so the agent must use the
+Raft CLI after processing a wake.
+</Note>
+
+## Verify
+
+Check that OpenClaw can find the CLI and has a configured profile:
+
+```bash
+openclaw channels status --probe
+openclaw plugins inspect raft --runtime --json
+```
+
+Then send a message to the Raft External Agent. The Gateway log should show the
+Raft bridge starting, followed by an inbound wake. The agent should use the
+configured Raft profile to check its pending messages.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Raft CLI is missing">
+    Install the Raft CLI on the Gateway host and make `raft` available on the
+    service's `PATH`. Verify it with `raft --help`, then restart the Gateway.
+  </Accordion>
+  <Accordion title="The bridge exits immediately">
+    Verify the configured profile is signed in and belongs to the intended
+    Raft External Agent. Run `raft --profile <profile> agent bridge` directly
+    to see the CLI diagnostic.
+  </Accordion>
+  <Accordion title="A wake arrives but no Raft response is sent">
+    This is expected when the agent does not invoke the Raft CLI. The wake
+    bridge does not carry message bodies or automatic final replies. Check the
+    agent's tool policy and ensure it can run `raft --profile <profile> message
+    check` and `message send`.
+  </Accordion>
+</AccordionGroup>
+
+## References
+
+- [Raft](https://raft.build/)
+- [Raft documentation](https://docs.raft.build/welcome/)
+- [Hermes Raft integration](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/raft)
+
+
+
 # Section: channels/signal.md
 
 ---
@@ -15141,12 +15319,18 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP — ei
 ## Quick setup (beginner)
 
 1. Use a **separate Signal number** for the bot (recommended).
-2. Install `signal-cli` (Java required if you use the JVM build).
-3. Choose one setup path:
+2. Install the OpenClaw plugin:
+
+```bash
+openclaw plugins install @openclaw/signal
+```
+
+3. Install `signal-cli` (Java required if you use the JVM build).
+4. Choose one setup path:
    - **Path A (QR link):** `signal-cli link -n "OpenClaw"` and scan with Signal.
    - **Path B (SMS register):** register a dedicated number with captcha + SMS verification.
-4. Configure OpenClaw and restart the gateway.
-5. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
+5. Configure OpenClaw and restart the gateway.
+6. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
 
 Minimal config:
 
@@ -15542,13 +15726,13 @@ Related global options:
 # Section: channels/slack.md
 
 ---
-summary: "Slack setup and runtime behavior (Socket Mode + HTTP Request URLs)"
+summary: "Slack setup and runtime behavior (Socket Mode, HTTP Request URLs, and relay mode)"
 read_when:
-  - Setting up Slack or debugging Slack socket/HTTP mode
+  - Setting up Slack or debugging Slack socket, HTTP, or relay mode
 title: "Slack"
 ---
 
-Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
+Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported. Relay mode is intended for managed deployments where a trusted router owns Slack ingress.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -15583,6 +15767,37 @@ Both transports are production-ready and reach feature parity for messaging, sla
 
 **Pick HTTP Request URLs** when running multiple Gateway replicas behind a load balancer, when outbound WSS is blocked but inbound HTTPS is allowed, or when you already terminate Slack webhooks at a reverse proxy.
 </Note>
+
+### Relay mode
+
+Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router owns the
+single Slack Socket Mode connection, chooses a destination gateway, and forwards a typed
+event over an authenticated websocket. The gateway continues to use its bot token for
+outbound Slack Web API calls.
+
+```json5
+{
+  channels: {
+    slack: {
+      mode: "relay",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      relay: {
+        url: "wss://router.example.com/gateway/ws",
+        authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
+        gatewayId: "team-gateway",
+      },
+    },
+  },
+}
+```
+
+The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and
+router route table as part of the Slack authorization boundary: routed events enter the
+normal Slack message handler as authorized activations. A router-provided `slack_identity`
+in the websocket `hello` frame can set the default outbound username and icon; an explicit
+identity supplied by the caller still wins. The relay connection reconnects with the same
+bounded backoff timing used by Socket Mode and clears the router-provided identity whenever
+it disconnects.
 
 ## Install
 
@@ -16406,7 +16621,8 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
 
 - `botToken` + `appToken` are required for Socket Mode.
 - HTTP mode requires `botToken` + `signingSecret`.
-- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+- Relay mode requires `botToken` plus `relay.url`, `relay.authToken`, and `relay.gatewayId`; it does not use an app token or signing secret.
+- `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
@@ -17199,6 +17415,7 @@ OpenClaw can receive and send SMS through a Twilio phone number or Messaging Ser
 
 You need:
 
+- The official SMS plugin installed with `openclaw plugins install @openclaw/sms`.
 - A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
 - The Twilio Account SID and Auth Token.
 - A public HTTPS URL that reaches your OpenClaw Gateway.
@@ -17209,6 +17426,11 @@ Use one Twilio number for both SMS and Voice Call if the number has both capabil
 ## Quick Setup
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/sms
+    ```
+  </Step>
   <Step title="Create or choose a Twilio sender">
     In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
 
@@ -18088,7 +18310,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Requirement:
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
-    - `progress` keeps one editable status draft for tool progress, clears it at completion, and sends the final answer as a normal message
+    - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active
+    - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
@@ -24852,7 +25075,7 @@ Isolated cron resolves the active model in this order:
 
 ### Fast mode
 
-Isolated cron fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config.
+Isolated cron fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
 
 ### Live model switch retries
 
@@ -26043,9 +26266,14 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
+openclaw gateway health --port 18789
 ```
 
 The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
+
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. This overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for the health call.
+</ParamField>
 
 ### `gateway usage-cost`
 
@@ -26218,7 +26446,12 @@ If multiple probe targets are reachable, it prints all of them. An SSH tunnel, T
 ```bash
 openclaw gateway probe
 openclaw gateway probe --json
+openclaw gateway probe --port 18789
 ```
+
+<ParamField path="--port <port>" type="number">
+  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
+</ParamField>
 
 <AccordionGroup>
   <Accordion title="Interpretation">
@@ -43312,7 +43545,7 @@ Gateway model capability checks also read explicit `models.providers.<id>.models
 
 ### Moonshot AI (Kimi)
 
-Moonshot ships as a bundled provider plugin. Use the built-in provider by default, and add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
+Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
@@ -45958,13 +46191,13 @@ Live transport runners should import the shared scenario ids, baseline
 coverage helpers, and scenario-selection helper from
 `openclaw/plugin-sdk/qa-live-transport-scenarios`.
 
-| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
-| Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
-| Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
-| Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
-| WhatsApp | x      | x              |            | x               | x               | x              |                  |                  | x                    | x            |                             |
+| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Quote reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | ---------- | --------------- | --------------- | ----------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x          | x               | x               |             | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              | x          |                 |                 |             |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              | x          |                 |                 |             |                |                  |                  |                      |              | x                           |
+| Slack    | x      | x              | x          | x               | x               |             | x              | x                | x                |                      |              |                             |
+| WhatsApp | x      | x              |            | x               | x               | x           | x              |                  |                  | x                    | x            |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and other live transports share one explicit transport-contract checklist.
@@ -46387,8 +46620,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-whoami-command`, `whatsapp-context-command`,
   `whatsapp-native-new-command`.
 - Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
-  `whatsapp-reply-to-message`, `whatsapp-reply-context-isolation`,
-  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+  `whatsapp-reply-to-message`, `whatsapp-group-reply-to-message`,
+  `whatsapp-reply-context-isolation`, `whatsapp-reply-delivery-shape`,
+  `whatsapp-stream-final-message-accounting`.
 - Inbound media and structured messages: `whatsapp-inbound-image-caption`,
   `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
   `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
@@ -46405,9 +46639,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-approval-plugin-native`.
 - Status reactions: `whatsapp-status-reactions`.
 
-The catalog currently contains 35 scenarios. The `live-frontier` default lane is
-kept small at 8 scenarios for fast smoke coverage. The `mock-openai` default
-lane runs 29 deterministic scenarios through the real WhatsApp transport while
+The catalog currently contains 36 scenarios. The `live-frontier` default lane is
+kept small at 10 scenarios for fast smoke coverage. The `mock-openai` default
+lane runs 31 deterministic scenarios through the real WhatsApp transport while
 mocking only model output. Approval scenarios and a few heavier/blocking checks
 remain explicit by scenario id.
 
@@ -47916,9 +48150,10 @@ Legacy key migration:
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
+- Short initial previews are still debounced for push-notification UX, but Telegram now materializes them after a bounded delay so active runs do not stay visually silent.
 - Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
 - `block` mode rotates the preview into a new message at `streaming.preview.chunk.maxChars` (default 800, capped at Telegram's 4096 edit limit); other modes grow one preview up to 4096 characters.
-- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- `progress` mode keeps tool progress in an editable status draft, materializes the status label when answer streaming is active but no tool line is available yet, clears that draft at completion, and sends the final answer through normal delivery.
 - If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.
@@ -50957,9 +51192,10 @@ Shared defaults for bounded runtime context surfaces.
 - `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
   results and overflow recovery. Leave unset for the model-context auto cap:
   `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
-  chars at 200K+ tokens. The effective cap is still limited to about 30% of the
-  model context window. `openclaw doctor --deep` prints the effective cap, and
-  doctor warns only when an explicit override is stale or has no effect.
+  chars at 200K+ tokens. Explicit values up to `1000000` are accepted for
+  long-context models, but the effective cap is still limited to about 30% of
+  the model context window. `openclaw doctor --deep` prints the effective cap,
+  and doctor warns only when an explicit override is stale or has no effect.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -51806,7 +52042,7 @@ for provider examples and precedence.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
-- `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
+- `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Applies when no per-message or session fast-mode override is set.
 - `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
@@ -57455,7 +57691,6 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
-    - Extra workspace dir detection (`~/openclaw`).
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -57764,14 +57999,14 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and legacy dirs)">
+  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
     Doctor prints a summary of the workspace state for the default agent:
 
     - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
-    - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories exist alongside the current workspace.
     - **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any errors; reports bundle plugin capabilities.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
+    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
@@ -62486,6 +62721,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Clients pass `sessionKey`, optional `agentId` when the session selection is agent-scoped, plus a transcript `messageId` previously surfaced through `chat.history`, and the Gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request.
 
   </Accordion>
 
@@ -70302,6 +70538,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5`.
     - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` to `true`.
+    - **Automatic cutoff:** use `/fast auto` or `params.fastMode: "auto"` to start new model calls fast until the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     Example:
 
@@ -70312,7 +70549,8 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: {
             "openai/gpt-5.5": {
               params: {
-                fastMode: true,
+                fastMode: "auto",
+                fastAutoOnSeconds: 30,
               },
             },
           },
@@ -70321,7 +70559,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
+    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults. Codex app-server turns can only receive the tier at turn start, so `auto` applies on the next OpenClaw-started model turn rather than inside one already-running app-server turn.
 
     See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#fast-mode).
 
@@ -83789,15 +84027,18 @@ OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 
 ## Storage (Gateway host)
 
-Wake words are stored on the gateway machine at:
+Wake words and routing rules are stored in the gateway state database:
 
-- `~/.openclaw/settings/voicewake.json`
+- `~/.openclaw/state/openclaw.sqlite`
 
-Shape:
+The active tables are:
 
-```json
-{ "triggers": ["openclaw", "claude", "computer"], "updatedAtMs": 1730000000000 }
-```
+- `voicewake_triggers`
+- `voicewake_routing_config`
+- `voicewake_routing_routes`
+
+Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` files are
+doctor migration inputs only; runtime reads and writes the SQLite tables.
 
 ## Protocol
 
@@ -95772,6 +96013,7 @@ observation-only.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
 - `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
+- `subagent_ended` carries `targetSessionKey` (identity — this matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the corresponding `subagent_spawned` event.
 
 **Lifecycle**
 
@@ -99684,7 +99926,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-72 plugins
+59 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -99701,8 +99943,6 @@ Each entry lists the package, distribution route, and description.
 - **[byteplus](/plugins/reference/byteplus)** (`@openclaw/byteplus-provider`) - included in OpenClaw. Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
 
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Experimental Canvas control and A2UI rendering surfaces for paired nodes.
-
-- **[clickclack](/plugins/reference/clickclack)** (`@openclaw/clickclack`) - included in OpenClaw. Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 
 - **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
 
@@ -99724,8 +99964,6 @@ Each entry lists the package, distribution route, and description.
 
 - **[file-transfer](/plugins/reference/file-transfer)** (`@openclaw/file-transfer`) - included in OpenClaw. Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
 
-- **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - included in OpenClaw. Adds Fireworks model provider support to OpenClaw.
-
 - **[github-copilot](/plugins/reference/github-copilot)** (`@openclaw/github-copilot-provider`) - included in OpenClaw. Adds GitHub Copilot model provider support to OpenClaw.
 
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
@@ -99734,15 +99972,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - included in OpenClaw. Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
-- **[irc](/plugins/reference/irc)** (`@openclaw/irc`) - included in OpenClaw. Adds the IRC channel surface for sending and receiving OpenClaw messages.
-
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
 
 - **[llm-task](/plugins/reference/llm-task)** (`@openclaw/llm-task`) - included in OpenClaw. Generic JSON-only LLM tool for structured tasks callable from workflows.
 
 - **[lmstudio](/plugins/reference/lmstudio)** (`@openclaw/lmstudio-provider`) - included in OpenClaw. Adds LM Studio model provider support to OpenClaw.
-
-- **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - included in OpenClaw. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
 - **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
@@ -99759,8 +99993,6 @@ Each entry lists the package, distribution route, and description.
 - **[minimax](/plugins/reference/minimax)** (`@openclaw/minimax-provider`) - included in OpenClaw. Adds MiniMax, MiniMax Portal model provider support to OpenClaw.
 
 - **[mistral](/plugins/reference/mistral)** (`@openclaw/mistral-provider`) - included in OpenClaw. Adds Mistral model provider support to OpenClaw.
-
-- **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - included in OpenClaw. Adds Moonshot model provider support to OpenClaw.
 
 - **[novita](/plugins/reference/novita)** (`@openclaw/novita-provider`) - included in OpenClaw. Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
 
@@ -99784,31 +100016,17 @@ Each entry lists the package, distribution route, and description.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
-- **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - included in OpenClaw. Adds web search provider support.
-
 - **[senseaudio](/plugins/reference/senseaudio)** (`@openclaw/senseaudio-provider`) - included in OpenClaw. Adds media understanding provider support.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
 
-- **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - included in OpenClaw. Adds the Signal channel surface for sending and receiving OpenClaw messages.
-
-- **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - included in OpenClaw. Twilio SMS channel plugin for OpenClaw text messages.
-
 - **[synthetic](/plugins/reference/synthetic)** (`@openclaw/synthetic-provider`) - included in OpenClaw. Adds Synthetic model provider support to OpenClaw.
 
-- **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - included in OpenClaw. Adds agent-callable tools. Adds web search provider support.
-
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. Adds the Telegram channel surface for sending and receiving OpenClaw messages.
-
-- **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - included in OpenClaw. Adds Tencent TokenHub model provider support to OpenClaw.
 
 - **[together](/plugins/reference/together)** (`@openclaw/together-provider`) - included in OpenClaw. Adds Together model provider support to OpenClaw.
 
 - **[tts-local-cli](/plugins/reference/tts-local-cli)** (`@openclaw/tts-local-cli`) - included in OpenClaw. Adds text-to-speech provider support.
-
-- **[venice](/plugins/reference/venice)** (`@openclaw/venice-provider`) - included in OpenClaw. Adds Venice model provider support to OpenClaw.
-
-- **[vercel-ai-gateway](/plugins/reference/vercel-ai-gateway)** (`@openclaw/vercel-ai-gateway-provider`) - included in OpenClaw. Adds Vercel AI Gateway model provider support to OpenClaw.
 
 - **[vllm](/plugins/reference/vllm)** (`@openclaw/vllm-provider`) - included in OpenClaw. Adds vLLM model provider support to OpenClaw.
 
@@ -99828,11 +100046,9 @@ Each entry lists the package, distribution route, and description.
 
 - **[xiaomi](/plugins/reference/xiaomi)** (`@openclaw/xiaomi-provider`) - included in OpenClaw. Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
-- **[zai](/plugins/reference/zai)** (`@openclaw/zai-provider`) - included in OpenClaw. Adds Z.AI model provider support to OpenClaw.
-
 ## Official external packages
 
-54 plugins
+68 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -99849,6 +100065,8 @@ Each entry lists the package, distribution route, and description.
 - **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - npm; ClawHub: `clawhub:@openclaw/cerebras-provider`. Adds Cerebras model provider support to OpenClaw.
 
 - **[chutes](/plugins/reference/chutes)** (`@openclaw/chutes-provider`) - npm; ClawHub: `clawhub:@openclaw/chutes-provider`. Adds Chutes model provider support to OpenClaw.
+
+- **[clickclack](/plugins/reference/clickclack)** (`@openclaw/clickclack`) - npm; ClawHub: `clawhub:@openclaw/clickclack`. Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
@@ -99876,6 +100094,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[firecrawl](/plugins/reference/firecrawl)** (`@openclaw/firecrawl-plugin`) - npm; ClawHub: `clawhub:@openclaw/firecrawl-plugin`. Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.
 
+- **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - npm; ClawHub: `clawhub:@openclaw/fireworks-provider`. Adds Fireworks model provider support to OpenClaw.
+
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm; ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
 - **[google-meet](/plugins/reference/google-meet)** (`@openclaw/google-meet`) - npm; ClawHub. OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.
@@ -99887,6 +100107,8 @@ Each entry lists the package, distribution route, and description.
 - **[groq](/plugins/reference/groq)** (`@openclaw/groq-provider`) - npm; ClawHub: `clawhub:@openclaw/groq-provider`. Adds Groq model provider support to OpenClaw.
 
 - **[inworld](/plugins/reference/inworld)** (`@openclaw/inworld-speech`) - npm; ClawHub: `clawhub:@openclaw/inworld-speech`. Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
+
+- **[irc](/plugins/reference/irc)** (`@openclaw/irc`) - npm; ClawHub: `clawhub:@openclaw/irc`. Adds the IRC channel surface for sending and receiving OpenClaw messages.
 
 - **[kilocode](/plugins/reference/kilocode)** (`@openclaw/kilocode-provider`) - npm; ClawHub: `clawhub:@openclaw/kilocode-provider`. Adds Kilocode model provider support to OpenClaw.
 
@@ -99900,7 +100122,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - ClawHub: `clawhub:@openclaw/matrix`; npm. OpenClaw Matrix channel plugin for rooms and direct messages.
 
+- **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - npm; ClawHub: `clawhub:@openclaw/mattermost`. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
+
 - **[memory-lancedb](/plugins/reference/memory-lancedb)** (`@openclaw/memory-lancedb`) - npm; ClawHub. OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.
+
+- **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - npm; ClawHub: `clawhub:@openclaw/moonshot-provider`. Adds Moonshot model provider support to OpenClaw.
 
 - **[msteams](/plugins/reference/msteams)** (`@openclaw/msteams`) - npm; ClawHub. OpenClaw Microsoft Teams channel plugin for bot conversations.
 
@@ -99922,11 +100148,23 @@ Each entry lists the package, distribution route, and description.
 
 - **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.
 
+- **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
+
+- **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - npm; ClawHub: `clawhub:@openclaw/searxng-plugin`. Adds web search provider support.
+
+- **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - npm; ClawHub: `clawhub:@openclaw/signal`. Adds the Signal channel surface for sending and receiving OpenClaw messages.
+
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
+
+- **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - npm; ClawHub: `clawhub:@openclaw/sms`. Twilio SMS channel plugin for OpenClaw text messages.
 
 - **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm; ClawHub: `clawhub:@openclaw/stepfun-provider`. Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm; ClawHub. Synology Chat channel plugin for OpenClaw channels and direct messages.
+
+- **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - npm; ClawHub: `clawhub:@openclaw/tavily-plugin`. Adds agent-callable tools. Adds web search provider support.
+
+- **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub model provider support to OpenClaw.
 
 - **[tlon](/plugins/reference/tlon)** (`@openclaw/tlon`) - npm; ClawHub. OpenClaw Tlon/Urbit channel plugin for chat workflows.
 
@@ -99934,9 +100172,15 @@ Each entry lists the package, distribution route, and description.
 
 - **[twitch](/plugins/reference/twitch)** (`@openclaw/twitch`) - npm; ClawHub. OpenClaw Twitch channel plugin for chat and moderation workflows.
 
+- **[venice](/plugins/reference/venice)** (`@openclaw/venice-provider`) - npm; ClawHub: `clawhub:@openclaw/venice-provider`. Adds Venice model provider support to OpenClaw.
+
+- **[vercel-ai-gateway](/plugins/reference/vercel-ai-gateway)** (`@openclaw/vercel-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/vercel-ai-gateway-provider`. Adds Vercel AI Gateway model provider support to OpenClaw.
+
 - **[voice-call](/plugins/reference/voice-call)** (`@openclaw/voice-call`) - npm; ClawHub. OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.
 
 - **[whatsapp](/plugins/reference/whatsapp)** (`@openclaw/whatsapp`) - ClawHub: `clawhub:@openclaw/whatsapp`; npm. OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
+
+- **[zai](/plugins/reference/zai)** (`@openclaw/zai-provider`) - npm; ClawHub: `clawhub:@openclaw/zai-provider`. Adds Z.AI model provider support to OpenClaw.
 
 - **[zalo](/plugins/reference/zalo)** (`@openclaw/zalo`) - npm; ClawHub. OpenClaw Zalo channel plugin for bot and webhook chats.
 
@@ -100171,7 +100415,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 128
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 129
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -104101,7 +104345,7 @@ API key auth, and dynamic model resolution.
 
       - `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
       - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
-      - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, and `createPlainTextToolCallCompatWrapper`.
+      - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, `createPlainTextToolCallCompatWrapper`, `normalizeOpenAICompatibleReasoningPayload(...)`, and `setQwenChatTemplateThinking(...)`.
       - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "openai")`, and underlying provider schema helpers.
 
       For Gemini-family providers, keep the reasoning-output mode aligned with
@@ -106023,7 +106267,7 @@ and pairing-path families.
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
     | `plugin-sdk/provider-usage` | Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
     | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
-    | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
+    | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, `normalizeOpenAICompatibleReasoningPayload`, `setQwenChatTemplateThinking`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
     | `plugin-sdk/provider-transport-runtime` | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
@@ -106106,7 +106350,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and transition-only whole-store/file-path compatibility helpers |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), bounded recent user/assistant transcript text reads by session identity, legacy session store path/session-key helpers, updated-at reads, and transition-only whole-store/file-path compatibility helpers |
     | `plugin-sdk/session-transcript-runtime` | Transcript identity, scoped target/read/write helpers, update publishing, write locks, and transcript memory hit keys |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
@@ -107852,7 +108096,7 @@ Tool name: `voice_call`.
 | `end_call`      | `callId`                                   |
 | `get_status`    | `callId`                                   |
 
-This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
+The voice-call plugin ships a matching agent skill.
 
 ## Gateway RPC
 
@@ -109113,7 +109357,7 @@ Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
 ## Surface
 
-contracts: tools
+contracts: tools; skills
 
 
 
@@ -109189,7 +109433,7 @@ Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/clickclack`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/clickclack`
 
 ## Surface
 
@@ -109609,7 +109853,7 @@ OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: discord; contracts: transcriptSourceProviders
+channels: discord; contracts: transcriptSourceProviders; skills
 
 ## Related docs
 
@@ -109853,7 +110097,7 @@ Adds Fireworks model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/fireworks-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/fireworks-provider`
 
 ## Surface
 
@@ -110161,7 +110405,7 @@ Adds the IRC channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/irc`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/irc`
 
 ## Surface
 
@@ -110433,7 +110677,7 @@ Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/mattermost`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/mattermost`
 
 ## Surface
 
@@ -110787,7 +111031,7 @@ Adds Moonshot model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/moonshot-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/moonshot-provider`
 
 ## Surface
 
@@ -111457,6 +111701,34 @@ providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwe
 
 
 
+# Section: plugins/reference/raft.md
+
+---
+summary: "OpenClaw Raft channel plugin for secure CLI wake bridges."
+read_when:
+  - You are installing, configuring, or auditing the raft plugin
+title: "Raft plugin"
+---
+
+# Raft plugin
+
+OpenClaw Raft channel plugin for secure CLI wake bridges.
+
+## Distribution
+
+- Package: `@openclaw/raft`
+- Install route: npm; ClawHub
+
+## Surface
+
+channels: raft
+
+## Related docs
+
+- [raft](/channels/raft)
+
+
+
 # Section: plugins/reference/runway.md
 
 ---
@@ -111501,7 +111773,7 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/searxng-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/searxng-plugin`
 
 ## Surface
 
@@ -111581,7 +111853,7 @@ Adds the Signal channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/signal`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/signal`
 
 ## Surface
 
@@ -111613,7 +111885,7 @@ OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: slack
+channels: slack; skills
 
 ## Related docs
 
@@ -111637,7 +111909,7 @@ Twilio SMS channel plugin for OpenClaw text messages.
 ## Distribution
 
 - Package: `@openclaw/sms`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/sms`
 
 ## Surface
 
@@ -111749,7 +112021,7 @@ Adds agent-callable tools. Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/tavily-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tavily-plugin`
 
 ## Surface
 
@@ -111805,7 +112077,7 @@ Adds Tencent TokenHub model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/tencent-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tencent-provider`
 
 ## Surface
 
@@ -111969,7 +112241,7 @@ Adds Venice model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/venice-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/venice-provider`
 
 ## Surface
 
@@ -111997,7 +112269,7 @@ Adds Vercel AI Gateway model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/vercel-ai-gateway-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/vercel-ai-gateway-provider`
 
 ## Surface
 
@@ -112057,7 +112329,7 @@ OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.
 
 ## Surface
 
-contracts: tools
+contracts: tools; skills
 
 ## Related docs
 
@@ -112217,7 +112489,7 @@ OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
 
 ## Surface
 
-channels: whatsapp
+channels: whatsapp; skills
 
 ## Related docs
 
@@ -112325,7 +112597,7 @@ Adds Z.AI model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/zai-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/zai-provider`
 
 ## Surface
 
@@ -116139,12 +116411,12 @@ read_when:
   - You are debugging Kimi thinking-off behavior on Fireworks
 ---
 
-[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw includes a bundled Fireworks provider plugin that ships with two pre-cataloged Kimi models and accepts any Fireworks model or router id at runtime.
+[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. Install the official Fireworks provider plugin to use two pre-cataloged Kimi models and any Fireworks model or router id at runtime.
 
 | Property        | Value                                                  |
 | --------------- | ------------------------------------------------------ |
 | Provider id     | `fireworks` (alias: `fireworks-ai`)                    |
-| Plugin          | bundled, `enabledByDefault: true`                      |
+| Package         | `@openclaw/fireworks-provider`                         |
 | Auth env var    | `FIREWORKS_API_KEY`                                    |
 | Onboarding flag | `--auth-choice fireworks-api-key`                      |
 | Direct CLI flag | `--fireworks-api-key <key>`                            |
@@ -116156,6 +116428,11 @@ read_when:
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/fireworks-provider
+    ```
+  </Step>
   <Step title="Set the Fireworks API key">
     <CodeGroup>
 
@@ -116240,7 +116517,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   </Accordion>
 
   <Accordion title="Why thinking is forced off for Kimi">
-    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The bundled policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
 
     To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
 
@@ -119681,7 +119958,7 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
-Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
+Catalog cost estimates for current Moonshot-hosted K2 models use Moonshot's
 published pay-as-you-go rates: Kimi K2.7 Code is $0.19/MTok cache hit,
 $0.95/MTok input, and $4.00/MTok output; Kimi K2.6 is $0.16/MTok cache hit,
 $0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
@@ -119864,6 +120141,11 @@ Choose your provider and follow the setup steps.
     </Note>
 
     <Steps>
+      <Step title="Install the plugin">
+        ```bash
+        openclaw plugins install @openclaw/kimi-provider
+        ```
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice kimi-code-api-key
@@ -119908,8 +120190,7 @@ Choose your provider and follow the setup steps.
 
 ## Kimi web search
 
-OpenClaw also ships **Kimi** as a `web_search` provider, backed by Moonshot web
-search.
+The Moonshot plugin also registers **Kimi** as a `web_search` provider, backed by Moonshot web search.
 
 <Steps>
   <Step title="Run interactive web search setup">
@@ -120056,7 +120337,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     capabilities, so compatible custom provider ids targeting the same native
     Moonshot hosts inherit the same streaming-usage behavior.
 
-    With the bundled K2.6 pricing, streamed usage that includes input, output,
+    With the catalog K2.6 pricing, streamed usage that includes input, output,
     and cache-read tokens is also converted into local estimated USD cost for
     `/status`, `/usage full`, `/usage cost`, and transcript-backed session
     accounting.
@@ -122676,17 +122957,17 @@ the Server-side compaction accordion below.
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
-    - **Chat/UI:** `/fast status|on|off`
+    - **Chat/UI:** `/fast status|auto|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`.
+    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the auto cutoff, then starts later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
           },
         },
       },
@@ -125322,12 +125603,12 @@ read_when:
   - You need the TokenHub API key setup
 ---
 
-Tencent Cloud ships as a bundled provider plugin in OpenClaw. It gives access to Tencent Hy3 preview through the TokenHub endpoint (`tencent-tokenhub`) using an OpenAI-compatible API.
+Install the official Tencent Cloud provider plugin to access Tencent Hy3 preview through the TokenHub endpoint (`tencent-tokenhub`) using an OpenAI-compatible API.
 
 | Property         | Value                                                 |
 | ---------------- | ----------------------------------------------------- |
 | Provider id      | `tencent-tokenhub`                                    |
-| Plugin           | bundled, `enabledByDefault: true`                     |
+| Package          | `@openclaw/tencent-provider`                          |
 | Auth env var     | `TOKENHUB_API_KEY`                                    |
 | Onboarding flag  | `--auth-choice tokenhub-api-key`                      |
 | Direct CLI flag  | `--tokenhub-api-key <key>`                            |
@@ -125339,6 +125620,11 @@ Tencent Cloud ships as a bundled provider plugin in OpenClaw. It gives access to
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/tencent-provider
+    ```
+  </Step>
   <Step title="Create a TokenHub API key">
     Create an API key in Tencent Cloud TokenHub. If you choose a limited access scope for the key, include **Hy3 preview** in the allowed models.
   </Step>
@@ -125394,7 +125680,7 @@ Hy3 preview is Tencent Hunyuan's large MoE language model for reasoning, long-co
 
 ## Tiered pricing
 
-The bundled catalog ships tiered cost metadata that scales with input window length, so cost estimates are populated without manual overrides.
+The provider catalog ships tiered cost metadata that scales with input window length, so cost estimates are populated without manual overrides.
 
 | Input tokens range | Input rate | Output rate | Cache read |
 | ------------------ | ---------- | ----------- | ---------- |
@@ -125638,6 +125924,11 @@ Anonymized models are **not** fully private. Venice strips metadata before forwa
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/venice-provider
+    ```
+  </Step>
   <Step title="Get your API key">
     1. Sign up at [venice.ai](https://venice.ai)
     2. Go to **Settings > API Keys > Create new key**
@@ -125922,12 +126213,13 @@ read_when:
 The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 access hundreds of models through a single endpoint.
 
-| Property      | Value                            |
-| ------------- | -------------------------------- |
-| Provider      | `vercel-ai-gateway`              |
-| Auth          | `AI_GATEWAY_API_KEY`             |
-| API           | Anthropic Messages compatible    |
-| Model catalog | Auto-discovered via `/v1/models` |
+| Property      | Value                                  |
+| ------------- | -------------------------------------- |
+| Provider      | `vercel-ai-gateway`                    |
+| Package       | `@openclaw/vercel-ai-gateway-provider` |
+| Auth          | `AI_GATEWAY_API_KEY`                   |
+| API           | Anthropic Messages compatible          |
+| Model catalog | Auto-discovered via `/v1/models`       |
 
 <Tip>
 OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
@@ -125939,6 +126231,11 @@ OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/vercel-ai-gateway-provider
+    ```
+  </Step>
   <Step title="Set the API key">
     Run onboarding and choose the AI Gateway auth option:
 
@@ -127728,6 +128025,7 @@ OpenClaw uses the `zai` provider with a Z.AI API key.
 | Property | Value                                        |
 | -------- | -------------------------------------------- |
 | Provider | `zai`                                        |
+| Package  | `@openclaw/zai-provider`                     |
 | Auth     | `ZAI_API_KEY` (legacy alias: `Z_AI_API_KEY`) |
 | API      | Z.AI Chat Completions (Bearer auth)          |
 
@@ -127737,6 +128035,12 @@ GLM is a model family, not a separate provider. In OpenClaw, GLM models use
 refs such as `zai/glm-5.2`: provider `zai`, model id `glm-5.2`.
 
 ## Getting started
+
+Install the provider plugin first:
+
+```bash
+openclaw plugins install @openclaw/zai-provider
+```
 
 <Tabs>
   <Tab title="Auto-detect endpoint">
@@ -127811,7 +128115,7 @@ you want to force a specific Coding Plan or general API surface.
 
 ## Built-in catalog
 
-OpenClaw ships the bundled `zai` provider catalog in the plugin manifest, so read-only
+The `zai` provider plugin ships its catalog in the plugin manifest, so read-only
 listing can show known GLM rows without loading provider runtime:
 
 ```bash
@@ -127858,7 +128162,7 @@ known to your installed version.
 
 <AccordionGroup>
   <Accordion title="Forward-resolving unknown GLM-5 models">
-    Unknown `glm-5*` ids still forward-resolve on the bundled provider path by
+    Unknown `glm-5*` ids still forward-resolve on the provider path by
     synthesizing provider-owned metadata from the `glm-4.7` template when the id
     matches the current GLM-5 family shape.
   </Accordion>
@@ -127915,7 +128219,7 @@ known to your installed version.
   </Accordion>
 
   <Accordion title="Image understanding">
-    The bundled Z.AI plugin registers image understanding.
+    The Z.AI plugin registers image understanding.
 
     | Property      | Value       |
     | ------------- | ----------- |
@@ -131341,10 +131645,11 @@ release state.
    closeout requires both assets and a matching checksum. A partial manifest
    replays its recorded `main` SHA and rollback drill to regenerate identical
    bytes, then attaches the missing checksum; an invalid pair, or a checksum
-   without a manifest, stays blocking. A missing or more-than-90-day-old drill
-   record blocks a new evidence-backed closeout; private recovery commands
-   remain in the maintainer-only runbook. Use manual dispatch only to repair or
-   replay an evidence-backed stable closeout.
+   without a manifest, stays blocking. A push-triggered run without rollback
+   drill repository variables skips without completing closeout; a missing or
+   more-than-90-day-old drill record still blocks manual evidence-backed
+   closeout. Private recovery commands remain in the maintainer-only runbook.
+   Use manual dispatch only to repair or replay an evidence-backed stable closeout.
    A legacy fallback correction tag may reuse base-package evidence only when
    the correction tag resolves to the same source commit as the base stable tag.
    A correction with different source must publish and verify its own package
@@ -135488,10 +135793,12 @@ Scope intent:
 - `channels.telegram.accounts.*.webhookSecret`
 - `channels.slack.botToken`
 - `channels.slack.appToken`
+- `channels.slack.relay.authToken`
 - `channels.slack.userToken`
 - `channels.slack.signingSecret`
 - `channels.slack.accounts.*.botToken`
 - `channels.slack.accounts.*.appToken`
+- `channels.slack.accounts.*.relay.authToken`
 - `channels.slack.accounts.*.userToken`
 - `channels.slack.accounts.*.signingSecret`
 - `channels.sms.authToken`
@@ -136373,7 +136680,7 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+`toolResultMaxChars` is an advanced ceiling (up to `1000000` characters). When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
 tokens, still bounded by the runtime context-share guard.
@@ -152981,6 +153288,11 @@ Advantages:
 ## Setup
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/searxng-plugin
+    ```
+  </Step>
   <Step title="Run a SearXNG instance">
     ```bash
     docker run -d -p 8888:8080 searxng/searxng
@@ -154651,7 +154963,7 @@ plugins.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
@@ -154664,7 +154976,7 @@ plugins.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines; normal verbose chatter stays off.
-        - `/fast on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
@@ -155734,16 +156046,22 @@ title: "Tavily"
 
 Tavily returns structured results optimized for LLM consumption with configurable search depth, topic filtering, domain filters, AI-generated answer summaries, and content extraction from URLs (including JavaScript-rendered pages).
 
-| Property      | Value                               |
-| ------------- | ----------------------------------- |
-| Plugin id     | `tavily`                            |
-| Auth          | `TAVILY_API_KEY` or config `apiKey` |
-| Base URL      | `https://api.tavily.com` (default)  |
-| Bundled tools | `tavily_search`, `tavily_extract`   |
+| Property  | Value                               |
+| --------- | ----------------------------------- |
+| Plugin id | `tavily`                            |
+| Package   | `@openclaw/tavily-plugin`           |
+| Auth      | `TAVILY_API_KEY` or config `apiKey` |
+| Base URL  | `https://api.tavily.com` (default)  |
+| Tools     | `tavily_search`, `tavily_extract`   |
 
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/tavily-plugin
+    ```
+  </Step>
   <Step title="Get an API key">
     Create a Tavily account at [tavily.com](https://tavily.com), then generate an API key in the dashboard.
   </Step>
@@ -155779,7 +156097,7 @@ Tavily returns structured results optimized for LLM consumption with configurabl
 </Steps>
 
 <Tip>
-Choosing Tavily in onboarding or `openclaw configure --section web` enables the bundled Tavily plugin automatically.
+Choosing Tavily in onboarding or `openclaw configure --section web` installs and enables the official Tavily plugin when needed.
 </Tip>
 
 ## Tool reference
@@ -155946,21 +156264,22 @@ title: "Thinking levels"
 
 ## Fast mode (/fast)
 
-- Levels: `on|off|default`.
-- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
+- Levels: `auto|on|off|default`.
+- Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline/directive-only `/fast on|off` override (`/fast default` clears this layer)
+  1. Inline/directive-only `/fast auto|on|off` override (`/fast default` clears this layer)
   2. Session override
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`
+- `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
 - For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
-- For Codex-backed `openai/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For Codex-backed `openai/*` / `openai-codex/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. Native Codex app-server turns receive the tier only on `turn/start` or thread start/resume, so `auto` cannot retier one already-running app-server turn; it applies to the next model turn OpenClaw starts.
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
-- `/status` shows `Fast` only when fast mode is enabled.
+- `/status` shows `Fast` when fast mode is enabled and `Fast:auto` when the configured mode is auto.
 
 ## Verbose directives (/verbose or /v)
 
