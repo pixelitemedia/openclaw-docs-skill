@@ -32,6 +32,14 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
 - Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
 
+## Maturity Scorecard Editing
+
+`taxonomy.yaml` and `qa/maturity-scores.yaml` are the source inputs; generated maturity docs under `docs/maturity/` are projections and should not be hand-edited for score, LTS, taxonomy, QA profile, or evidence tables.
+`scripts/qa/render-maturity-docs.ts` owns generation; use `pnpm maturity:render` to refresh committed docs and `pnpm maturity:check` to verify them.
+`.github/workflows/maturity-scorecard.yml` renders artifact previews and can open generated-doc PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
+Keep deterministic `qa-evidence.json.scorecard` data in GitHub Actions artifacts unless a maintainer explicitly asks for a sanitized committed projection.
+Human overrides must change source state in a PR and explain the reason plus public or redacted evidence.
+
 ## Docs i18n
 
 - Foreign-language docs are not maintained in this repo. The generated publish output lives in the separate `openclaw/docs` repo (often cloned locally as `../openclaw-docs`).
@@ -72,6 +80,14 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - Never add `docs/internal/**` pages to `docs/docs.json` navigation or link them from public docs.
 - `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
 - Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
+
+## Maturity Scorecard Editing
+
+`taxonomy.yaml` and `qa/maturity-scores.yaml` are the source inputs; generated maturity docs under `docs/maturity/` are projections and should not be hand-edited for score, LTS, taxonomy, QA profile, or evidence tables.
+`scripts/qa/render-maturity-docs.ts` owns generation; use `pnpm maturity:render` to refresh committed docs and `pnpm maturity:check` to verify them.
+`.github/workflows/maturity-scorecard.yml` renders artifact previews and can open generated-doc PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
+Keep deterministic `qa-evidence.json.scorecard` data in GitHub Actions artifacts unless a maintainer explicitly asks for a sanitized committed projection.
+Human overrides must change source state in a PR and explain the reason plus public or redacted evidence.
 
 ## Docs i18n
 
@@ -330,6 +346,7 @@ or an explicit manual dispatch.
 | `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes                            |
 | `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes                              |
 | `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes                              |
+| `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                 | iOS app, shared app kit, or Swabble changes         |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes                            |
 | `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch                  |
 | `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch                       |
@@ -340,7 +357,7 @@ or an explicit manual dispatch.
 2. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 4. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
@@ -368,7 +385,7 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
-- **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
+- **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** runs in the `checks-node-core-runtime-tui-pty` Linux Node shard for TUI changes. The shard runs `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1`, so it covers both the deterministic `TuiBackend` fixture lane and the slower `tui --local` smoke that mocks only the external model endpoint.
@@ -408,7 +425,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 ## Manual dispatches
 
-Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, and Control UI i18n. Standalone manual CI dispatches run Android only with `include_android=true`; the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Standalone manual CI dispatches run Android only with `include_android=true`; the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref.
 
@@ -420,15 +437,30 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runners
 
-| Runner                          | Jobs                                                                                                                                                                                                                                                                                                            |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                                                                           |
-| `blacksmith-4vcpu-ubuntu-2404`  | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                           |
-| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                                                          |
-| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                |
-| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                              |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                             |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                       |
+| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                |
+| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                               |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                     |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                   |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                  |
+
+## Runner registration budget
+
+GitHub caps self-hosted runner registrations at 1,500 runners per 5 minutes per
+repository, organization, or enterprise. The limit is shared by all Blacksmith
+runner registrations in the `openclaw` organization, so adding another
+Blacksmith installation does not add a new bucket.
+
+Treat Blacksmith labels as the scarce resource for burst control. Jobs that
+only route, notify, summarize, select shards, or run short CodeQL scans should
+stay on GitHub-hosted runners unless they have measured Blacksmith-specific
+needs. Any new Blacksmith matrix, larger `max-parallel`, or high-frequency
+workflow must show its worst-case registration count and keep the org-level
+target below 1,000 registrations per 5 minutes, leaving headroom for concurrent
+repositories and retried jobs.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -450,6 +482,7 @@ pnpm test:channels
 pnpm test:contracts:channels
 pnpm check:docs                               # docs format + lint + broken links
 pnpm build                                    # build dist when CI artifact/smoke checks matter
+pnpm ios:build                                # generate and build the iOS app project
 pnpm ci:timings                               # summarize the latest origin/main push CI run
 pnpm ci:timings:recent                        # compare recent successful main CI runs
 node scripts/ci-run-timings.mjs <run-id>      # summarize wall time, queue time, and slowest jobs
@@ -774,7 +807,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 
 ### Critical Quality categories
 
-`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `agent-runtime-boundary`, `config-boundary`, `core-auth-secrets`, `channel-runtime-boundary`, `gateway-runtime-boundary`, `memory-runtime-boundary`, `mcp-process-runtime-boundary`, `provider-runtime-boundary`, `session-diagnostics-boundary`, `plugin-boundary`, `plugin-sdk-package-contract`, and `plugin-sdk-reply-runtime` shards for agent command/model/tool execution and reply dispatch code, config schema/migration/IO code, auth/secrets/sandbox/security code, core channel and bundled channel plugin runtime, gateway protocol/server-method, memory runtime/SDK glue, MCP/process/outbound delivery, provider runtime/model catalog, session diagnostics/delivery queues, plugin loader, Plugin SDK/package-contract, or Plugin SDK reply runtime changes. CodeQL config and quality workflow changes run all twelve PR quality shards.
+`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on GitHub-hosted Linux runners so quality scans do not spend Blacksmith runner-registration budget. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `agent-runtime-boundary`, `config-boundary`, `core-auth-secrets`, `channel-runtime-boundary`, `gateway-runtime-boundary`, `memory-runtime-boundary`, `mcp-process-runtime-boundary`, `provider-runtime-boundary`, `session-diagnostics-boundary`, `plugin-boundary`, `plugin-sdk-package-contract`, and `plugin-sdk-reply-runtime` shards for agent command/model/tool execution and reply dispatch code, config schema/migration/IO code, auth/secrets/sandbox/security code, core channel and bundled channel plugin runtime, gateway protocol/server-method, memory runtime/SDK glue, MCP/process/outbound delivery, provider runtime/model catalog, session diagnostics/delivery queues, plugin loader, Plugin SDK/package-contract, or Plugin SDK reply runtime changes. CodeQL config and quality workflow changes run all twelve PR quality shards.
 
 Manual dispatch accepts:
 
@@ -22091,7 +22124,7 @@ OpenClaw agent or Gateway.
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
 openclaw skills update @owner/<slug>
-openclaw skills verify <slug>
+openclaw skills verify @owner/<slug>
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
@@ -33671,11 +33704,11 @@ openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
-openclaw skills verify <slug>
-openclaw skills verify <slug> --version <version>
-openclaw skills verify <slug> --tag <tag>
-openclaw skills verify <slug> --card
-openclaw skills verify <slug> --global
+openclaw skills verify @owner/<slug>
+openclaw skills verify @owner/<slug> --version <version>
+openclaw skills verify @owner/<slug> --tag <tag>
+openclaw skills verify @owner/<slug> --card
+openclaw skills verify @owner/<slug> --global
 openclaw skills list
 openclaw skills list --eligible
 openclaw skills list --json
@@ -33738,8 +33771,11 @@ Notes:
   target the shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
-- `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
-  default. There is no `--json` flag because JSON is already the default.
+- `verify @owner/<slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON
+  envelope by default. There is no `--json` flag because JSON is already the
+  default. Bare slugs remain accepted for compatibility when the skill is
+  already installed or unambiguous, but owner-qualified refs avoid publisher
+  ambiguity.
 - When ClawHub returns server-resolved source provenance, verify JSON also
   includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
   self-declared source URLs stay only in the raw provenance envelope and are not
@@ -35291,7 +35327,7 @@ openclaw gateway restart
 ## Usage
 
 ```bash
-openclaw workboard list [--board <id>] [--status <status>] [--json]
+openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard dispatch [--url <url>] [--token <token>] [--timeout <ms>] [--json]
@@ -35319,11 +35355,16 @@ Columns are id prefix, status, priority, board id, optional agent id, and title.
 
 Flags:
 
-| Flag                | Purpose                                  |
-| ------------------- | ---------------------------------------- |
-| `--board <id>`      | Limit results to one board namespace     |
-| `--status <status>` | Limit results to one Workboard status    |
-| `--json`            | Print the full card list as machine JSON |
+| Flag                 | Purpose                                       |
+| -------------------- | --------------------------------------------- |
+| `--board <id>`       | Limit results to one board namespace          |
+| `--status <status>`  | Limit results to one Workboard status         |
+| `--include-archived` | Include archived cards in compact text output |
+| `--json`             | Print the full card list as machine JSON      |
+
+Compact text output hides archived cards by default so the CLI matches the
+`/workboard list` command. Pass `--include-archived` to show them. JSON output
+keeps the full card list, including archived cards, for existing automation.
 
 ## `create`
 
@@ -46008,7 +46049,7 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --category channel-framework.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
@@ -46906,6 +46947,7 @@ output and whose artifact paths are resolved relative to that producer
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
+For scorecard context, see [Maturity scorecard](/maturity/scorecard).
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -46963,6 +47005,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Maturity scorecard](/maturity/scorecard)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)
@@ -74154,6 +74197,7 @@ of Docker runners. This doc is a "how we test" guide:
 
 - [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
 - [Matrix QA](/concepts/qa-matrix) - reference for `pnpm openclaw qa matrix`.
+- [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
 This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
@@ -74874,17 +74918,20 @@ Native dependency policy:
 - Command: `pnpm test:e2e:openshell`
 - File: `extensions/openshell/src/backend.e2e.test.ts`
 - Scope:
-  - Starts an isolated OpenShell gateway on the host via Docker
+  - Reuses an active local OpenShell gateway
   - Creates a sandbox from a temporary local Dockerfile
   - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
   - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
   - Requires a local `openshell` CLI plus a working Docker daemon
-  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+  - Requires an active local OpenShell gateway and its config source
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test sandbox
 - Useful overrides:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
+  - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
 
 ### Live (real providers + real models)
 
@@ -86023,6 +86070,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Updating](/install/updating), [Update](/cli/update), [Troubleshooting](/gateway/troubleshooting)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Gateway runtime - M4 Stable - 13 areas">
@@ -86165,6 +86213,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Architecture](/concepts/architecture)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Agent Runtime - M3 Beta - 9 areas">
@@ -86267,6 +86316,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Agent Loop](/concepts/agent-loop), [Subagents](/tools/subagents)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Session, memory, and context engine - M3 Beta - 9 areas">
@@ -86369,6 +86419,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Session Management Compaction](/reference/session-management-compaction), [Transcript Hygiene](/reference/transcript-hygiene)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Channel framework - M3 Beta - 8 areas">
@@ -86461,6 +86512,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Health](/gateway/health), [Configuration Reference](/gateway/configuration-reference), [Troubleshooting](/channels/troubleshooting), [Discord](/channels/discord)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Observability - M3 Beta - 5 areas">
@@ -86523,6 +86575,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Opentelemetry](/gateway/opentelemetry), [Prometheus](/gateway/prometheus), [Diagnostics](/gateway/diagnostics), [Protocol](/gateway/protocol)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Gateway Web App - M3 Beta - 6 areas">
@@ -86595,6 +86648,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Control Ui](/web/control-ui), [Health](/gateway/health), [Protocol](/gateway/protocol), [Dashboard](/web/dashboard)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Plugins - M3 Beta - 9 areas">
@@ -86697,6 +86751,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Sdk Testing](/plugins/sdk-testing), [Sdk Setup](/plugins/sdk-setup), [Codex Harness](/plugins/codex-harness)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Security, auth, pairing, and secrets - M3 Beta - 6 areas">
@@ -86769,6 +86824,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Authentication](/gateway/authentication), [Models](/cli/models), [Openai](/providers/openai), [Oauth](/concepts/oauth), [Secrets](/gateway/secrets), [Secrets](/cli/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Audit Checks](/gateway/security/audit-checks)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Automation: cron, hooks, tasks, polling - M3 Beta - 6 areas">
@@ -86841,6 +86897,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Poll](/automation/poll), [Message](/cli/message), [Telegram](/channels/telegram), [Msteams](/channels/msteams), [Background Process](/gateway/background-process)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Media understanding and media generation - M2 Alpha - 6 areas">
@@ -86913,6 +86970,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Image Generation](/tools/image-generation), [Media Overview](/tools/media-overview), [Skills](/tools/skills), [Music Generation](/tools/music-generation), [Video Generation](/tools/video-generation)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Voice and realtime talk - M2 Alpha - 6 areas">
@@ -86985,6 +87043,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Control Ui](/web/control-ui), [Voice Overlay](/platforms/mac/voice-overlay), [Talk](/nodes/talk)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="TUI - M2 Alpha - 5 areas">
@@ -87047,6 +87106,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Tui](/web/tui), [Qr](/cli/qr), [Logs](/cli/logs), [Completion](/cli/completion)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="ClawHub - M2 Alpha - 4 areas">
@@ -87099,6 +87159,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Plugin](/tools/plugin), [Plugins](/cli/plugins), [Skills](/cli/skills), [Skills](/tools/skills), [Protocol](/gateway/protocol), [Bundles](/plugins/bundles), [Dependency Resolution](/plugins/dependency-resolution)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="OpenClaw App SDK - M2 Alpha - 6 areas">
@@ -87171,6 +87232,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Openclaw Sdk Api Design](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol)</div>
       </div>
     </div>
+
   </Accordion>
 
 </AccordionGroup>
@@ -87238,6 +87300,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Vps](/vps), [Docker](/install/docker), [Hetzner](/install/hetzner), [Digitalocean](/install/digitalocean), [Kubernetes](/install/kubernetes), [Podman](/install/podman)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="macOS Gateway host - M4 Stable - 7 areas">
@@ -87320,6 +87383,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Multiple Gateways](/gateway/multiple-gateways), [Index](/gateway/index), [Gateway](/cli/gateway)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Docker and Podman hosting - M3 Beta - 4 areas">
@@ -87372,6 +87436,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Windows via WSL2 - M3 Beta - 6 areas">
@@ -87444,6 +87509,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Browser Wsl2 Windows Remote Cdp Troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting), [Browser](/tools/browser), [Control Ui](/web/control-ui)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Raspberry Pi and small Linux devices - M3 Beta - 4 areas">
@@ -87496,6 +87562,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Raspberry Pi](/install/raspberry-pi), [Linux](/platforms/linux), [Health](/gateway/health), [Diagnostics](/gateway/diagnostics)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="macOS companion app - M3 Beta - 8 areas">
@@ -87588,6 +87655,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Webchat](/platforms/mac/webchat), [Remote](/gateway/remote), [Remote](/platforms/mac/remote)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Android app - M2 Alpha - 7 areas">
@@ -87670,6 +87738,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Android](/platforms/android), [Troubleshooting](/nodes/troubleshooting), [Protocol](/gateway/protocol)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Native Windows - M2 Alpha - 4 areas">
@@ -87722,6 +87791,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Updating](/install/updating), [Ci](/ci)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Kubernetes hosting - M2 Alpha - 4 areas">
@@ -87774,6 +87844,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Kubernetes](/install/kubernetes), [Index](/gateway/index)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="iOS app - M1 Experimental - 8 areas">
@@ -87866,6 +87937,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Ios](/platforms/ios), [Talk](/nodes/talk)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Nix install path - M1 Experimental - 5 areas">
@@ -87928,6 +88000,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Nix](/install/nix), [Setup](/cli/setup), [Doctor](/cli/doctor), [Update](/cli/update)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="watchOS companion surfaces - M1 Experimental - 5 areas">
@@ -87990,6 +88063,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Ios](/platforms/ios)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Linux companion app - M0 Planned - 5 areas">
@@ -88052,6 +88126,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Linux](/platforms/linux), [Openclaw](/start/openclaw), [Doctor](/gateway/doctor)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Native Windows companion app - M0 Planned - 5 areas">
@@ -88114,6 +88189,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Windows](/platforms/windows), [Index](/nodes/index), [Exec](/tools/exec), [Exec Approvals](/tools/exec-approvals), [Index](/gateway/security/index)</div>
       </div>
     </div>
+
   </Accordion>
 
 </AccordionGroup>
@@ -88191,6 +88267,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Discord](/channels/discord), [Openai](/providers/openai), [Elevenlabs](/providers/elevenlabs), [Qa E2e Automation](/concepts/qa-e2e-automation), [Config Channels](/gateway/config-channels)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Telegram - M3 Beta - 5 areas">
@@ -88253,6 +88330,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Telegram](/channels/telegram), [Exec Approvals](/tools/exec-approvals), [Reactions](/tools/reactions)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Slack - M3 Beta - 5 areas">
@@ -88315,6 +88393,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Slack](/channels/slack), [Slash Commands](/tools/slash-commands), [Exec Approvals](/tools/exec-approvals)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="iMessage and BlueBubbles - M3 Beta - 5 areas">
@@ -88377,6 +88456,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Imessage](/channels/imessage)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="WhatsApp - M3 Beta - 5 areas">
@@ -88439,6 +88519,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Whatsapp](/channels/whatsapp)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Matrix - M2 Alpha - 6 areas">
@@ -88511,6 +88592,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Matrix](/channels/matrix), [Matrix Migration](/channels/matrix-migration)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Google Chat - M2 Alpha - 5 areas">
@@ -88573,6 +88655,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Googlechat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface), [Reactions](/tools/reactions), [Slash Commands](/tools/slash-commands), [Config Agents](/gateway/config-agents), [Message Lifecycle Refactor](/concepts/message-lifecycle-refactor)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Microsoft Teams - M2 Alpha - 5 areas">
@@ -88635,6 +88718,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Msteams](/channels/msteams), [Exec Approvals Advanced](/tools/exec-approvals-advanced)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Signal - M2 Alpha - 5 areas">
@@ -88697,6 +88781,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Signal](/channels/signal)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - M2 Alpha - 4 areas">
@@ -88749,6 +88834,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">No linked docs</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - M2 Alpha - 4 areas">
@@ -88801,6 +88887,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">No linked docs</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Voice Call channel - M1 Experimental - 5 areas">
@@ -88863,6 +88950,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Voice Call](/plugins/voice-call)</div>
       </div>
     </div>
+
   </Accordion>
 
 </AccordionGroup>
@@ -88910,6 +88998,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Sandboxing](/gateway/sandboxing), [Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Multi Agent Sandbox Tools](/tools/multi-agent-sandbox-tools), [Codex Harness Reference](/plugins/codex-harness-reference), [Config Tools](/gateway/config-tools)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="OpenAI and Codex provider path - M3 Beta - 5 areas">
@@ -88972,6 +89061,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Openai](/providers/openai), [Discord](/channels/discord), [Voice Call](/plugins/voice-call)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Web search tools - M3 Beta - 4 areas">
@@ -89024,6 +89114,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Config Tools](/gateway/config-tools), [Web Fetch](/tools/web-fetch), [Web](/tools/web), [Faq](/help/faq)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Anthropic provider path - M3 Beta - 5 areas">
@@ -89086,6 +89177,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Anthropic](/providers/anthropic), [Config Agents](/gateway/config-agents)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Google provider path - M3 Beta - 5 areas">
@@ -89148,6 +89240,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Prompt Caching](/reference/prompt-caching), [Google](/providers/google), [Model Providers](/concepts/model-providers), [Token Use](/reference/token-use)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="OpenRouter provider path - M3 Beta - 4 areas">
@@ -89200,6 +89293,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Openrouter](/providers/openrouter), [Image Generation](/tools/image-generation), [Music Generation](/tools/music-generation), [Media Overview](/tools/media-overview), [Video Generation](/tools/video-generation), [Tts](/tools/tts)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Image, video, and music generation tools - M2 Alpha - 5 areas">
@@ -89262,6 +89356,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Music Generation](/tools/music-generation)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Local model providers: Ollama, vLLM, SGLang, LM Studio - M2 Alpha - 5 areas">
@@ -89324,6 +89419,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Index](/gateway/security/index), [Config Tools](/gateway/config-tools), [Local Models](/gateway/local-models)</div>
       </div>
     </div>
+
   </Accordion>
 
   <Accordion title="Long-tail hosted providers - M2 Alpha - 3 areas">
@@ -89366,6 +89462,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">[Index](/providers/index), [Model Providers](/concepts/model-providers), [Manifest](/plugins/manifest), [Testing Live](/help/testing-live), [Models](/cli/models)</div>
       </div>
     </div>
+
   </Accordion>
 
 </AccordionGroup>
@@ -161710,8 +161807,8 @@ publish and sync.
 | Update all workspace skills        | `openclaw skills update --all`                         |
 | Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
-| Verify a skill's trust envelope    | `openclaw skills verify <slug>`                        |
-| Print the generated Skill Card     | `openclaw skills verify <slug> --card`                 |
+| Verify a skill's trust envelope    | `openclaw skills verify @owner/<slug>`                 |
+| Print the generated Skill Card     | `openclaw skills verify @owner/<slug> --card`          |
 | Publish / sync via ClawHub CLI     | `clawhub sync --all`                                   |
 
 <AccordionGroup>
@@ -161729,9 +161826,11 @@ publish and sync.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
-    `openclaw skills verify <slug>` asks ClawHub for the skill's
+    `openclaw skills verify @owner/<slug>` asks ClawHub for the skill's
     `clawhub.skill.verify.v1` trust envelope. Installed ClawHub skills verify
     against the version and registry recorded in `.clawhub/origin.json`.
+    Bare slugs remain accepted for existing installed or unambiguous skills, but
+    owner-qualified refs avoid publisher ambiguity.
 
     ClawHub skill pages expose the latest security scan state before install,
     with detail pages for VirusTotal, ClawScan, and static analysis. The
