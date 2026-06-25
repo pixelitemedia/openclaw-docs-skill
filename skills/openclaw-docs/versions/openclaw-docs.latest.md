@@ -334,7 +334,7 @@ or an explicit manual dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs                  |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes                               |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes                               |
-| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, QA Smoke CI, and CI-routing checks                | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes                               |
 | `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes                               |
@@ -1924,6 +1924,11 @@ OpenProse registers `/prose` as a user-invocable skill command:
 `/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
 Direct URLs are fetched as-is using the `web_fetch` tool.
 
+Top-level remote runs are explicit. Remote imports inside a `.prose` program are
+transitive code dependencies: before OpenProse fetches any remote `use` target,
+it shows the resolved import list and requires the operator to reply exactly
+`approve remote prose imports` for that run.
+
 ## What it can do
 
 - Multi-agent research and synthesis with explicit parallelism.
@@ -2020,9 +2025,12 @@ User-level persistent agents live at:
 
 ## Security
 
-Treat `.prose` files like code. Review them before running. Use OpenClaw tool
-allowlists and approval gates to control side effects. For deterministic,
-approval-gated workflows, compare with [Lobster](/tools/lobster).
+Treat `.prose` files like code. Review them before running, including remote
+`use` imports. Top-level `/prose run https://...` requests are explicit, but
+transitive remote imports require per-run approval before they are fetched or
+executed. Use OpenClaw tool allowlists and approval gates to control side
+effects. For deterministic, approval-gated workflows, compare with
+[Lobster](/tools/lobster).
 
 ## Related
 
@@ -9958,7 +9966,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
   </Accordion>
 
   <Accordion title="Read receipts and typing">
-    When the private API bridge is up, accepted inbound chats are marked read before dispatch and a typing bubble is shown to the sender while the agent generates. Disable read-marking with:
+    When the private API bridge is up, accepted inbound chats are marked read and direct chats show a typing bubble as soon as the turn is accepted, while the agent prepares context and generates. Disable read-marking with:
 
     ```json5
     {
@@ -33487,6 +33495,7 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup reports short-lived gateway model-run probe cleanup separately as `modelRunPruned`. This only matches strict explicit keys shaped like `agent:*:explicit:model-run-<uuid>`. The fixed retention is `24h`, but it is pressure-gated: it only removes stale probe rows when session-entry maintenance/cap pressure is reached. When it runs, model-run cleanup happens before global stale cleanup and capping.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
@@ -46159,10 +46168,21 @@ QA Lab, so package Docker release lanes do not run `qa` commands. Use
 `pnpm qa:observability:smoke` from a built source checkout when changing
 diagnostics instrumentation.
 
-For a transport-real Matrix smoke lane, run:
+For a transport-real Matrix smoke lane that does not require model-provider
+credentials, run the fast profile with the deterministic mock OpenAI provider:
 
 ```bash
-pnpm openclaw qa matrix --profile fast --fail-fast
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+```
+
+For the live-frontier provider lane, supply OpenAI-compatible credentials
+explicitly:
+
+```bash
+OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
 ```
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
@@ -46182,9 +46202,10 @@ environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`.
-Scheduled and default manual runs execute the fast Matrix profile with live
-frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into the five profile shards.
+Scheduled and default manual runs execute the fast Matrix profile with
+QA-provided live-frontier credentials, `--fast`, and
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans
+out into the five profile shards.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
@@ -47930,6 +47951,14 @@ in `enforce` mode and applies cleanup during maintenance. Set
 
 For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+Gateway model-run probe sessions are short-lived by default. Matching rows with
+strict explicit keys like `agent:*:explicit:model-run-<uuid>` use fixed `24h`
+retention, but cleanup is pressure-gated: it only removes stale probe rows when
+session-entry maintenance/cap pressure is reached. When model-run cleanup runs,
+it runs before the broader stale-entry age cutoff and entry cap. Normal direct,
+group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit
+this 24h retention.
+
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
@@ -49079,7 +49108,8 @@ When `agents.defaults.typingMode` is **unset**, OpenClaw keeps the legacy behavi
 
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.
-- **Group chats without a mention**: typing starts only when message text begins streaming.
+- **Group chats without a mention**: typing starts when the admitted run has
+  user-visible activity, such as harness execution activity or message text.
 - **Heartbeat runs**: typing starts when the heartbeat run begins if the
   resolved heartbeat target is a typing-capable chat and typing is not disabled.
 
@@ -49090,13 +49120,14 @@ Set `agents.defaults.typingMode` to one of:
 - `never` - no typing indicator, ever.
 - `instant` - start typing **as soon as the model loop begins**, even if the run
   later returns only the silent reply token.
-- `thinking` - start typing on the **first reasoning delta** (requires
-  `reasoningLevel: "stream"` for the run).
-- `message` - start typing on the **first non-silent text delta** (ignores
-  the `NO_REPLY` silent token).
+- `thinking` - start typing on the **first reasoning delta** or on active
+  harness execution after the turn is accepted.
+- `message` - start typing on the **first user-visible reply activity**, such as
+  active harness execution or a non-silent text delta. Silent reply tokens such
+  as `NO_REPLY` do not count as text activity.
 
 Order of "how early it fires":
-`never` → `message` → `thinking` → `instant`
+`never` → `message`/`thinking` → `instant`
 
 ## Configuration
 
@@ -49126,11 +49157,10 @@ Override mode or cadence per session:
 
 ## Notes
 
-- `message` mode won't show typing for silent-only replies when the whole
-  payload is the exact silent token (for example `NO_REPLY` / `no_reply`,
-  matched case-insensitively).
-- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
-  If the model doesn't emit reasoning deltas, typing won't start.
+- `message` mode does not start from silent reply tokens, but active execution
+  can still show typing before any assistant text is available.
+- `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`),
+  and it can also start from active execution before reasoning deltas arrive.
 - Heartbeat typing is a liveness signal for the resolved delivery target. It
   starts at heartbeat run start instead of following `message` or `thinking`
   stream timing. Set `typingMode: "never"` to disable it.
@@ -49186,6 +49216,68 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: "Usage" section under Context (only if available).
+
+## Default usage footer mode
+
+`/usage off|tokens|full` sets the footer for a session and is remembered for that
+session. `messages.responseUsage` seeds that mode for sessions that have not
+chosen one, so the footer can be on by default without typing `/usage` each time.
+
+Set one mode for every channel, or a per-channel map with a `default` fallback:
+
+```jsonc
+{
+  "messages": {
+    "responseUsage": "tokens",
+    // or: { "default": "off", "discord": "full" }
+  },
+}
+```
+
+### Three distinct session states
+
+A session's `responseUsage` field has three representable states, each with
+different semantics:
+
+| State               | Stored value                    | Effective mode                                                        |
+| ------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| **Unset / inherit** | `undefined` (absent)            | Falls through to `messages.responseUsage` config default, then `off`. |
+| **Explicit off**    | `"off"` (stored)                | Always off — a non-off config default cannot re-enable the footer.    |
+| **Explicit on**     | `"tokens"` or `"full"` (stored) | That mode, regardless of config default.                              |
+
+### Precedence
+
+Effective mode = session override → channel config entry → `default` → `off`.
+
+An explicit `/usage off` is **persisted** as the literal value `"off"` in the
+session, not the same as "unset." This means a non-off `messages.responseUsage`
+default cannot turn the footer back on once the user has explicitly disabled it.
+
+### Resetting vs. turning off
+
+- `/usage off` — forces the footer off and persists that choice. A configured
+  non-off default cannot override this.
+- `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+  override. The session then **inherits** the effective config default
+  (`messages.responseUsage`). If no default is configured, the footer is off
+  (unchanged from before). Use this to "go back to default" without explicitly
+  turning the footer on.
+- A full session reset (`/reset` or `/new`) or a session rollover **preserves**
+  the explicit usage-mode preference so the user's display choice survives
+  session rollovers. Only `/usage reset` (and its aliases) actually clears the
+  override.
+
+### Toggle behavior
+
+`/usage` with no arguments cycles: off → tokens → full → off. The starting point
+for the cycle is the **effective** current mode (session override falling through
+to the config default when unset), so the cycle is always consistent with what
+the user sees in the footer.
+
+### Config
+
+With no config the prior behavior holds (footer off until `/usage`). Use
+`/usage reset` to clear a session override and re-inherit the configured default.
 
 ## Custom `/usage full` footer
 
@@ -50762,6 +50854,10 @@ claude auth login
 claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
+
+Docker installs need Claude Code installed and logged in inside the persisted
+container home, not only on the host. See
+[Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
 
 Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
 binary is not already on `PATH`.
@@ -52362,6 +52458,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of entries in `sessions.json` (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
+  - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
@@ -64270,7 +64367,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
 
   </Step>
   <Step title="Optional: build the common image">
-    For a more functional sandbox image with common tooling (for example `curl`, `jq`, `nodejs`, `python3`, `git`):
+    For a more functional sandbox image with common tooling (for example `curl`, `jq`, Node 24, pnpm, `python3`, and `git`):
 
     From a source checkout:
 
@@ -77236,6 +77333,100 @@ If you use your own Compose file or `docker run` command, add the same host
 mapping yourself, for example
 `--add-host=host.docker.internal:host-gateway`.
 
+### Claude CLI backend in Docker
+
+The official OpenClaw Docker image does not pre-install Claude Code. Install and
+log in to Claude Code inside the container user that runs OpenClaw, then persist
+that container home so image upgrades do not erase the binary or Claude auth
+state.
+
+For new Docker installs, enable a persistent `/home/node` volume before running
+setup:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./scripts/docker/setup.sh
+```
+
+For an existing Docker install, stop the stack first and reload the current
+Docker `.env` values before rerunning setup. The setup script does not read
+`.env` on its own; it rewrites `.env` from the current shell and defaults. For
+the generated `.env`, run:
+
+```bash
+set -a
+. ./.env
+set +a
+export OPENCLAW_HOME_VOLUME="${OPENCLAW_HOME_VOLUME:-openclaw_home}"
+./scripts/docker/setup.sh
+```
+
+If your `.env` contains values your shell cannot source, manually re-export the
+existing values you rely on first, such as `OPENCLAW_IMAGE`, ports, bind mode,
+custom paths, `OPENCLAW_EXTRA_MOUNTS`, sandbox, and skip-onboarding settings.
+The generated overlay mounts the home volume for both `openclaw-gateway` and
+`openclaw-cli`.
+
+Run the remaining commands with the generated Compose overlay so both services
+mount the persisted home. If your setup also uses `docker-compose.override.yml`,
+include it before `docker-compose.extra.yml`.
+
+Install Claude Code in that persisted home:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint sh openclaw-cli -lc \
+  'curl -fsSL https://claude.ai/install.sh | bash'
+```
+
+The native installer writes the `claude` binary under
+`/home/node/.local/bin/claude`. Tell OpenClaw to use that container path:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli config set \
+  agents.defaults.cliBackends.claude-cli.command \
+  /home/node/.local/bin/claude
+```
+
+Log in and verify from inside the same persisted container home:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint /home/node/.local/bin/claude openclaw-cli auth login
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint /home/node/.local/bin/claude openclaw-cli auth status --text
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli models auth login \
+  --provider anthropic --method cli --set-default
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli models list --provider anthropic
+```
+
+After that, you can use the bundled `claude-cli` backend:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli agent \
+  --agent main \
+  --model claude-cli/claude-sonnet-4-6 \
+  --message "Say hello from Docker Claude CLI"
+```
+
+`OPENCLAW_HOME_VOLUME` persists the native Claude Code install under
+`/home/node/.local/bin` and `/home/node/.local/share/claude`, plus Claude Code
+settings and auth state under `/home/node/.claude` and `/home/node/.claude.json`.
+Persisting only `/home/node/.openclaw` is not enough for Claude CLI reuse. If
+you use `OPENCLAW_EXTRA_MOUNTS` instead of a home volume, mount all of those
+Claude paths into both Docker services.
+
+<Note>
+For shared production automation or predictable Anthropic billing, prefer the
+Anthropic API-key path. Claude CLI reuse follows Claude Code's installed
+version, account login, billing, and update behavior.
+</Note>
+
 ### Bonjour / mDNS
 
 Docker bridge networking usually does not forward Bonjour/mDNS multicast
@@ -82280,42 +82471,23 @@ Use this page to answer one question: which OpenClaw surfaces are credible choic
 ## At a glance
 
 <div className="maturity-summary-grid">
-  <div className="maturity-summary-item maturity-score-experimental">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">1%</span>
-      <span>Coverage</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "1" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-experimental">Experimental</span>
-      <span>QA profile evidence</span>
-    </div>
-  </div>
   <div className="maturity-summary-item maturity-score-alpha">
     <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">63%</span>
-      <span>Quality</span>
+      <span className="maturity-summary-value">67%</span>
+      <span>Maturity score</span>
     </div>
-    <div className="maturity-summary-bar" style={{ "--score": "63" }}><span /></div>
+    <div className="maturity-summary-bar" style={{ "--score": "67" }}><span /></div>
     <div className="maturity-summary-meta">
       <span className="maturity-level-pill maturity-level-alpha">Alpha</span>
-      <span>Reliability and operator confidence</span>
-    </div>
-  </div>
-  <div className="maturity-summary-item maturity-score-beta">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">70%</span>
-      <span>Completeness</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "70" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-beta">Beta</span>
-      <span>Expected workflow coverage</span>
+      <span>Quality + completeness</span>
+      <span>Coverage Experimental - 4%</span>
+      <span>Quality Alpha - 63%</span>
+      <span>Completeness Beta - 70%</span>
     </div>
   </div>
 </div>
 
-Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.
+Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.
 
 ## Score bands
 
@@ -82339,14 +82511,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#cli"><span className="maturity-surface-title">CLI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-runtime"><span className="maturity-surface-title">Gateway runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>81%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "81%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 12</span></div>
@@ -82374,91 +82546,91 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#channel-framework"><span className="maturity-surface-title">Channel framework</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>8 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>13%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "13%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>76%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "76%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#browser-automation-exec-and-sandbox-tools"><span className="maturity-surface-title">Browser automation, exec, and sandbox tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>3 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 2</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openai-and-codex-provider-path"><span className="maturity-surface-title">OpenAI and Codex provider path</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>26%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "26%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-web-app"><span className="maturity-surface-title">Gateway Web App</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#web-search-tools"><span className="maturity-surface-title">Web search tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#plugins"><span className="maturity-surface-title">Plugins</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>12%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "12%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 7</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#automation-cron-hooks-tasks-polling"><span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#docker-and-podman-hosting"><span className="maturity-surface-title">Docker and Podman hosting</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>71%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "71%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#windows-via-wsl2"><span className="maturity-surface-title">Windows via WSL2</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
@@ -82528,7 +82700,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#media-understanding-and-media-generation"><span className="maturity-surface-title">Media understanding and media generation</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -82640,7 +82812,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openclaw-app-sdk"><span className="maturity-surface-title">OpenClaw App SDK</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -82694,77 +82866,77 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#cli"><span className="maturity-surface-title">CLI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-runtime"><span className="maturity-surface-title">Gateway runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>81%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "81%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 12</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#channel-framework"><span className="maturity-surface-title">Channel framework</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>8 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>13%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "13%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>76%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "76%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-web-app"><span className="maturity-surface-title">Gateway Web App</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#plugins"><span className="maturity-surface-title">Plugins</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>12%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "12%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 7</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#automation-cron-hooks-tasks-polling"><span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#media-understanding-and-media-generation"><span className="maturity-surface-title">Media understanding and media generation</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -82792,7 +82964,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openclaw-app-sdk"><span className="maturity-surface-title">OpenClaw App SDK</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -82818,14 +82990,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#docker-and-podman-hosting"><span className="maturity-surface-title">Docker and Podman hosting</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>71%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "71%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#windows-via-wsl2"><span className="maturity-surface-title">Windows via WSL2</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
@@ -82996,21 +83168,21 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#browser-automation-exec-and-sandbox-tools"><span className="maturity-surface-title">Browser automation, exec, and sandbox tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>3 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 2</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openai-and-codex-provider-path"><span className="maturity-surface-title">OpenAI and Codex provider path</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>26%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "26%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#web-search-tools"><span className="maturity-surface-title">Web search tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -83068,9 +83240,9 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
 <div className="maturity-evidence-grid">
   <div className="maturity-evidence-card">
     <span className="maturity-evidence-title">Full taxonomy validation</span>
-    <span>2026-06-23T08:05:04.411Z</span>
-    <span>0 checks - 0 passed</span>
-    <span>0 of 281 (0%) areas - 0 of 1675 (1%) capabilities</span>
+    <span>2026-06-23T07:24:36.128Z</span>
+    <span>96 checks - 94 passed, 2 blocked</span>
+    <span>0 of 281 (0%) areas - 20 of 1675 (1.2%) features - 77 of 1665 (4.6%) coverage IDs</span>
   </div>
 </div>
 
@@ -83079,1316 +83251,81 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
 Open a surface to inspect the evidence state of each category. The list stays collapsed so the page remains useful at a glance.
 
 <AccordionGroup>
-  <Accordion title="Gateway runtime - 13 areas">
-    <p className="maturity-readiness-summary">13 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Approvals and Remote Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">HTTP APIs</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Hosted Web Surface</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway RPC APIs and Events</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 20 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Device Auth and Pairing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Network Access and Discovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Nodes and Remote Capabilities</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Health, Diagnostics, and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Protocol Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Roles and Permissions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Lifecycle</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Security Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">WebSocket Connection</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (3%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="CLI - 7 areas">
-    <p className="maturity-readiness-summary">7 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Onboarding and Auth Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Plugin and Channel Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Service Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI Observability</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Doctor</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Updates and Upgrades</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Plugins - 9 areas">
-    <p className="maturity-readiness-summary">9 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Authoring and Packaging plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Bundled plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Canvas plugin</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Installing and running plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider and tool plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Plugin approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Publishing plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Testing plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
   <Accordion title="Agent Runtime - 9 areas">
-    <p className="maturity-readiness-summary">9 partially reviewed</p>
+    <p className="maturity-readiness-summary">8 partially reviewed / 1 needs review</p>
     <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Agent Turn Execution</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 3 (2%)</span>
-        <span>None</span>
+        <span>0 of 3 (0%) / 7 of 24 (29.2%)</span>
+        <span>17 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">External Runtimes and Subagents</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (2%)</span>
-        <span>None</span>
+        <span>0 of 4 (0%) / 3 of 10 (30%)</span>
+        <span>7 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Hosted Provider Execution</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
+        <span>1 of 5 (20%) / 1 of 5 (20%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Local and Self-hosted Providers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (2%)</span>
-        <span>None</span>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Model and Runtime Selection</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (2%)</span>
-        <span>None</span>
+        <span>0 of 4 (0%) / 2 of 8 (25%)</span>
+        <span>6 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Provider Auth</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (2%)</span>
-        <span>None</span>
+        <span>0 of 10 (0%) / 4 of 17 (23.5%)</span>
+        <span>13 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Streaming and Progress</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 2 (2%)</span>
-        <span>None</span>
+        <span>0 of 2 (0%) / 5 of 9 (55.6%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Tool Calls and Response Handling</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 3 (2%)</span>
-        <span>None</span>
+        <span>0 of 3 (0%) / 15 of 23 (65.2%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Tool Execution Controls</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (2%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Session, memory, and context engine - 9 areas">
-    <p className="maturity-readiness-summary">9 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI Session and Transcript Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Token Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Context Engine</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Cross-client History and Session Parity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Diagnostics, Maintenance, and Recovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Core Prompts and Context</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Memory</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Session Routing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Transcript Persistence</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Channel framework - 8 areas">
-    <p className="maturity-readiness-summary">8 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Actions Commands and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Group Thread and Ambient Room Behavior</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Inbound Access and Identity Gates</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Attachments and Rich Channel Data</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Outbound Delivery and Reply Pipeline</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Status Health and Operator Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Security, auth, pairing, and secrets - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Approval Policy and Tool Safeguards</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Auth and Remote Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Access Control</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Device and Node Pairing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Plugin Trust</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Credential and Secret Hygiene</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Observability - 5 areas">
-    <p className="maturity-readiness-summary">5 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Health and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 12 (6%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Logging</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (6%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Diagnostic Collection</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (6%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Telemetry Export</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 13 (6%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Session Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (6%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Automation: cron, hooks, tasks, polling - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Cron Jobs</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 15 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Event Ingress</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 15 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Automation Hooks</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Background Tasks and Flows</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Heartbeat</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Polling Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Media understanding and media generation - 6 areas">
-    <p className="maturity-readiness-summary">6 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Intake and Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (1%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Media Handling</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (1%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Configuration</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (1%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Text-to-Speech Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (1%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Understanding</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (1%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Generation</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 17 (1%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Voice and realtime talk - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Talk Providers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Realtime Talk Sessions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Speech and Transcription</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native App Talk</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Voice Wake and Routing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Talk Observability</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Gateway Web App - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Browser Realtime Talk</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Browser Access and Trust</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Configuration</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Browser UI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">WebChat Conversations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 15 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Operator Console</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="TUI - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Runtime Modes</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 14 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Input and Commands</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Session Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Local Shell Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Rendering and Output Safety</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="ClawHub - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Publishing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Catalog Discovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Compatibility and Trust</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Plugin Lifecycle and Health</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 26 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="OpenClaw App SDK - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Client API</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Agent Conversations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Events and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Resource Helpers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="macOS Gateway host - 7 areas">
-    <p className="maturity-readiness-summary">7 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Local Gateway Integration</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Remote Gateway Mode</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Service Lifecycle</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Diagnostics and Observability</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Permissions and Native Capabilities</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Profiles and Isolation</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="macOS companion app - 8 areas">
-    <p className="maturity-readiness-summary">8 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Canvas</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Local Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Status and Settings</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Capabilities</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Remote Connections</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Voice and Talk</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">WebChat</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Remote WebChat</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Linux Gateway host - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Host Setup and Updates</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Runtime and Service Control</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Remote Access and Security</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Diagnostics and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Deployment Targets</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Linux companion app - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">App Distribution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Connectivity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Chat and Sessions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Desktop Capabilities</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Status and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Windows via WSL2 - 6 areas">
-    <p className="maturity-readiness-summary">6 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">WSL Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Service Lifecycle</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Access and Exposure</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Diagnostics and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Browser and Control UI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (3%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Native Windows - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">CLI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Networking</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Updates</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Native Windows companion app - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Installation and Updates</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Connection</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Chat Sessions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Status and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Desktop Tools and Permissions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
+        <span>0 of 6 (0%) / 6 of 12 (50%)</span>
+        <span>6 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -84396,955 +83333,62 @@ Open a surface to inspect the evidence state of each category. The list stays co
   <Accordion title="Android app - 7 areas">
     <p className="maturity-readiness-summary">7 needs review</p>
     <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Capture</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Mobile Chat</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Connection Setup</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Distribution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Settings</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Voice</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Device Runtime</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="iOS app - 8 areas">
-    <p className="maturity-readiness-summary">8 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Sharing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Canvas and Screen</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Chat and Sessions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Setup and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Distribution</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Device Commands</span>
+          <span className="maturity-readiness-title">Media Capture</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Notifications and Background</span>
+          <span className="maturity-readiness-title">Mobile Chat</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Settings</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Voice</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="watchOS companion surfaces - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Delivery and Recovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Exec Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Distribution and Support</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Notifications and Replies</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Watch App UI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Raspberry Pi and small Linux devices - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Setup and Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Remote Access and Auth</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Gateway Runtime</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Performance and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Docker and Podman hosting - 4 areas">
-    <p className="maturity-readiness-summary">4 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Container Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (5%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Container Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 11 (5%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Image Release and Validation</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (5%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Agent Sandbox and Tooling</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (5%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Kubernetes hosting - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Deployment Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Configuration and Secrets</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Exposure</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Cluster Lifecycle</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Nix install path - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Install Handoff</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Plugin Lifecycle</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Activation and App UX</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Config and State</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Service Runtime and Guards</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Discord - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Realtime Voice and Calls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Telegram - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="WhatsApp - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Slack - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="iMessage and BlueBubbles - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Signal - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Google Chat - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 16 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 16 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Matrix - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Encryption and Verification</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 3 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Microsoft Teams - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Controls and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Voice Call channel - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Channel Setup and Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 1 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media and Rich Content</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Realtime Voice and Calls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="OpenAI and Codex provider path - 5 areas">
-    <p className="maturity-readiness-summary">5 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Model and Auth</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (8%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Responses and Tool Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (8%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Codex Harness</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (8%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Image and Multimodal Input</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (8%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Voice and Realtime Audio</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (8%)</span>
-        <span>None</span>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
       </div>
     </div>
   </Accordion>
@@ -85352,46 +83396,651 @@ Open a surface to inspect the evidence state of each category. The list stays co
   <Accordion title="Anthropic provider path - 5 areas">
     <p className="maturity-readiness-summary">5 needs review</p>
     <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Auth and Recovery</span>
+          <span className="maturity-readiness-title">Media Inputs</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Model and Runtime Selection</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Request Transport and Turn Semantics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
+        <span>0 of 10 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Prompt Cache and Context</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Inputs</span>
+          <span className="maturity-readiness-title">Provider Auth and Recovery</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Request Transport and Turn Semantics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Automation: cron, hooks, tasks, polling - 6 areas">
+    <p className="maturity-readiness-summary">5 needs review / 1 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Automation Hooks</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Background Tasks and Flows</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Cron Jobs</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 15 (0%) / 0 of 15 (0%)</span>
+        <span>15 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Event Ingress</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 15 (0%) / 0 of 15 (0%)</span>
+        <span>15 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Heartbeat</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 1 of 7 (14.3%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Polling Controls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Browser automation, exec, and sandbox tools - 3 areas">
+    <p className="maturity-readiness-summary">2 partially reviewed / 1 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Browser Automation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 8 (12.5%) / 1 of 8 (12.5%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Sandbox and Tool Policy</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Tool Invocation and Execution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>2 of 6 (33.3%) / 4 of 8 (50%)</span>
+        <span>4 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Gateway Web App - 6 areas">
+    <p className="maturity-readiness-summary">3 needs review / 3 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Browser Access and Trust</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Browser Realtime Talk</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Browser UI</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 1 of 12 (8.3%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Configuration</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Operator Console</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 1 of 12 (8.3%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">WebChat Conversations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 15 (0%) / 2 of 20 (10%)</span>
+        <span>18 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Channel framework - 8 areas">
+    <p className="maturity-readiness-summary">4 needs review / 4 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Actions Commands and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 1 of 7 (14.3%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 5 of 27 (18.5%)</span>
+        <span>22 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Group Thread and Ambient Room Behavior</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 4 of 11 (36.4%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Inbound Access and Identity Gates</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Attachments and Rich Channel Data</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Outbound Delivery and Reply Pipeline</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 8 of 21 (38.1%)</span>
+        <span>13 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Status Health and Operator Controls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="ClawHub - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Catalog Discovery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Compatibility and Trust</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Plugin Lifecycle and Health</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 26 (0%) / 0 of 26 (0%)</span>
+        <span>26 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Publishing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="CLI - 7 areas">
+    <p className="maturity-readiness-summary">5 needs review / 2 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI Observability</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 6 (16.7%) / 1 of 6 (16.7%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Doctor</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Service Management</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 1 of 7 (14.3%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Onboarding and Auth Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Plugin and Channel Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Updates and Upgrades</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Discord - 6 areas">
+    <p className="maturity-readiness-summary">6 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Realtime Voice and Calls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Docker and Podman hosting - 4 areas">
+    <p className="maturity-readiness-summary">3 needs review / 1 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Agent Sandbox and Tooling</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Container Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Container Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Image Release and Validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 5 (20%) / 2 of 7 (28.6%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Gateway runtime - 13 areas">
+    <p className="maturity-readiness-summary">9 needs review / 4 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Approvals and Remote Execution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Device Auth and Pairing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Lifecycle</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 4 of 12 (33.3%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway RPC APIs and Events</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 20 (0%) / 2 of 22 (9.1%)</span>
+        <span>20 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Health, Diagnostics, and Repair</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Hosted Web Surface</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">HTTP APIs</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 4 (25%) / 1 of 4 (25%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Network Access and Discovery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Nodes and Remote Capabilities</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Protocol Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Roles and Permissions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Security Controls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">WebSocket Connection</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 8 (12.5%) / 1 of 8 (12.5%)</span>
+        <span>7 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Google Chat - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 16 (0%) / 0 of 16 (0%)</span>
+        <span>16 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 16 (0%) / 0 of 16 (0%)</span>
+        <span>16 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -85399,233 +84048,46 @@ Open a surface to inspect the evidence state of each category. The list stays co
   <Accordion title="Google provider path - 5 areas">
     <p className="maturity-readiness-summary">5 needs review</p>
     <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Setup and Credentials</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Model Routing and Endpoints</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Direct Gemini Runtime</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Media, Search, and Realtime</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Model Routing and Endpoints</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Prompt Caching</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
       </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="OpenRouter provider path - 4 areas">
-    <p className="maturity-readiness-summary">4 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Setup and Auth</span>
+          <span className="maturity-readiness-title">Provider Setup and Credentials</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 14 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Chat Runtime and Normalization</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 15 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Recovery and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Generation and Speech</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Local model providers: Ollama, vLLM, SGLang, LM Studio - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Setup, Lifecycle, and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Native Provider Plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 10 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">OpenAI-Compatible Runtime Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Local Memory and Embeddings</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Network Safety and Prompt Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 2 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Long-tail hosted providers - 3 areas">
-    <p className="maturity-readiness-summary">3 needs review</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Hosted LLM Providers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Hosted Media Providers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Provider Operations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Web search tools - 4 areas">
-    <p className="maturity-readiness-summary">4 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Search Providers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 19 (7%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Setup and Diagnostics</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 9 (7%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Network Safety</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (7%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Tool Availability and Fetch</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 11 (7%)</span>
-        <span>None</span>
-      </div>
-    </div>
-  </Accordion>
-
-  <Accordion title="Browser automation, exec, and sandbox tools - 3 areas">
-    <p className="maturity-readiness-summary">3 partially reviewed</p>
-    <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Browser Automation</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 8 (15%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Tool Invocation and Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 6 (15%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Sandbox and Tool Policy</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
-        </div>
-        <span>1 of 6 (15%)</span>
-        <span>None</span>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -85633,46 +84095,1756 @@ Open a surface to inspect the evidence state of each category. The list stays co
   <Accordion title="Image, video, and music generation tools - 5 areas">
     <p className="maturity-readiness-summary">5 needs review</p>
     <div className="maturity-readiness-list">
-      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Media Routing and Discovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 4 (0%)</span>
-        <span>None</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Task Lifecycle and Delivery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 12 (0%)</span>
-        <span>None</span>
-      </div>
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Image Generation</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 9 (0%)</span>
-        <span>None</span>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Video Generation</span>
+          <span className="maturity-readiness-title">Media Routing and Discovery</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 11 (0%)</span>
-        <span>None</span>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Music Generation</span>
           <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%)</span>
-        <span>None</span>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Task Lifecycle and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Video Generation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="iMessage and BlueBubbles - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="iOS app - 8 areas">
+    <p className="maturity-readiness-summary">8 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Canvas and Screen</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Chat and Sessions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Device Commands</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Distribution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Setup and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Sharing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Notifications and Background</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Voice</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Kubernetes hosting - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Exposure</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Cluster Lifecycle</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Configuration and Secrets</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Deployment Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Linux companion app - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">App Distribution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Chat and Sessions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Desktop Capabilities</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Connectivity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Status and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Linux Gateway host - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Deployment Targets</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Diagnostics and Repair</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Runtime and Service Control</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Host Setup and Updates</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Remote Access and Security</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Local model providers: Ollama, vLLM, SGLang, LM Studio - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Local Memory and Embeddings</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Provider Plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Network Safety and Prompt Controls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">OpenAI-Compatible Runtime Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Provider Setup, Lifecycle, and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Long-tail hosted providers - 3 areas">
+    <p className="maturity-readiness-summary">3 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Hosted LLM Providers</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Hosted Media Providers</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Provider Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="macOS companion app - 8 areas">
+    <p className="maturity-readiness-summary">8 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Canvas</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Local Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Capabilities</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Remote Connections</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Remote WebChat</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Status and Settings</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Voice and Talk</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">WebChat</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="macOS Gateway host - 7 areas">
+    <p className="maturity-readiness-summary">7 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Diagnostics and Observability</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Service Lifecycle</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Local Gateway Integration</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Permissions and Native Capabilities</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Profiles and Isolation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Remote Gateway Mode</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Matrix - 6 areas">
+    <p className="maturity-readiness-summary">6 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Encryption and Verification</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Media understanding and media generation - 6 areas">
+    <p className="maturity-readiness-summary">4 needs review / 2 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Media Handling</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Configuration</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Generation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 17 (5.9%) / 1 of 19 (5.3%)</span>
+        <span>18 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Intake and Access</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Understanding</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 1 of 14 (7.1%)</span>
+        <span>13 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Text-to-Speech Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Microsoft Teams - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Native Windows - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Management</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Networking</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Updates</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Native Windows companion app - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Chat Sessions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Desktop Tools and Permissions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Connection</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Installation and Updates</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Status and Repair</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Nix install path - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Activation and App UX</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Config and State</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Install Handoff</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Plugin Lifecycle</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Service Runtime and Guards</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="OpenAI and Codex provider path - 5 areas">
+    <p className="maturity-readiness-summary">2 needs review / 3 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Image and Multimodal Input</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Model and Auth</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 6 (16.7%) / 4 of 9 (44.4%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Codex Harness</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 4 of 9 (44.4%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Responses and Tool Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 4 (25%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Voice and Realtime Audio</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="OpenClaw App SDK - 6 areas">
+    <p className="maturity-readiness-summary">5 needs review / 1 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Agent Conversations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Client API</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Events and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Access</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Resource Helpers</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 1 of 6 (16.7%)</span>
+        <span>5 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="OpenRouter provider path - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Chat Runtime and Normalization</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 15 (0%) / 0 of 15 (0%)</span>
+        <span>15 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media Generation and Speech</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Provider Recovery and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Provider Setup and Auth</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 14 (0%) / 0 of 14 (0%)</span>
+        <span>14 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Plugins - 9 areas">
+    <p className="maturity-readiness-summary">6 needs review / 3 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Authoring and Packaging plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Bundled plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Canvas plugin</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Installing and running plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 7 of 20 (35%)</span>
+        <span>13 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Plugin approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Provider and tool plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 6 (16.7%) / 9 of 21 (42.9%)</span>
+        <span>12 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Publishing plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Testing plugins</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 3 of 11 (27.3%)</span>
+        <span>8 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Raspberry Pi and small Linux devices - 4 areas">
+    <p className="maturity-readiness-summary">4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Runtime</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Performance and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Remote Access and Auth</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Setup and Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
+        <span>12 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Security, auth, pairing, and secrets - 6 areas">
+    <p className="maturity-readiness-summary">2 partially reviewed / 4 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Approval Policy and Tool Safeguards</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 3 of 6 (50%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Access Control</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Credential and Secret Hygiene</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 5 of 11 (45.5%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Device and Node Pairing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Auth and Remote Access</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Plugin Trust</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Session, memory, and context engine - 9 areas">
+    <p className="maturity-readiness-summary">2 needs review / 7 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI Session and Transcript Management</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Context Engine</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 4 of 7 (57.1%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Core Prompts and Context</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 3 of 8 (37.5%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Cross-client History and Session Parity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Diagnostics, Maintenance, and Recovery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 4 of 10 (40%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Memory</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 6 of 13 (46.2%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Session Routing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 1 of 4 (25%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Token Management</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 2 of 10 (20%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Transcript Persistence</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Signal - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Slack - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Telegram - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Observability - 5 areas">
+    <p className="maturity-readiness-summary">3 partially reviewed / 2 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Diagnostic Collection</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 8 (12.5%) / 3 of 10 (30%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Health and Repair</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 12 (8.3%) / 5 of 18 (27.8%)</span>
+        <span>13 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Logging</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Session Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Telemetry Export</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 13 (7.7%) / 7 of 21 (33.3%)</span>
+        <span>14 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="TUI - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Input and Commands</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Local Shell Execution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Rendering and Output Safety</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Runtime Modes</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 14 (0%) / 0 of 14 (0%)</span>
+        <span>14 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Session Management</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Voice and realtime talk - 6 areas">
+    <p className="maturity-readiness-summary">6 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native App Talk</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Realtime Talk Sessions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Speech and Transcription</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Talk Observability</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Talk Providers</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Voice Wake and Routing</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Voice Call channel - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 1 (0%) / 0 of 1 (0%)</span>
+        <span>1 capability gap</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Realtime Voice and Calls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="watchOS companion surfaces - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Delivery and Recovery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Distribution and Support</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Exec Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Notifications and Replies</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Watch App UI</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
+        <span>3 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Web search tools - 4 areas">
+    <p className="maturity-readiness-summary">2 needs review / 2 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Network Safety</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Search Providers</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>2 of 19 (10.5%) / 2 of 19 (10.5%)</span>
+        <span>17 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Setup and Diagnostics</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
+        <span>9 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Tool Availability and Fetch</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>2 of 11 (18.2%) / 3 of 12 (25%)</span>
+        <span>9 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="WhatsApp - 5 areas">
+    <p className="maturity-readiness-summary">5 needs review</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Access and Identity</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
+        <span>7 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Channel Setup and Operations</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Media and Rich Content</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Native Controls and Approvals</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
+        <span>2 capability gaps</span>
+      </div>
+    </div>
+  </Accordion>
+
+  <Accordion title="Windows via WSL2 - 6 areas">
+    <p className="maturity-readiness-summary">5 needs review / 1 partially reviewed</p>
+    <div className="maturity-readiness-list">
+      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Browser and Control UI</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">CLI</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
+        <span>8 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Diagnostics and Repair</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 6 (16.7%) / 3 of 8 (37.5%)</span>
+        <span>5 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Access and Exposure</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
+        <span>11 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Gateway Service Lifecycle</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
+        <span>10 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">WSL Setup</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+        </div>
+        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>6 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -85995,7 +86167,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Normal setup and repair paths are documented across install, CLI, and gateway docs. Platform-specific Windows paths are tracked in the Windows via WSL2 and Native Windows rows.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Stable - 83%</span><span>Completeness Stable - 90%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 4%</span><span>Quality Stable - 83%</span><span>Completeness Stable - 90%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86004,7 +86176,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">CLI Setup</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/install/index), [Installer](/install/installer), [Node](/install/node), [Updating](/install/updating)</div>
@@ -86014,7 +86186,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Onboarding and Auth Setup</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Onboard](/cli/onboard), [Configure](/cli/configure), [Onboarding Overview](/start/onboarding-overview)</div>
@@ -86024,7 +86196,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Plugin and Channel Setup</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Onboard](/cli/onboard), [Plugins](/cli/plugins), [Channels](/cli/channels)</div>
@@ -86034,7 +86206,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Service Management</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Gateway](/cli/gateway), [Updating](/install/updating), [Troubleshooting](/gateway/troubleshooting)</div>
@@ -86044,7 +86216,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">CLI Observability</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Status](/cli/status), [Health](/cli/health), [Logs](/cli/logs), [Diagnostics](/gateway/diagnostics)</div>
@@ -86054,7 +86226,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Doctor</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Doctor](/cli/doctor), [Doctor](/gateway/doctor), [Secrets](/gateway/secrets), [Troubleshooting](/gateway/troubleshooting)</div>
@@ -86064,7 +86236,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Updates and Upgrades</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Updating](/install/updating), [Update](/cli/update), [Troubleshooting](/gateway/troubleshooting)</div>
@@ -86078,7 +86250,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core architecture, auth, pairing, protocol docs, daemon docs, and CLI runbooks are broad and current.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 3%</span><span>Quality Stable - 81%</span><span>Completeness Stable - 89%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 12</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 6%</span><span>Quality Stable - 81%</span><span>Completeness Stable - 89%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 12</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86087,7 +86259,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Approvals and Remote Execution</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Index](/gateway/security/index)</div>
@@ -86097,7 +86269,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">HTTP APIs</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/index), [Openai Http Api](/gateway/openai-http-api), [Openresponses Http Api](/gateway/openresponses-http-api), [Tools Invoke Http Api](/gateway/tools-invoke-http-api), [Hooks](/automation/hooks), [Index](/web/index)</div>
@@ -86107,7 +86279,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Hosted Web Surface</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Canvas](/refactor/canvas)</div>
@@ -86117,7 +86289,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway RPC APIs and Events</span>
           <span>20 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Index](/gateway/index), [Architecture](/concepts/architecture)</div>
@@ -86127,7 +86299,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Device Auth and Pairing</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Pairing](/gateway/pairing), [Index](/gateway/security/index)</div>
@@ -86137,7 +86309,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Network Access and Discovery</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/index), [Discovery](/gateway/discovery), [Protocol](/gateway/protocol)</div>
@@ -86147,7 +86319,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Nodes and Remote Capabilities</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Architecture](/concepts/architecture), [Index](/nodes/index)</div>
@@ -86157,7 +86329,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Health, Diagnostics, and Repair</span>
           <span>7 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/index), [Diagnostics](/gateway/diagnostics), [Doctor](/gateway/doctor)</div>
@@ -86167,7 +86339,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Protocol Compatibility</span>
           <span>7 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Architecture](/concepts/architecture), [Typebox](/concepts/typebox), [Bridge Protocol](/gateway/bridge-protocol)</div>
@@ -86177,7 +86349,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Roles and Permissions</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Index](/gateway/security/index)</div>
@@ -86187,7 +86359,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Lifecycle</span>
           <span>7 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/index), [Architecture](/concepts/architecture)</div>
@@ -86197,7 +86369,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Security Controls</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/gateway/security/index), [Protocol](/gateway/protocol), [Discovery](/gateway/discovery)</div>
@@ -86207,7 +86379,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">WebSocket Connection</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>13%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "13%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">[Protocol](/gateway/protocol), [Architecture](/concepts/architecture)</div>
@@ -86221,7 +86393,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Main loop, models, provider routing, and tool streaming are first-class, but provider behavior shifts weekly and needs scenario proof per release.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Beta - 78%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 33%</span><span>Quality Beta - 78%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86230,7 +86402,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Agent Turn Execution</span>
           <span>3 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Agent Loop](/concepts/agent-loop), [Agent](/cli/agent), [Agent Runtimes](/concepts/agent-runtimes)</div>
@@ -86240,7 +86412,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">External Runtimes and Subagents</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Agent Runtimes](/concepts/agent-runtimes), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)</div>
@@ -86250,7 +86422,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Hosted Provider Execution</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Models](/concepts/models)</div>
@@ -86260,7 +86432,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Local and Self-hosted Providers</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Ollama](/providers/ollama), [Models](/concepts/models), [Agent](/cli/agent)</div>
@@ -86270,7 +86442,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Model and Runtime Selection</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Models](/concepts/models), [Models](/cli/models), [Openai](/providers/openai), [Agent Runtimes](/concepts/agent-runtimes)</div>
@@ -86280,7 +86452,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Provider Auth</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>24%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "24%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Models](/concepts/models), [Agent](/cli/agent), [Models](/cli/models), [Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)</div>
@@ -86290,7 +86462,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Streaming and Progress</span>
           <span>2 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>56%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "56%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Streaming](/concepts/streaming), [Agent Loop](/concepts/agent-loop)</div>
@@ -86300,7 +86472,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Calls and Response Handling</span>
           <span>3 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>65%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "65%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Agent Loop](/concepts/agent-loop), [Ollama](/providers/ollama)</div>
@@ -86310,7 +86482,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Execution Controls</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Agent Loop](/concepts/agent-loop), [Subagents](/tools/subagents)</div>
@@ -86324,7 +86496,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 77%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 30%</span><span>Quality Beta - 77%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86343,7 +86515,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Token Management</span>
           <span>3 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Compaction](/concepts/compaction), [Context](/concepts/context), [Session Management Compaction](/reference/session-management-compaction)</div>
@@ -86353,7 +86525,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Context Engine</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>57%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "57%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Context](/concepts/context), [Context Engine](/concepts/context-engine), [Codex Context Engine Harness](/plan/codex-context-engine-harness)</div>
@@ -86363,7 +86535,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Cross-client History and Session Parity</span>
           <span>2 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Webchat](/web/webchat), [Android](/platforms/android), [Channel Routing](/channels/channel-routing)</div>
@@ -86373,7 +86545,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Diagnostics, Maintenance, and Recovery</span>
           <span>3 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Diagnostics](/gateway/diagnostics), [Session Management Compaction](/reference/session-management-compaction), [Flags](/diagnostics/flags)</div>
@@ -86383,7 +86555,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Core Prompts and Context</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>38%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "38%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Context](/concepts/context), [Transcript Hygiene](/reference/transcript-hygiene), [Discord](/channels/discord)</div>
@@ -86393,7 +86565,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Memory</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>46%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "46%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Memory Config](/reference/memory-config), [Memory Qmd](/concepts/memory-qmd), [Memory](/concepts/memory), [Discord](/channels/discord)</div>
@@ -86403,7 +86575,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Session Routing</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Session](/concepts/session), [Channel Routing](/channels/channel-routing), [Discord](/channels/discord)</div>
@@ -86427,7 +86599,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Many channels share Gateway delivery and routing contracts, but channel behavior varies by upstream API and account-policy constraints.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 76%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 13%</span><span>Quality Beta - 76%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86446,7 +86618,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Channel Setup</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/channels/index), [Pairing](/channels/pairing), [Troubleshooting](/channels/troubleshooting), [Sdk Channel Plugins](/plugins/sdk-channel-plugins)</div>
@@ -86456,7 +86628,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Group Thread and Ambient Room Behavior</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>36%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "36%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Groups](/channels/groups), [Group Messages](/channels/group-messages), [Ambient Room Events](/channels/ambient-room-events), [Broadcast Groups](/channels/broadcast-groups), [Discord](/channels/discord)</div>
@@ -86486,7 +86658,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Outbound Delivery and Reply Pipeline</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>38%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "38%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Groups](/channels/groups), [Ambient Room Events](/channels/ambient-room-events), [Discord](/channels/discord), [Matrix](/channels/matrix), [Config Channels](/gateway/config-channels)</div>
@@ -86496,7 +86668,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Conversation Routing and Delivery</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Channel Routing](/channels/channel-routing), [Groups](/channels/groups), [Discord](/channels/discord), [Matrix](/channels/matrix), [Troubleshooting](/channels/troubleshooting), [Configuration Reference](/gateway/configuration-reference)</div>
@@ -86520,7 +86692,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     OTel, Prometheus, logging, and diagnostics docs exist. Needs a public "what operators should look at first" maturity pass.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 6%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 18%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86529,7 +86701,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Health and Repair</span>
           <span>12 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>28%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "28%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Health](/gateway/health), [Telegram](/channels/telegram), [Doctor](/cli/doctor), [Doctor](/gateway/doctor), [Sdk Subpaths](/plugins/sdk-subpaths), [Health](/cli/health), [Protocol](/gateway/protocol)</div>
@@ -86539,7 +86711,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Logging</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Logging](/logging), [Logging](/gateway/logging), [Logs](/cli/logs)</div>
@@ -86549,7 +86721,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Diagnostic Collection</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Diagnostics](/gateway/diagnostics), [Health](/gateway/health), [Codex Harness](/plugins/codex-harness), [Protocol](/gateway/protocol)</div>
@@ -86559,7 +86731,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Telemetry Export</span>
           <span>13 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Hooks](/plugins/hooks), [Opentelemetry](/gateway/opentelemetry), [Logging](/logging), [Sdk Subpaths](/plugins/sdk-subpaths), [Diagnostics Otel](/plugins/reference/diagnostics-otel), [Prometheus](/gateway/prometheus), [Diagnostics Prometheus](/plugins/reference/diagnostics-prometheus)</div>
@@ -86569,7 +86741,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Session Diagnostics</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Opentelemetry](/gateway/opentelemetry), [Prometheus](/gateway/prometheus), [Diagnostics](/gateway/diagnostics), [Protocol](/gateway/protocol)</div>
@@ -86583,7 +86755,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Web UI is documented with pairing, chat, PWA, Talk, push, and remote Gateway flows. Promote after cross-browser and mobile-PWA scorecards.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 4%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86622,7 +86794,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser UI</span>
           <span>10 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Control Ui](/web/control-ui), [Index](/web/index), [Dashboard](/web/dashboard), [Protocol](/gateway/protocol)</div>
@@ -86632,7 +86804,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">WebChat Conversations</span>
           <span>15 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>10%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "10%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Control Ui](/web/control-ui), [Webchat](/web/webchat), [Getting Started](/start/getting-started), [Channel Routing](/channels/channel-routing), [Secure File Operations](/gateway/security/secure-file-operations)</div>
@@ -86642,7 +86814,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Operator Console</span>
           <span>10 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Control Ui](/web/control-ui), [Health](/gateway/health), [Protocol](/gateway/protocol), [Dashboard](/web/dashboard)</div>
@@ -86656,7 +86828,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Broad docs and strong internal runtime evidence exist across manifests, discovery, loading, provider/tool architecture, and approval boundaries. Keep the row at beta until public SDK API/subpaths and external distribution proof are stronger.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 7</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 12%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 7</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86665,7 +86837,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Authoring and Packaging plugins</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Building Plugins](/plugins/building-plugins), [Sdk Overview](/plugins/sdk-overview), [Sdk Entrypoints](/plugins/sdk-entrypoints), [Sdk Subpaths](/plugins/sdk-subpaths), [Manifest](/plugins/manifest), [Reference](/plugins/reference)</div>
@@ -86675,7 +86847,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Bundled plugins</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Plugin Inventory](/plugins/plugin-inventory), [Plugins](/cli/plugins), [Architecture Internals](/plugins/architecture-internals)</div>
@@ -86685,7 +86857,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Canvas plugin</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Canvas](/plugins/reference/canvas), [Canvas](/refactor/canvas), [Configuration Reference](/gateway/configuration-reference)</div>
@@ -86695,7 +86867,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Installing and running plugins</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>35%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "35%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Architecture](/plugins/architecture), [Architecture Internals](/plugins/architecture-internals), [Plugins](/cli/plugins)</div>
@@ -86705,7 +86877,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Channel plugins</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Sdk Channel Plugins](/plugins/sdk-channel-plugins), [Sdk Channel Inbound](/plugins/sdk-channel-inbound), [Sdk Channel Outbound](/plugins/sdk-channel-outbound)</div>
@@ -86715,7 +86887,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Provider and tool plugins</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>43%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "43%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Sdk Provider Plugins](/plugins/sdk-provider-plugins), [Tool Plugins](/plugins/tool-plugins), [Adding Capabilities](/plugins/adding-capabilities)</div>
@@ -86725,7 +86897,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Plugin approvals</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Plugin Permission Requests](/plugins/plugin-permission-requests), [Exec Approvals](/tools/exec-approvals), [Sdk Channel Plugins](/plugins/sdk-channel-plugins)</div>
@@ -86735,7 +86907,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Publishing plugins</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Plugins](/cli/plugins), [Compatibility](/plugins/compatibility), [Publishing](/clawhub/publishing)</div>
@@ -86745,7 +86917,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Testing plugins</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>27%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "27%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Sdk Testing](/plugins/sdk-testing), [Sdk Setup](/plugins/sdk-setup), [Codex Harness](/plugins/codex-harness)</div>
@@ -86759,7 +86931,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Good docs and hardening surfaces exist. Promote after regular upgrade/security scenario runs prove no setup regressions.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 16%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86768,7 +86940,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Approval Policy and Tool Safeguards</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Exec Approvals](/tools/exec-approvals), [Approvals](/cli/approvals), [Plugin Permission Requests](/plugins/plugin-permission-requests), [Audit Checks](/gateway/security/audit-checks)</div>
@@ -86818,7 +86990,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Credential and Secret Hygiene</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>46%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "46%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Authentication](/gateway/authentication), [Models](/cli/models), [Openai](/providers/openai), [Oauth](/concepts/oauth), [Secrets](/gateway/secrets), [Secrets](/cli/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Audit Checks](/gateway/security/audit-checks)</div>
@@ -86832,7 +87004,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86881,7 +87053,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Heartbeat</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Index](/automation/index), [Heartbeat](/gateway/heartbeat), [Commitments](/concepts/commitments)</div>
@@ -86905,7 +87077,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Broad capability surface exists, but provider variance, file limits, and node/app parity make this not stable yet.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 1%</span><span>Quality Alpha - 64%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Alpha - 64%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -86914,7 +87086,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Intake and Access</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">[Media Overview](/tools/media-overview), [Media Understanding](/nodes/media-understanding), [Secure File Operations](/gateway/security/secure-file-operations), [Pdf](/tools/pdf), [Image Generation](/tools/image-generation), [Qr](/cli/qr), [Line](/channels/line), [Whatsapp](/channels/whatsapp)</div>
@@ -86924,7 +87096,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Channel Media Handling</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">[Images](/nodes/images), [Media Overview](/tools/media-overview), [Discord](/channels/discord)</div>
@@ -86934,7 +87106,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Configuration</span>
           <span>1 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">[Media Overview](/tools/media-overview), [Image Generation](/tools/image-generation), [Manifest](/plugins/manifest), [Codex Harness](/plugins/codex-harness)</div>
@@ -86944,7 +87116,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Text-to-Speech Delivery</span>
           <span>2 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">[Tts](/tools/tts), [Media Overview](/tools/media-overview), [Discord](/channels/discord)</div>
@@ -86954,7 +87126,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Understanding</span>
           <span>12 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-category-docs">[Audio](/nodes/audio), [Media Understanding](/nodes/media-understanding), [Media Overview](/tools/media-overview), [Whatsapp](/channels/whatsapp), [Images](/nodes/images), [Infer](/cli/infer), [Pdf](/tools/pdf)</div>
@@ -86964,7 +87136,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Generation</span>
           <span>17 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>1%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "1%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-category-docs">[Image Generation](/tools/image-generation), [Media Overview](/tools/media-overview), [Skills](/tools/skills), [Music Generation](/tools/music-generation), [Video Generation](/tools/video-generation)</div>
@@ -87167,7 +87339,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Alpha - 54%</span><span>Completeness Alpha - 53%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 3%</span><span>Quality Alpha - 54%</span><span>Completeness Alpha - 53%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -87216,7 +87388,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Resource Helpers</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>62%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "62%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps)</div>
@@ -87391,7 +87563,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 5%</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 7%</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -87400,7 +87572,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Container Setup</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Docker](/install/docker), [Podman](/install/podman)</div>
@@ -87410,7 +87582,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Container Operations</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger)</div>
@@ -87420,7 +87592,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Image Release and Validation</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation)</div>
@@ -87430,7 +87602,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Agent Sandbox and Tooling</span>
           <span>3 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime)</div>
@@ -87444,7 +87616,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Recommended Windows path with systemd/user-service guidance and boot-chain docs. Promote after repeated install/update scorecards.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 3%</span><span>Quality Alpha - 69%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 6%</span><span>Quality Alpha - 69%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -87453,7 +87625,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">WSL Setup</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Windows](/platforms/windows), [Getting Started](/start/getting-started)</div>
@@ -87463,7 +87635,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">CLI</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Windows](/platforms/windows), [Getting Started](/start/getting-started), [Updating](/install/updating), [Onboard](/cli/onboard), [Doctor](/cli/doctor), [Status](/cli/status), [Logs](/cli/logs)</div>
@@ -87473,7 +87645,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Service Lifecycle</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Windows](/platforms/windows), [Index](/gateway/index), [Doctor](/gateway/doctor)</div>
@@ -87483,7 +87655,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Access and Exposure</span>
           <span>11 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Authentication](/gateway/authentication), [Secrets](/gateway/secrets), [Remote](/gateway/remote), [Exposure Runbook](/gateway/security/exposure-runbook), [Windows](/platforms/windows)</div>
@@ -87493,7 +87665,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Diagnostics and Repair</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>38%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "38%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Windows](/platforms/windows), [Status](/cli/status), [Logs](/cli/logs), [Doctor](/cli/doctor), [Doctor](/gateway/doctor)</div>
@@ -87503,7 +87675,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser and Control UI</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Browser Wsl2 Windows Remote Cdp Troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting), [Browser](/tools/browser), [Control Ui](/web/control-ui)</div>
@@ -88963,7 +89135,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core tools are documented, but host security and permission UX should stay under active scorecard review.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 15%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 2</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 21%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 2</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -88972,7 +89144,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser Automation</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>13%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "13%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Browser Control](/tools/browser-control), [Testing](/help/testing), [Browser](/tools/browser), [Index](/gateway/security/index), [Audit Checks](/gateway/security/audit-checks)</div>
@@ -88982,7 +89154,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Invocation and Execution</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Exec](/tools/exec), [Background Process](/gateway/background-process), [Tools Invoke Http Api](/gateway/tools-invoke-http-api), [Operator Scopes](/gateway/operator-scopes), [Protocol](/gateway/protocol), [Exec Approvals](/tools/exec-approvals), [Exec Approvals Advanced](/tools/exec-approvals-advanced), [Elevated](/tools/elevated)</div>
@@ -88992,7 +89164,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Sandbox and Tool Policy</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Sandboxing](/gateway/sandboxing), [Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Multi Agent Sandbox Tools](/tools/multi-agent-sandbox-tools), [Codex Harness Reference](/plugins/codex-harness-reference), [Config Tools](/gateway/config-tools)</div>
@@ -89006,7 +89178,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Deep docs, OAuth/subscription path, realtime voice, image, and compatibility behavior. Provider churn keeps this from Stable without release-scorecard proof.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 8%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 26%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -89015,7 +89187,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Model and Auth</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>44%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "44%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openai](/providers/openai), [Codex Harness](/plugins/codex-harness), [Models](/concepts/models), [Oauth](/concepts/oauth), [Codex Harness Reference](/plugins/codex-harness-reference), [Auth Monitoring](/automation/auth-monitoring)</div>
@@ -89025,7 +89197,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Responses and Tool Compatibility</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openai](/providers/openai), [Openresponses Http Api](/gateway/openresponses-http-api), [Openai Http Api](/gateway/openai-http-api), [Codex Native Plugins](/plugins/codex-native-plugins)</div>
@@ -89035,7 +89207,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Native Codex Harness</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>44%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "44%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Codex Harness](/plugins/codex-harness), [Codex Harness Runtime](/plugins/codex-harness-runtime), [Codex Harness Reference](/plugins/codex-harness-reference), [Codex Native Plugins](/plugins/codex-native-plugins)</div>
@@ -89045,7 +89217,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Image and Multimodal Input</span>
           <span>2 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openai](/providers/openai), [Image Generation](/tools/image-generation), [Images](/nodes/images)</div>
@@ -89055,7 +89227,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Voice and Realtime Audio</span>
           <span>2 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Openai](/providers/openai), [Discord](/channels/discord), [Voice Call](/plugins/voice-call)</div>
@@ -89069,7 +89241,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Multiple providers and docs exist. Needs quota/error/SSRF proof per provider family.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 7%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 9%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -89078,7 +89250,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Search Providers</span>
           <span>19 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>11%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "11%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Web](/tools/web), [Brave Search](/tools/brave-search), [Tavily](/tools/tavily), [Exa Search](/tools/exa-search), [Firecrawl](/tools/firecrawl), [Perplexity Search](/tools/perplexity-search), [Duckduckgo Search](/tools/duckduckgo-search), [Searxng Search](/tools/searxng-search), [Gemini Search](/tools/gemini-search), [Grok Search](/tools/grok-search), [Kimi Search](/tools/kimi-search), [Minimax Search](/tools/minimax-search), [Ollama Search](/tools/ollama-search), [Sdk Subpaths](/plugins/sdk-subpaths), [Sdk Overview](/plugins/sdk-overview), [Manifest](/plugins/manifest)</div>
@@ -89088,7 +89260,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Setup and Diagnostics</span>
           <span>9 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Web](/tools/web), [Web Fetch](/tools/web-fetch), [Faq](/help/faq), [Api Usage Costs](/reference/api-usage-costs), [Brave Search](/tools/brave-search), [Perplexity Search](/tools/perplexity-search), [Tavily](/tools/tavily), [Firecrawl](/tools/firecrawl)</div>
@@ -89098,7 +89270,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Network Safety</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Web](/tools/web), [Web Fetch](/tools/web-fetch), [Firecrawl](/tools/firecrawl), [Searxng Search](/tools/searxng-search)</div>
@@ -89108,7 +89280,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Availability and Fetch</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">[Config Tools](/gateway/config-tools), [Web Fetch](/tools/web-fetch), [Web](/tools/web), [Faq](/help/faq)</div>
@@ -101048,8 +101220,65 @@ The harness advertises support for the canonical `github-copilot` provider
 
 - `github-copilot`
 
-Anything outside that set falls through `selection.ts`'s `auto_pi` branch back
-to PI.
+It also supports custom `models.providers` entries when the selected model has
+a non-empty `baseUrl` and one of these API shapes:
+
+- `openai-responses`
+- `openai-completions`
+- `ollama` (OpenAI-compatible completions)
+- `azure-openai-responses`
+- `anthropic-messages`
+
+Native provider ids such as `openai`, `anthropic`, `google`, and `ollama` remain
+owned by their native runtimes. Use a distinct custom provider id when routing
+an endpoint through Copilot BYOK.
+
+Copilot BYOK endpoints must be public-network HTTPS URLs. The harness gives the
+Copilot SDK a per-attempt loopback proxy URL, then forwards provider traffic
+through OpenClaw's guarded fetch path so DNS pinning and SSRF policy stay
+owned by OpenClaw. Use the native OpenClaw runtime for local Ollama, LM Studio,
+or LAN model servers.
+
+## BYOK
+
+Copilot BYOK uses the SDK's session-level custom provider contract. OpenClaw
+passes the resolved model endpoint, API key, bearer-token mode, headers, model
+id, and context/output limits without moving provider transport logic into
+core.
+
+For example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "custom-proxy/llama-3.1-8b",
+      models: {
+        "custom-proxy/llama-3.1-8b": {
+          agentRuntime: { id: "copilot" },
+        },
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "custom-proxy": {
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "${CUSTOM_PROXY_API_KEY}",
+        api: "openai-responses",
+        authHeader: true,
+        models: [{ id: "llama-3.1-8b", name: "Llama 3.1 8B" }],
+      },
+    },
+  },
+}
+```
+
+BYOK sessions are separately keyed from subscription sessions and from other
+endpoints or credential fingerprints. Rotating the key, headers, model, or
+endpoint creates a fresh Copilot SDK session instead of resuming incompatible
+state.
 
 ## Auth
 
@@ -101096,10 +101325,11 @@ Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
 Live harness tests use `OPENCLAW_COPILOT_AGENT_LIVE_TOKEN` when a direct token
-is needed. The shared live-test setup intentionally scrubs `COPILOT_GITHUB_TOKEN`,
-`GH_TOKEN`, and `GITHUB_TOKEN` after staging real auth profiles into the isolated
-test home, so passing a `gh auth token` value through the dedicated live-test
-variable avoids false skips without exposing the token to unrelated suites.
+is needed. The shared live-test setup intentionally scrubs
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` after staging real auth
+profiles into the isolated test home, so passing a `gh auth token` value
+through the dedicated live-test variable avoids false skips without exposing
+the token to unrelated suites.
 
 ## Configuration surface
 
@@ -101108,9 +101338,9 @@ The harness reads its config from per-attempt input
 `extensions/copilot/src/`:
 
 - `copilotHome` — per-agent CLI state directory (defaults documented above).
-- `model` — string or `{ provider, id, api? }`. When omitted, OpenClaw uses
-  the agent's normal model selection and the harness verifies the resolved
-  provider is in the supported set.
+- `model` — string or `{ provider, id, api?, baseUrl?, headers?, authHeader? }`.
+  When omitted, OpenClaw uses the agent's normal model selection and the
+  harness verifies the resolved provider is supported.
 - `reasoningEffort` — `"low" | "medium" | "high" | "xhigh"`. Maps from
   OpenClaw's `ThinkLevel` / `ReasoningLevel` resolution in
   `auto-reply/thinking.ts`.
@@ -101197,9 +101427,9 @@ under `describe("runSideQuestion")`.
 
 ## Limitations
 
-- The harness only claims the canonical `github-copilot` provider at MVP.
-  Additional providers (BYOK or otherwise) should land in follow-up PRs that
-  ship the adapter alongside the wire-up.
+- The harness claims `github-copilot` plus unowned custom BYOK provider ids.
+  Manifest-owned native provider ids stay on their owning runtime even when
+  `agentRuntime.id` is forced to `copilot`.
 - The harness does not deliver TUI; PI's TUI is unaffected and remains the
   fallback for whatever runtimes do not have a peer surface.
 - PI session state is not migrated when an agent switches to `copilot`.
@@ -120371,9 +120601,12 @@ Anthropic's current public docs:
 
     <Warning>
     Claude CLI reuse expects the OpenClaw process to run on the same host as the
-    Claude CLI login. Container installs such as [Podman](/install/podman) do
-    not mount host `~/.claude` into setup or runtime; use an Anthropic API key
-    there, or choose a provider with OpenClaw-managed OAuth such as
+    Claude CLI login. Docker installs can persist a container home and log in to
+    Claude Code there; see
+    [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
+    Other container installs such as [Podman](/install/podman) do not mount host
+    `~/.claude` into setup or runtime; use an Anthropic API key there, or choose
+    a provider with OpenClaw-managed OAuth such as
     [OpenAI Codex](/providers/openai).
     </Warning>
 
@@ -143417,6 +143650,7 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `mode`: `enforce` (default) or `warn`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
+- Short-lived gateway model-run probe retention is fixed at `24h`, but it is pressure-gated: it only removes stale strict probe rows when session-entry maintenance/cap pressure is reached. This applies only to strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` and runs before global stale-entry cleanup/capping when it runs.
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
@@ -143426,7 +143660,12 @@ Normal Gateway writes flow through a per-store session writer that serializes in
 Maintenance keeps durable external conversation pointers such as group sessions
 and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
 heartbeat, ACP, and sub-agents can still be removed when they exceed the
-configured age, count, or disk budget.
+configured age, count, or disk budget. Gateway model-run probe sessions use the
+separate `24h` model-run retention only when their key exactly matches
+`agent:*:explicit:model-run-<uuid>`; other explicit sessions are not part of
+that retention. The model-run cleanup is applied only under session-entry cap
+pressure. Isolated cron runs keep their own `cron.sessionRetention` control,
+independent of model-run probe retention.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
@@ -144145,6 +144384,8 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
+  - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+    override so the session re-inherits the configured default.
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
@@ -162493,7 +162734,7 @@ plugins.
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
-    | `/usage off\|tokens\|full\|cost` | Control the per-response usage footer or print a local cost summary |
+    | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
   </Accordion>
 
   <Accordion title="Skills, allowlists, approvals">
@@ -167711,7 +167952,7 @@ Session controls:
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
-- `/usage <off|tokens|full>`
+- `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
 - `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
