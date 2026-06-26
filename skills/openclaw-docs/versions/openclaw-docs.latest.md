@@ -22131,16 +22131,30 @@ OpenClaw agent or Gateway.
 ```bash
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
+openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills verify @owner/<slug>
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec>
 ```
 
 Skill installs target the active workspace `skills/` directory by default. Add
 `--global` to install into the shared managed skills directory.
+
+OpenClaw checks the selected community ClawHub skill or plugin trust state
+before downloading it. Versioned community skill and plugin releases use
+exact-release trust metadata; resolver-backed GitHub skills rely on ClawHub's
+install resolver to enforce scan and force-install policy before it returns a
+pinned commit. Malicious or blocked community releases are refused. Risky
+community releases require review and `--acknowledge-clawhub-risk` when a
+non-interactive command should continue after that review.
+
+Official ClawHub publishers/packages and bundled OpenClaw sources bypass this
+release-trust prompt and security-verdict fetch during install and update.
 
 Plugin installs use the `clawhub:` prefix when you want ClawHub resolution
 instead of npm or another install source.
@@ -25897,6 +25911,7 @@ openclaw doctor
 openclaw doctor --lint
 openclaw doctor --lint --json
 openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --deep
 openclaw doctor --fix
@@ -25930,6 +25945,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
 - `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
+- `--all`: with `--lint`, run all registered checks, including opt-in checks excluded from the default automation set
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
 
@@ -25939,13 +25955,14 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 It uses the structured health-check path, does not prompt, and does not repair
 or rewrite config/state. Use it in CI, preflight scripts, and review workflows
 when you want machine-readable findings instead of guided repair prompts.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and `--skip`
 are only accepted with `--lint`.
 
 ```bash
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --lint --only core/doctor/gateway-config --json
 ```
@@ -25986,6 +26003,13 @@ Exit behavior:
 `--severity-min` controls both visible findings and the exit threshold. For
 example, `openclaw doctor --lint --severity-min error` can print no findings and
 exit `0` even when lower-severity `info` or `warning` findings exist.
+
+`--all` controls which checks are selected before severity filtering. The
+default lint run is the stable automation gate and excludes checks that are
+intentionally opt-in because they are deep, historical, or more likely to
+surface repairable legacy residue. Use `--all` when you want the complete lint
+inventory without listing each check id. `--only <id>` remains the most precise
+selector and can run any registered check by id.
 
 ## Structured Health Checks
 
@@ -26043,6 +26067,7 @@ Use `--only` and `--skip` when a workflow wants a focused gate:
 ```bash
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
+openclaw doctor --lint --all --skip core/doctor/session-locks
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only`
@@ -31216,6 +31241,7 @@ openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
@@ -31267,6 +31293,12 @@ is available, then fall back to `latest`.
     Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
+
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk">
+    Community ClawHub installs check the selected release trust record before downloading the package. If ClawHub disables download for the release, reports malicious scan findings, or puts the release in a blocking moderation state such as quarantine, OpenClaw refuses the release. For non-blocking risky scan statuses, risky moderation states, or registry reasons, OpenClaw shows the trust details and asks for confirmation before continuing.
+
+    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale clean trust records warn but do not require acknowledgement. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -31495,6 +31527,7 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
+openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
@@ -31504,13 +31537,17 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
+
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
     Passing the npm package name without a version or tag also resolves back to the tracked plugin record. Use this when a plugin was pinned to an exact version and you want to move it back to the registry's default release line.
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the configured `update.channel` when it syncs trusted official plugin records to the official catalog target, so beta-channel installs can stay on the beta release line instead of being silently normalized to stable/latest.
+
+    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
@@ -31521,6 +31558,9 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
     `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk on update">
+    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
   </Accordion>
 </AccordionGroup>
 
@@ -33706,9 +33746,11 @@ openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
+openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
@@ -33772,6 +33814,14 @@ Notes:
 - `install --version <version>` applies only to ClawHub skill refs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
+- Community ClawHub skill installs and updates check trust before downloading.
+  Versioned community archive releases use exact-release trust metadata.
+  Resolver-backed GitHub skills rely on ClawHub's install resolver to enforce
+  scan and force-install policy before it returns a pinned commit. Malicious or
+  blocked community releases are refused. Risky community releases require
+  review and `--acknowledge-clawhub-risk` when a non-interactive command should
+  continue after that review. Official ClawHub skill publishers and bundled
+  OpenClaw skill sources bypass this release-trust prompt.
 - `--global` targets the shared managed skills directory and cannot be combined
   with `--agent <id>`.
 - `--agent <id>` targets one configured agent workspace and overrides current
@@ -34434,6 +34484,7 @@ openclaw update --tag main
 openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
+openclaw update --acknowledge-clawhub-risk
 openclaw update --json
 openclaw --update
 ```
@@ -34451,6 +34502,11 @@ openclaw --update
   when npm plugin artifact drift is detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
+- `--acknowledge-clawhub-risk`: after reviewing community ClawHub trust
+  warnings, allow post-update plugin sync to continue without an interactive
+  prompt. Without this, risky community ClawHub plugin releases are skipped and
+  left unchanged when OpenClaw cannot prompt. Official ClawHub packages and
+  bundled OpenClaw plugin sources bypass this release-trust prompt.
 
 `openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
 the planned channel/tag/install/restart actions, `--json` for machine-readable
@@ -34494,6 +34550,7 @@ converge.
 ```bash
 openclaw update repair
 openclaw update repair --channel beta
+openclaw update repair --acknowledge-clawhub-risk
 openclaw update repair --json
 ```
 
@@ -34504,6 +34561,10 @@ Options:
 - `--json`: print machine-readable finalization JSON.
 - `--timeout <seconds>`: timeout for repair steps (default `1800`).
 - `--yes`: skip confirmation prompts.
+- `--acknowledge-clawhub-risk`: after reviewing community ClawHub trust
+  warnings, allow repair-time plugin convergence to continue without an
+  interactive prompt. Official ClawHub packages and bundled OpenClaw plugin
+  sources bypass this release-trust prompt.
 - `--no-restart`: accepted for update command parity; repair never restarts the
   Gateway.
 
@@ -36589,7 +36650,7 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedAgent` abort timer.
 - Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
 - Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; owned silent model calls also stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not reported as stalled too early. Active work with no recent progress reports as `session.stalled`; owned model calls switch to `session.stalled` at or after the abort threshold, and ownerless stale model/tool activity is not hidden as long-running. `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
-- Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but it is still bounded by any lower `agents.defaults.timeoutSeconds` or run-specific timeout because those control the whole agent run. Otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered cloud model runs with no explicit model or agent timeout use the same default idle watchdog; cron-triggered local or self-hosted model runs disable the implicit watchdog unless an explicit timeout is configured, so slow local providers should set `models.providers.<id>.timeoutSeconds`.
+- Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but it is still bounded by any lower `agents.defaults.timeoutSeconds` or run-specific timeout because those control the whole agent run. Otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered cloud model runs with no explicit model or agent timeout use the same default idle watchdog; with an explicit cron run timeout, cloud model stream stalls are capped at 60s so configured model fallbacks can run before the outer cron deadline. Cron-triggered local or self-hosted model runs disable the implicit watchdog unless an explicit timeout is configured, and explicit cron run timeouts remain the idle window for local/self-hosted providers, so slow local providers should set `models.providers.<id>.timeoutSeconds`.
 - Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout, and keep the agent/runtime timeout at least as high when the model request needs to run longer.
 
 ## Where things can end early
@@ -57851,6 +57912,7 @@ Examples:
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
+openclaw doctor --lint --all
 openclaw doctor --lint --only core/doctor/gateway-config --json
 ```
 
@@ -57858,7 +57920,7 @@ JSON output includes:
 
 - `ok`: whether any visible finding met the selected severity threshold
 - `checksRun`: number of health checks executed
-- `checksSkipped`: checks skipped by `--only` or `--skip`
+- `checksSkipped`: checks skipped by the selected profile, `--only`, or `--skip`
 - `findings`: structured diagnostics with `checkId`, `severity`, `message`, and
   optional `path`, `line`, `column`, `ocPath`, and `fixHint`
 
@@ -57869,11 +57931,13 @@ Exit codes:
 - `2`: command/runtime failure before lint findings could be emitted
 
 Use `--severity-min info|warning|error` to control both what is printed and what
-causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
+causes a non-zero lint exit. Use `--all` to run the complete lint inventory,
+including deeper opt-in checks excluded from the default automation set. Use `--only <id>` for narrow preflight gates and
 `--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
 lint run active.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
-must be paired with `--lint`; regular doctor and repair runs reject them.
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and
+`--skip` must be paired with `--lint`; regular doctor and repair runs reject
+them.
 
 ## What it does (summary)
 
@@ -96557,6 +96621,10 @@ outbound host generic and use the messaging adapter surface for provider rules:
   should be treated as `direct`, `group`, or `channel` before directory lookup.
 - `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
   input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.reservedLiterals` lists bare words that are
+  channel/session references for that provider. Resolution preserves configured
+  directory entries before rejecting reserved literals, then fails closed on a
+  directory miss.
 - `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
   core needs a final provider-owned resolution after normalization or after a
   directory miss.
@@ -98653,6 +98721,17 @@ before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected chat
 before testing if an existing Codex thread has already started.
 
+On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
+bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
+That keeps Computer Use under the app bundle that owns the local desktop-control
+permissions. If the desktop app is not installed, OpenClaw falls back to the
+managed Codex binary installed beside the plugin. If an installed desktop app
+initializes with an unsupported app-server version, OpenClaw closes that child
+and retries the next managed binary candidate instead of letting a stale
+desktop app shadow the plugin-local fallback. Explicit `appServer.command`
+config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides this managed
+selection.
+
 ## Commands
 
 Use the `/codex computer-use` commands from any chat surface where the `codex`
@@ -98814,7 +98893,13 @@ Codex app-server MCP status, or macOS permissions.
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and MCP
 server are present, but the local Computer Use bridge did not answer. Quit or
 restart Codex Computer Use, relaunch Codex Desktop if needed, then retry in a
-fresh OpenClaw session.
+fresh OpenClaw session. If the host previously ran Computer Use through an older
+managed Codex app-server, refresh the installed plugin from the desktop bundled
+marketplace:
+
+```text
+/codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+```
 
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
 tool hook could not reach an active OpenClaw relay through the local bridge or
@@ -98995,9 +99080,13 @@ shorthand before OpenClaw builds app-server start options, and unresolved
 structured SecretRefs fail before any token or header is sent. When native Codex
 plugins are configured, OpenClaw uses the connected app-server's plugin control
 plane to install or refresh those plugins and then refreshes app inventory so
-plugin-owned apps are visible to the Codex thread. Only connect OpenClaw to
-remote app-servers that are trusted to accept OpenClaw-managed plugin installs
-and app inventory refreshes.
+plugin-owned apps are visible to the Codex thread. `app/list` is still the
+authoritative inventory and metadata source, but OpenClaw policy decides whether
+`thread/start` sends `config.apps[appId].enabled = true` for a listed accessible
+app even if Codex currently marks it disabled. Unknown or missing app ids remain
+fail-closed; this path only activates marketplace plugins via `plugin/install`
+and refreshes inventory. Only connect OpenClaw to remote app-servers that are
+trusted to accept OpenClaw-managed plugin installs and app inventory refreshes.
 
 ## Approval and sandbox modes
 
@@ -100118,7 +100207,13 @@ do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
 When native Codex plugins are configured, OpenClaw installs or refreshes those
 plugins through the connected app-server before exposing plugin-owned apps to
-the Codex thread.
+the Codex thread. `app/list` remains the source of truth for app ids,
+accessibility, and metadata, but OpenClaw owns the per-thread enablement
+decision: if policy allows a listed accessible app, OpenClaw sends
+`thread/start.config.apps[appId].enabled = true` even when `app/list` currently
+reports that app disabled. This path does not invent app installation for
+unknown ids; OpenClaw only activates marketplace plugins with `plugin/install`
+and then refreshes inventory.
 
 If a subscription profile hits a Codex usage limit, OpenClaw records the reset
 time when Codex reports one and tries the next ordered auth profile for the same
@@ -104311,6 +104406,13 @@ openclaw plugins update <plugin-id> --dry-run
 When you pass a plugin id, OpenClaw reuses the tracked install spec. Stored
 dist-tags such as `@beta` and exact pinned versions continue to be used on
 later `update <plugin-id>` runs.
+
+`openclaw plugins update --all` is the bulk maintenance path. It still respects
+ordinary tracked install specs, but trusted official OpenClaw plugin records can
+sync to the current official catalog target instead of staying on a stale exact
+official package. If `update.channel` is set to `beta`, that bulk official sync
+uses the beta-channel context. Use a targeted `update <plugin-id>` when you
+intentionally want to keep an exact or tagged official spec untouched.
 
 For npm installs, you can pass an explicit package spec to switch the tracked
 record:
@@ -109542,7 +109644,7 @@ Write colocated tests in `src/channel.test.ts`:
     describeMessageTool and action discovery
   </Card>
   <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
-    inferTargetChatType, looksLikeId, resolveTarget
+    inferTargetChatType, looksLikeId, reservedLiterals, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
