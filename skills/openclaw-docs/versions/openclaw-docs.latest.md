@@ -394,9 +394,9 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Normal CI then packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites; heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU. Pull requests on the canonical repository use an additional compact admission plan: the same per-config groups run in isolated subprocesses inside the current 34-job Linux Node plan, so a single PR does not register the full 70-plus-job Node matrix. `main` pushes, manual dispatches, and release gates retain the full matrix. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
-Once admitted, canonical Linux CI permits up to 12 concurrent Node jobs and 8 for
-the smaller fast/check lanes; Windows and Android stay at two because those
-runner pools are narrower.
+Once admitted, canonical Linux CI permits up to 24 concurrent Node test jobs and
+12 for the smaller fast/check lanes; Windows and Android stay at two because
+those runner pools are narrower.
 
 The compact PR plan emits 18 Node jobs for the current suite: whole-config
 groups are batched in isolated subprocesses with a 120-minute batch timeout,
@@ -449,17 +449,17 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runner registration budget
 
-GitHub caps self-hosted runner registrations at 1,500 runners per 5 minutes per
-repository, organization, or enterprise. The limit is shared by all Blacksmith
-runner registrations in the `openclaw` organization, so adding another
-Blacksmith installation does not add a new bucket.
+OpenClaw's current GitHub runner-registration bucket allows 3,000 self-hosted
+runner registrations per 5 minutes. The limit is shared by all Blacksmith runner
+registrations in the `openclaw` organization, so adding another Blacksmith
+installation does not add a new bucket.
 
 Treat Blacksmith labels as the scarce resource for burst control. Jobs that
 only route, notify, summarize, select shards, or run short CodeQL scans should
 stay on GitHub-hosted runners unless they have measured Blacksmith-specific
 needs. Any new Blacksmith matrix, larger `max-parallel`, or high-frequency
 workflow must show its worst-case registration count and keep the org-level
-target below 1,000 registrations per 5 minutes, leaving headroom for concurrent
+target below 2,000 registrations per 5 minutes, leaving headroom for concurrent
 repositories and retried jobs.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
@@ -31184,8 +31184,9 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
-openclaw plugins init <id>
-openclaw plugins init <id> --directory ./my-plugin --name "My Plugin"
+openclaw plugins init my-tool --name "My Tool"
+openclaw plugins init my-provider --name "My Provider" --type provider
+openclaw plugins init my-provider --name "My Provider" --type provider --directory ./my-provider
 openclaw plugins build --entry ./dist/index.js
 openclaw plugins build --entry ./dist/index.js --check
 openclaw plugins validate --entry ./dist/index.js
@@ -31216,18 +31217,44 @@ npm run plugin:build
 npm run plugin:validate
 ```
 
-`plugins init` creates a minimal TypeScript tool plugin that uses
-`defineToolPlugin`. `plugins build` imports that entry, reads its static tool
-metadata, writes `openclaw.plugin.json`, and keeps `package.json`
-`openclaw.extensions` aligned. `plugins validate` checks that the generated
-manifest, package metadata, and current entry export still agree. See
-[Tool Plugins](/plugins/tool-plugins) for the full authoring workflow.
+`plugins init` creates a minimal TypeScript tool plugin by default. The first
+argument is the plugin id; pass `--name` for the display name. OpenClaw uses the
+id for the default output directory and package naming. Tool scaffolds use
+`defineToolPlugin`.
+`plugins build` imports the built entry, reads its static tool metadata, writes
+`openclaw.plugin.json`, and keeps `package.json` `openclaw.extensions` aligned.
+`plugins validate` checks that the generated manifest, package metadata, and
+current entry export still agree. See [Tool Plugins](/plugins/tool-plugins) for
+the full tool-authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry so the workflow also works with the published CLI. Use
 `--entry <path>` when the entry is not the default package entry. Use
 `plugins build --check` in CI to fail when generated metadata is stale without
 rewriting files.
+
+### Provider Scaffold
+
+```bash
+openclaw plugins init acme-models --name "Acme Models" --type provider
+cd acme-models
+npm install
+npm run build
+npm test
+npm run validate
+```
+
+Provider scaffolds create a generic text/model provider plugin with OpenAI-compatible
+API-key plumbing, a built-in `npm run validate` script for `clawhub package
+validate`, ClawHub package metadata, and a manually dispatched GitHub workflow
+for future trusted publishing through GitHub Actions OIDC. Provider scaffolds do
+not generate skills and do not use `openclaw plugins build` or
+`openclaw plugins validate`; those commands are for the tool scaffold's
+generated metadata path.
+
+Before publishing, replace the placeholder API base URL, model catalog, docs
+route, credential text, and README copy with real provider details. Use the
+generated README for first-time ClawHub publishing and trusted publisher setup.
 
 ### Install
 
@@ -55538,6 +55565,11 @@ conversation bindings, or any non-Codex harness.
   plugin/app support for the Codex harness. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
+  Use `true` to accept safe Codex approval schemas without prompting, `false`
+  to decline them, `"auto"` to route Codex-required approvals through OpenClaw
+  plugin approvals, or `"always"` to ask for every plugin write/destructive
+  action without durable approval. The `"always"` mode clears durable Codex
+  per-tool approval overrides for the affected app before starting the thread.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
@@ -55548,7 +55580,8 @@ conversation bindings, or any non-Codex harness.
   Codex plugin identity from migration, for example `"google-calendar"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
-  `allow_destructive_actions` value is used.
+  `allow_destructive_actions` value is used. The per-plugin value accepts the
+  same `true`, `false`, `"auto"`, or `"always"` policies.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
 entries written by migration are the durable install and repair eligibility set.
@@ -100818,11 +100851,11 @@ enabled.
 
 OpenClaw sets app-level `destructive_enabled` from the effective global or
 per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. `true` and
-`"auto"` both set `destructive_enabled: true`; `false` sets it false. The
-`_default` app config is disabled with `open_world_enabled: false`. Enabled
-plugin apps are emitted with `open_world_enabled: true`; OpenClaw does not
-expose a separate plugin open-world policy knob and does not maintain
+destructive tool metadata from its native app tool annotations. `true`,
+`"auto"`, and `"always"` set `destructive_enabled: true`; `false` sets it
+false. The `_default` app config is disabled with `open_world_enabled: false`.
+Enabled plugin apps are emitted with `open_world_enabled: true`; OpenClaw does
+not expose a separate plugin open-world policy knob and does not maintain
 per-plugin destructive tool-name deny lists.
 
 Tool approval mode is automatic by default for plugin apps so non-destructive
@@ -100843,6 +100876,10 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
 - When policy is `"auto"`, OpenClaw exposes destructive plugin actions to
   Codex but turns ownership-proven MCP approval elicitations into OpenClaw
   plugin approvals before returning the Codex approval response.
+- When policy is `"always"`, OpenClaw uses the same Codex write/destructive
+  gating as `"auto"`, clears durable Codex per-tool approval overrides for the
+  app before the thread starts, and only offers one-shot approval or denial so
+  durable approvals cannot suppress later write-action prompts.
 - Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
   id, or an unsafe elicitation schema declines instead of prompting.
 
@@ -100890,8 +100927,9 @@ Codex thread bindings keep the app config they started with until OpenClaw
 establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even when policy is true or `"auto"`,
-unsafe elicitation schemas and ambiguous plugin identity still fail closed.
+`allow_destructive_actions` values. Even when policy is true, `"auto"`, or
+`"always"`, unsafe elicitation schemas and ambiguous plugin identity still fail
+closed.
 
 ## Related
 
@@ -115313,6 +115351,18 @@ the same caller keep conversation memory. Set `sessionScope: "per-call"` when
 each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
+
+Voice Call stores generated session keys under the configured agent namespace
+(`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
+canonicalization after restarts. Raw explicit integration keys use the same
+agent namespace. A canonical `agent:<configuredAgentId>:*` key keeps that owner,
+and its main aliases honor core `session.mainKey` and global scope. Foreign or
+malformed `agent:*` input is scoped as an opaque key under the configured agent;
+`global` and `unknown` remain global sentinels. Gateway startup promotes older
+raw keys in default or `{agentId}`-templated stores where the path proves one
+owner. In fixed custom stores, ambiguous legacy rows remain untouched because
+they do not contain enough information to choose an owner; new calls use
+canonical agent-scoped history.
 
 ## Realtime voice conversations
 
