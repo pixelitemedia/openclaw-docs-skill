@@ -955,7 +955,16 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test"
 ```
 
-Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
+Read the final JSON summary. The useful fields are `provider`, `leaseId`,
+`syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. For delegated
+Blacksmith Testbox runs, the Crabbox wrapper exit code and JSON summary are the
+command result. The linked GitHub Actions run owns hydration and keepalive; it
+can finish as `cancelled` when the Testbox is stopped externally after the SSH
+command has already returned. Treat that as a cleanup/status artifact unless
+the wrapper `exitCode` is non-zero or the command output shows a failed test.
+One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically;
+if a run is interrupted or cleanup is unclear, inspect live boxes and stop only
+the boxes you created:
 
 ```bash
 blacksmith testbox list --all
@@ -38914,7 +38923,8 @@ tool-call XML payloads (including `<tool_call>...</tool_call>`,
 downgraded tool-call scaffolding / leaked ASCII/full-width model control
 tokens / malformed MiniMax tool-call XML from assistant recall, and can
 replace oversized rows with `[sessions_history omitted: message too large]`
-instead of returning a raw transcript dump.
+instead of returning a raw transcript dump. Use `nextOffset` when present to
+page backward through older transcript windows.
 
 ## Scaling pattern
 
@@ -47764,6 +47774,11 @@ results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
+Use `limit` for the newest bounded tail. Pass `offset: 0` when you need
+pagination metadata, then pass returned `nextOffset` values to page backward
+through older OpenClaw transcript windows without reading raw transcript files.
+Explicit offset pages do not merge external CLI fallback imports; use the
+default newest-tail view when you need that merged display history.
 The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
@@ -47784,7 +47799,7 @@ The returned view is intentionally bounded and safety-filtered:
 - very large histories can drop older rows or replace an oversized row with
   `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`,
-  `contentTruncated`, `contentRedacted`, and `bytes`
+  `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
@@ -91152,7 +91167,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     - The injected block uses explicit boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a `Source: External` metadata line.
     - This attachment-extraction path intentionally omits the long `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary markers and metadata still remain.
     - If a file has no extractable text, OpenClaw injects `[No extractable text]`.
-    - If a PDF falls back to rendered page images in this path, the media prompt keeps the placeholder `[PDF content rendered to images; images not forwarded to model]` because this attachment-extraction step forwards text blocks, not the rendered PDF images.
+    - If a PDF falls back to rendered page images in this path, OpenClaw forwards those page images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
 
   </Accordion>
 </AccordionGroup>
@@ -93578,233 +93593,92 @@ resource controls such as systemd `MemoryMax=` or container-level memory limits.
 # Section: platforms/macos.md
 
 ---
-summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
+summary: "Install and use the OpenClaw macOS menu bar app"
 read_when:
-  - Implementing macOS app features
-  - Changing gateway lifecycle or node bridging on macOS
+  - Installing the macOS app
+  - Deciding between local and remote Gateway mode on macOS
+  - Looking for macOS app release downloads
 title: "macOS app"
 ---
 
-The macOS app is the **menu-bar companion** for OpenClaw. It owns permissions,
-manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
-capabilities to the agent as a node.
+The macOS app is the OpenClaw **menu bar companion**. Use it when you want a
+native tray UI, macOS permission prompts, notifications, WebChat, voice input,
+Canvas, or Mac-hosted node tools such as `system.run`.
 
-## What it does
+If you only need the CLI and Gateway, start with [Getting started](/start/getting-started).
 
-- Shows native notifications and status in the menu bar.
-- Owns TCC prompts (Notifications, Accessibility, Screen Recording, Microphone,
-  Speech Recognition, Automation/AppleScript).
-- Runs or connects to the Gateway (local or remote).
-- Exposes macOS-only tools (Canvas, Camera, Screen Recording, `system.run`).
-- Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
-- Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) on request via npm, pnpm, or bun (the app prefers npm, then pnpm, then bun; Node remains the recommended Gateway runtime).
+## Download
 
-## Local vs remote mode
+Download macOS app builds from the
+[OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
+When a release includes macOS app assets, look for:
 
-- **Local** (default): the app attaches to a running local Gateway if present;
-  otherwise it enables the launchd service via `openclaw gateway install`.
-- **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
-  a local process.
-  The app starts the local **node host service** so the remote Gateway can reach this Mac.
-  The app does not spawn the Gateway as a child process.
-  Gateway discovery now prefers Tailscale MagicDNS names over raw tailnet IPs,
-  so the Mac app recovers more reliably when tailnet IPs change.
+- `OpenClaw-<version>.dmg` (preferred)
+- `OpenClaw-<version>.zip`
 
-## Launchd control
+Some releases only include CLI, evidence, or Windows assets. If the newest
+release has no macOS app asset, use the newest release that does, or build the
+app from source with [macOS dev setup](/platforms/mac/dev-setup).
 
-The app manages a per-user LaunchAgent labeled `ai.openclaw.gateway`
-(or `ai.openclaw.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
-
-```bash
-launchctl kickstart -k gui/$UID/ai.openclaw.gateway
-launchctl bootout gui/$UID/ai.openclaw.gateway
-```
-
-Replace the label with `ai.openclaw.<profile>` when running a named profile.
-
-If the LaunchAgent isn't installed, enable it from the app or run
-`openclaw gateway install`.
-
-If the gateway repeatedly disappears for minutes to hours and only resumes when you touch the Control UI or SSH into the host, see the troubleshooting note for macOS Maintenance Sleep / `ENETDOWN` crashes and launchd's respawn-protection gate in [Gateway troubleshooting](/gateway/troubleshooting#macos-gateway-silently-stops-responding-then-resumes-when-you-touch-the-dashboard).
-
-## Node capabilities (mac)
-
-The macOS app presents itself as a node. Common commands:
-
-- Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
-- Camera: `camera.snap`, `camera.clip`
-- Screen: `screen.snapshot`, `screen.record`
-- System: `system.run`, `system.notify`
-
-The node reports a `permissions` map so agents can decide what's allowed.
-
-Node service + app IPC:
-
-- When the headless node host service is running (remote mode), it connects to the Gateway WS as a node.
-- `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
-
-Diagram (SCI):
-
-```
-Gateway -> Node Service (WS)
-                 |  IPC (UDS + token + HMAC + TTL)
-                 v
-             Mac App (UI + TCC + system.run)
-```
-
-## Exec approvals (system.run)
-
-`system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
-Security + ask + allowlist are stored locally on the Mac in:
-
-```
-~/.openclaw/exec-approvals.json
-```
-
-Example:
-
-```json
-{
-  "version": 1,
-  "defaults": {
-    "security": "deny",
-    "ask": "on-miss"
-  },
-  "agents": {
-    "main": {
-      "security": "allowlist",
-      "ask": "on-miss",
-      "allowlist": [{ "pattern": "/opt/homebrew/bin/rg" }]
-    }
-  }
-}
-```
-
-Notes:
-
-- `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
-- Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
-- Choosing "Always Allow" in the prompt adds that command to the allowlist.
-- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`) and then merged with the app's environment.
-- For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped environment overrides are reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
-
-## Deep links
-
-The app registers the `openclaw://` URL scheme for local actions.
-
-### `openclaw://agent`
-
-Triggers a Gateway `agent` request.
-
-```bash
-open 'openclaw://agent?message=Hello%20from%20deep%20link'
-```
-
-Query parameters:
-
-- `message` (required)
-- `sessionKey` (optional)
-- `thinking` (optional)
-- `deliver` / `to` / `channel` (optional)
-- `timeoutSeconds` (optional)
-- `key` (optional unattended mode key)
-
-Safety:
-
-- Without `key`, the app prompts for confirmation.
-- Without `key`, the app enforces a short message limit for the confirmation prompt and ignores `deliver` / `to` / `channel`.
-- With a valid `key`, the run is unattended (intended for personal automations).
-
-## Onboarding flow (typical)
+## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Complete the permissions checklist (TCC prompts).
-3. Ensure **Local** mode is active and the Gateway is running.
-4. Install the CLI if you want terminal access.
+2. Complete the macOS permission checklist.
+3. Pick **Local** or **Remote** mode.
+4. Install the `openclaw` CLI if the app asks for it.
+5. Open WebChat from the menu bar and send a test message.
 
-## State dir placement (macOS)
+For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
+For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
-Avoid putting your OpenClaw state dir in iCloud or other cloud-synced folders.
-Sync-backed paths can add latency and occasionally cause file-lock/sync races for
-sessions and credentials.
+## Choose a Gateway mode
 
-Prefer a local non-synced state path such as:
+| Mode   | Use it when                                                                             | Detail page                                        |
+| ------ | --------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Local  | This Mac should run the Gateway and keep it alive with launchd.                         | [Gateway on macOS](/platforms/mac/bundled-gateway) |
+| Remote | Another host runs the Gateway and this Mac should control it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-```bash
-OPENCLAW_STATE_DIR=~/.openclaw
-```
+Local mode requires an installed `openclaw` CLI. The app can install it, or you
+can follow [Gateway on macOS](/platforms/mac/bundled-gateway).
 
-If `openclaw doctor` detects state under:
+## What the app owns
 
-- `~/Library/Mobile Documents/com~apple~CloudDocs/...`
-- `~/Library/CloudStorage/...`
+- Menu bar status, notifications, health, and WebChat.
+- macOS permission prompts for screen, microphone, speech, automation, and accessibility.
+- Local node tools such as Canvas, camera/screen capture, notifications, and `system.run`.
+- Exec approval prompts for Mac-hosted commands.
+- Remote-mode SSH tunnels or direct Gateway connections.
 
-it will warn and recommend moving back to a local path.
+The app does **not** replace the OpenClaw Gateway or general CLI docs. Core
+Gateway configuration, providers, plugins, channels, tools, and security live in
+their own docs.
 
-## Build and dev workflow (native)
+## macOS detail pages
 
-- `cd apps/macos && swift build`
-- `swift run OpenClaw` (or Xcode)
-- Package app: `scripts/package-mac-app.sh`
+| Task                                     | Read                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
+| Keep state out of cloud-synced folders   | [Gateway on macOS](/platforms/mac/bundled-gateway#state-directory-on-macos)                 |
+| Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
+| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
+| Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
+| Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
+| Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
+| Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
+| Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
+| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
+| Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
+| Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
+| Capture logs                             | [macOS logging](/platforms/mac/logging)                                                     |
+| Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)                                                 |
 
-## Debug gateway connectivity (macOS CLI)
+## Related
 
-Use the debug CLI to exercise the same Gateway WebSocket handshake and discovery
-logic that the macOS app uses, without launching the app.
-
-```bash
-cd apps/macos
-swift run openclaw-mac connect --json
-swift run openclaw-mac discover --timeout 3000 --json
-```
-
-Connect options:
-
-- `--url <ws://host:port>`: override config
-- `--mode <local|remote>`: resolve from config (default: config or local)
-- `--probe`: force a fresh health probe
-- `--timeout <ms>`: request timeout (default: `15000`)
-- `--json`: structured output for diffing
-
-Discovery options:
-
-- `--include-local`: include gateways that would be filtered as "local"
-- `--timeout <ms>`: overall discovery window (default: `2000`)
-- `--json`: structured output for diffing
-
-<Tip>
-Compare against `openclaw gateway discover --json` to see whether the macOS app's discovery pipeline (`local.` plus the configured wide-area domain, with wide-area and Tailscale Serve fallbacks) differs from the Node CLI's `dns-sd` based discovery.
-</Tip>
-
-## Remote connection plumbing (SSH tunnels)
-
-When the macOS app runs in **Remote** mode, it opens an SSH tunnel so local UI
-components can talk to a remote Gateway as if it were on localhost.
-
-### Control tunnel (Gateway WebSocket port)
-
-- **Purpose:** health checks, status, Web Chat, config, and other control-plane calls.
-- **Local port:** the Gateway port (default `18789`), always stable.
-- **Remote port:** the same Gateway port on the remote host.
-- **Behavior:** no random local port; the app reuses an existing healthy tunnel
-  or restarts it if needed.
-- **SSH shape:** `ssh -N -L <local>:127.0.0.1:<remote>` with BatchMode +
-  ExitOnForwardFailure + keepalive options.
-- **IP reporting:** the SSH tunnel uses loopback, so the gateway will see the node
-  IP as `127.0.0.1`. Use **Direct (ws/wss)** transport if you want the real client
-  IP to appear (see [macOS remote access](/platforms/mac/remote)).
-
-For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
-details, see [Gateway protocol](/gateway/protocol).
-
-## Related docs
-
-- [Gateway runbook](/gateway)
-- [Gateway (macOS)](/platforms/mac/bundled-gateway)
-- [macOS permissions](/platforms/mac/permissions)
-- [Canvas](/platforms/mac/canvas)
+- [Platforms](/platforms)
+- [Getting started](/start/getting-started)
+- [Gateway](/gateway)
+- [Exec approvals](/tools/exec-approvals)
 
 
 
@@ -94224,6 +94098,34 @@ Logging:
 The macOS app checks the gateway version against its own version. If they're
 incompatible, update the global CLI to match the app version.
 
+## State directory on macOS
+
+Keep OpenClaw state on a local, non-synced disk. Avoid iCloud Drive and other
+cloud-synced folders because sync latency and file locks can affect sessions,
+credentials, and Gateway state.
+
+Set `OPENCLAW_STATE_DIR` to a local path only when you need an override.
+`openclaw doctor` warns about common cloud-synced state paths and recommends
+moving back to local storage. See
+[environment variables](/help/environment#path-related-env-vars) and
+[Doctor](/gateway/doctor).
+
+## Debug app connectivity
+
+Use the macOS debug CLI from a source checkout to exercise the same Gateway
+WebSocket handshake and discovery logic the app uses:
+
+```bash
+cd apps/macos
+swift run openclaw-mac connect --json
+swift run openclaw-mac discover --timeout 3000 --json
+```
+
+`connect` accepts `--url`, `--token`, `--timeout`, and `--json`. `discover`
+accepts `--timeout`, `--json`, and `--include-local`. Compare discovery output
+with `openclaw gateway discover --json` when you need to separate CLI discovery
+from app-side connection issues.
+
 ## Smoke check
 
 ```bash
@@ -94365,7 +94267,18 @@ Example (in JS):
 window.location.href = "openclaw://agent?message=Review%20this%20design";
 ```
 
-The app prompts for confirmation unless a valid key is provided.
+Supported query parameters:
+
+- `message`: prefilled agent prompt.
+- `sessionKey`: stable session identifier.
+- `thinking`: optional thinking profile.
+- `deliver`, `to`, or `channel`: delivery target.
+- `timeoutSeconds`: optional run timeout.
+- `key`: app-generated safety token for trusted local callers.
+
+The app prompts for confirmation unless a valid key is provided. Unkeyed links
+show the message and URL before approval, and ignore delivery routing fields;
+keyed links use the normal Gateway run path.
 
 ## Security notes
 
@@ -95031,6 +94944,9 @@ In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
 `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
 tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
 the local node-host service all use the same safe loopback transport.
+When discovery returns both raw Tailnet IPs and stable hostnames, the app
+prefers Tailscale MagicDNS or LAN names so remote connections survive address
+changes better.
 If the local tunnel port differs from the remote gateway port, set
 `gateway.remote.remotePort` to the port on the remote host.
 
@@ -95477,6 +95393,10 @@ title: "macOS IPC"
 
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
+- Common Mac node commands include `canvas.*`, `camera.snap`, `camera.clip`,
+  `screen.snapshot`, `screen.record`, `system.run`, and `system.notify`.
+- The node reports a `permissions` map so agents can see whether screen,
+  camera, microphone, speech, automation, or accessibility access is available.
 
 ### Node service + app IPC
 
@@ -114419,6 +114339,7 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `registerProviderPlugins`                            | Capture provider registrations across multiple plugins. Import from `plugin-sdk/plugin-test-runtime`                                     |
 | `requireRegisteredProvider`                          | Assert that a provider collection contains an id. Import from `plugin-sdk/plugin-test-runtime`                                           |
 | `createRuntimeEnv`                                   | Build a mocked CLI/plugin runtime environment. Import from `plugin-sdk/plugin-test-runtime`                                              |
+| `createPluginRuntimeMock`                            | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                      |
 | `createPluginSetupWizardStatus`                      | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                             |
 | `describeOpenAIProviderRuntimeContract`              | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`                                        |
 | `expectPassthroughReplayPolicy`                      | Assert provider replay policies pass through provider-owned tools and metadata. Import from `plugin-sdk/provider-test-contracts`         |
@@ -114530,11 +114451,10 @@ entry to declare `kind: "memory"`.
 
 ### Testing runtime config access
 
-Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/channel-test-helpers`
-when testing bundled channel plugins. Its deprecated `runtime.config.loadConfig()` and
-`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
-usage of compatibility APIs. Override those mocks only when the test is
-explicitly covering legacy compatibility behavior.
+Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/plugin-test-runtime`.
+Its deprecated `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
+mocks throw by default so tests catch new usage of compatibility APIs. Override
+those mocks only when the test is explicitly covering legacy compatibility behavior.
 
 ### Unit testing a channel plugin
 
@@ -134992,10 +134912,11 @@ Use the path that matches your OpenClaw install state:
     openclaw onboard --install-daemon
     ```
 
-    On a VPS or over SSH, use device-code during onboarding:
+    On a VPS or over SSH, select xAI OAuth directly; OpenClaw uses device-code
+    verification and does not require a localhost callback:
 
     ```bash
-    openclaw onboard --install-daemon --auth-choice xai-device-code
+    openclaw onboard --install-daemon --auth-choice xai-oauth
     ```
 
     OAuth does not require an xAI API key. OpenClaw does not require the Grok
@@ -135009,13 +134930,6 @@ Use the path that matches your OpenClaw install state:
 
     ```bash
     openclaw models auth login --provider xai --method oauth
-    ```
-
-    Use the device-code flow instead when the Gateway runs over SSH, Docker, or
-    a VPS and a localhost browser callback is awkward:
-
-    ```bash
-    openclaw models auth login --provider xai --device-code
     ```
 
     To make Grok the default model after signing in, apply it separately:
@@ -135049,8 +134963,7 @@ Use the path that matches your OpenClaw install state:
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-credential from `openclaw models auth login --provider xai --method oauth`,
-`openclaw models auth login --provider xai --device-code`, or
+credential from `openclaw models auth login --provider xai --method oauth` or
 `openclaw models auth login --provider xai --method api-key` can also power first-class
 `web_search`, `x_search`, remote `code_execution`, and xAI image/video generation.
 Speech and transcription currently require `XAI_API_KEY` or provider config.
@@ -135065,8 +134978,9 @@ and, by default, `x_search` through an operator xAI Responses proxy.
 
 ## OAuth troubleshooting
 
-- If browser OAuth cannot reach `127.0.0.1:56121`, use
-  `openclaw models auth login --provider xai --device-code`.
+- For SSH, Docker, VPS, or other remote setups, use
+  `openclaw models auth login --provider xai --method oauth`; xAI OAuth uses
+  device-code verification instead of a localhost callback.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/grok-4.3`.
 - To inspect saved xAI auth profiles, run:
@@ -135080,9 +134994,9 @@ and, by default, `x_search` through an operator xAI Responses proxy.
   eligible, try the API-key path or check the subscription on xAI's side.
 
 <Tip>
-Use `xai-device-code` when signing in from SSH, Docker, or a VPS. OpenClaw
-prints an xAI URL and short code; finish sign-in in any local browser while the
-remote process polls xAI for the completed token exchange.
+Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints an
+xAI URL and short code; finish sign-in in any local browser while the remote
+process polls xAI for the completed token exchange.
 </Tip>
 
 ## Built-in catalog
@@ -135461,12 +135375,10 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Known limits">
     - xAI auth can use an API key, environment variable, plugin config fallback,
-      browser OAuth, or device-code OAuth with an eligible xAI account. Browser
-      OAuth uses a local callback on `127.0.0.1:56121`; for remote hosts, use
-      `xai-device-code` unless you want to forward that port before opening the
-      sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
-      the consent page may show Grok Build even though OpenClaw does not require
-      the Grok Build app.
+      or OAuth with an eligible xAI account. OAuth uses device-code verification
+      without a localhost callback. xAI decides which accounts can receive OAuth
+      API tokens, and the consent page may show Grok Build even though OpenClaw
+      does not require the Grok Build app.
     - OpenClaw does not currently expose the xAI multi-agent model family. xAI
       serves these models through the Responses API, but they do not accept the
       client-side or custom tools used by OpenClaw's shared agent loop. See the
@@ -144227,6 +144139,7 @@ title: "Tests"
 - `pnpm changed:lanes`: shows the architectural lanes triggered by the diff against `origin/main`.
 - `pnpm check:changed`: delegates to Crabbox/Testbox by default outside CI, then runs the smart changed check gate for the diff against `origin/main` inside the remote child. It runs typecheck, lint, and guard commands for the affected architectural lanes, but does not run Vitest tests. Use `pnpm test:changed` or explicit `pnpm test <target>` for test proof.
 - Codex worktrees and linked/sparse checkouts: avoid direct local `pnpm test*`, `pnpm check*`, and `pnpm crabbox:run` unless you have verified pnpm will not reconcile dependencies. For tiny explicit-file proof use `node scripts/run-vitest.mjs <path-or-filter>`; for changed gates or broad proof use `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox.
+- Testbox-through-Crabbox proof: use the wrapper's final `exitCode` and timing JSON as the command result. The delegated Blacksmith GitHub Actions run may show `cancelled` after a successful SSH command because the Testbox is stopped from outside the keepalive action; verify the wrapper summary and command output before treating that as a test failure.
 - `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
 - `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs are full-suite proof: they use fixed shard groups, expand to leaf configs for local parallel execution, and print the expected local shard fanout before starting. The extension group always expands to the per-extension shard configs instead of one giant root-project process.
 - Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary. Vitest's own duration line stays the per-shard detail.
@@ -153855,13 +153768,13 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 <Steps>
   <Step title="Provide xAI credentials">
     Sign in with Grok OAuth using an eligible SuperGrok or X Premium subscription,
-    use the remote-friendly device-code flow, or store an API key. OAuth works
-    for `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search
-    config can also power Grok `web_search`.
+    or store an API key. xAI OAuth uses device-code verification, so it works
+    from remote hosts without a localhost callback. OAuth works for
+    `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search config
+    can also power Grok `web_search`.
 
     ```bash
     openclaw models auth login --provider xai --method oauth
-    openclaw models auth login --provider xai --device-code
     ```
 
     During a fresh install, the same auth choices are available inside
@@ -153869,7 +153782,7 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 
     ```bash
     openclaw onboard --install-daemon
-    openclaw onboard --install-daemon --auth-choice xai-device-code
+    openclaw onboard --install-daemon --auth-choice xai-oauth
     ```
 
     Or use an API key:
@@ -163778,6 +163691,7 @@ should be rewritten in normal assistant voice.
 - Credential/token-like text is redacted.
 - Long blocks can be truncated.
 - Very large histories can drop older rows or replace an oversized row with `[sessions_history omitted: message too large]`.
+- Use `nextOffset` when present to page backward through older transcript windows.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.
 
 ## Tool policy
