@@ -5762,6 +5762,7 @@ You will need to create a new application with a bot, add the bot to your server
 
     **General Permissions**
       - View Channels
+
     **Text Permissions**
       - Send Messages
       - Read Message History
@@ -5777,7 +5778,10 @@ You will need to create a new application with a bot, add the bot to your server
   <Step title="Enable Developer Mode and collect your IDs">
     Back in the Discord app, you need to enable Developer Mode so you can copy internal IDs.
 
-    1. Click **User Settings** (gear icon next to your avatar) → **Advanced** → toggle on **Developer Mode**
+    1. Click **User Settings** (gear icon next to your avatar) → Scroll to **Developer** in sidebar → toggle on **Developer Mode**
+
+        *(Note: On the Discord mobile app, Developer Mode is under **App Settings** → **Advanced**)*
+
     2. Right-click your **server icon** in the sidebar → **Copy Server ID**
     3. Right-click your **own avatar** → **Copy User ID**
 
@@ -7506,7 +7510,6 @@ Configure `dmPolicy` to control who can DM the bot:
 - `"pairing"` - unknown users receive a pairing code; approve via CLI
 - `"allowlist"` - only users listed in `allowFrom` can chat
 - `"open"` - allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
-- `"disabled"` - disable all DMs
 
 **Approve a pairing request:**
 
@@ -12038,6 +12041,8 @@ openclaw matrix devices prune-stale
     Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists to `crypto-idb-snapshot.json` (restrictive file permissions).
 
     Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
+
+    A single older token-hash root can be a normal token-rotation continuity path. If OpenClaw logs `matrix: multiple populated token-hash storage roots detected`, inspect the account directory and archive stale sibling roots only after confirming the selected active root is healthy. Prefer moving stale roots into an `_archive/` directory over deleting them immediately.
 
   </Accordion>
 </AccordionGroup>
@@ -19005,12 +19010,12 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
 ## Error reply controls
 
-When the agent encounters a delivery or provider error, Telegram can either reply with the error text or suppress it. Two config keys control this behavior:
+When the agent encounters a delivery or provider error, the error policy controls whether error messages are sent to the Telegram chat:
 
-| Key                                 | Values            | Default | Description                                                                                     |
-| ----------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `channels.telegram.errorPolicy`     | `reply`, `silent` | `reply` | `reply` sends a friendly error message to the chat. `silent` suppresses error replies entirely. |
-| `channels.telegram.errorCooldownMs` | number (ms)       | `60000` | Minimum time between error replies to the same chat. Prevents error spam during outages.        |
+| Key                                 | Values                     | Default         | Description                                                                                                                                                                                               |
+| ----------------------------------- | -------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels.telegram.errorPolicy`     | `always`, `once`, `silent` | `always`        | `always` — send every error message to the chat. `once` — send each unique error message once per cooldown window (suppress repeated identical errors). `silent` — never send error messages to the chat. |
+| `channels.telegram.errorCooldownMs` | number (ms)                | `14400000` (4h) | Cooldown window for the `once` policy. After an error is sent, the same error message is suppressed until this interval elapses. Prevents error spam during outages.                                      |
 
 Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
 
@@ -19018,7 +19023,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
 {
   channels: {
     telegram: {
-      errorPolicy: "reply",
+      errorPolicy: "always",
       errorCooldownMs: 120000,
       groups: {
         "-1001234567890": {
@@ -24131,13 +24136,15 @@ openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 
 ## Values
 
-Values are parsed as JSON5 when possible; otherwise they are treated as strings. Use `--strict-json` to require JSON5 parsing. `--json` remains supported as a legacy alias.
+Values are parsed as JSON5 when possible; otherwise they are treated as strings. Use `--strict-json` to require standard JSON parsing with no string fallback. `--json` remains supported as a legacy alias for `--strict-json`.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
+
+When `--strict-json` is enabled, JSON5-only syntax such as comments, trailing commas, or unquoted object keys is rejected. Omit `--strict-json` for JSON5 value parsing with raw-string fallback.
 
 `config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
 
@@ -25380,7 +25387,7 @@ Notes:
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
 - On macOS, `install` keeps LaunchAgent plists owner-only and loads managed service environment values through an owner-only file and wrapper instead of serializing API keys or auth-profile env refs into `EnvironmentVariables`.
 - If you intentionally run multiple gateways on one host, isolate ports, config/state, and workspaces; see [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
-- `restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. Plain `restart` keeps the existing service-manager behavior; `--force` remains the immediate override path.
+- `restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. The default safe restart waits for active work up to the configured `gateway.reload.deferralTimeoutMs` (default 5 minutes); when that budget expires the restart is forced. Set `gateway.reload.deferralTimeoutMs` to `0` for an indefinite safe wait that never forces. Plain `restart` keeps the existing service-manager behavior; `--force` remains the immediate override path.
 - `restart --safe --skip-deferral` runs the OpenClaw-aware safe restart but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Operator escape hatch when a stuck task run pins the safe restart; requires `--safe`.
 
 ## Prefer
@@ -26328,9 +26335,9 @@ openclaw gateway restart --safe --skip-deferral
 openclaw gateway restart --force
 ```
 
-`openclaw gateway restart --safe` asks the running Gateway to preflight active OpenClaw work before restarting. If queued operations, reply delivery, embedded runs, or task runs are active, the Gateway reports the blockers, coalesces duplicate safe restart requests, and restarts once the active work drains. Plain `restart` keeps the existing service-manager behavior for compatibility. Use `--force` only when you explicitly want the immediate override path.
+`openclaw gateway restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. The default safe restart waits for active work up to the configured `gateway.reload.deferralTimeoutMs` (default 5 minutes); when that budget expires the restart is forced. Set `gateway.reload.deferralTimeoutMs` to `0` for an indefinite safe wait that never forces. Plain `restart` keeps the existing service-manager behavior; `--force` remains the immediate override path.
 
-`openclaw gateway restart --safe --skip-deferral` runs the same OpenClaw-aware coordinated restart as `--safe`, but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Use it as the operator escape hatch when a deferral has been pinned by a stuck task run and `--safe` alone would wait indefinitely. `--skip-deferral` requires `--safe`.
+`openclaw gateway restart --safe --skip-deferral` runs the same OpenClaw-aware coordinated restart as `--safe`, but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Use it as the operator escape hatch when a deferral has been pinned by a stuck task run and `--safe` alone may be bounded by `gateway.reload.deferralTimeoutMs`. `--skip-deferral` requires `--safe`.
 
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
@@ -26730,7 +26737,7 @@ openclaw gateway restart
   <Accordion title="Lifecycle behavior">
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery remains active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots or system restarts.
-    - `gateway restart --safe` asks the running Gateway to preflight active OpenClaw work and defer the restart until reply delivery, embedded runs, and task runs drain. `--safe` cannot be combined with `--force` or `--wait`.
+    - `gateway restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. The default safe restart waits for active work up to the configured `gateway.reload.deferralTimeoutMs` (default 5 minutes); when that budget expires the restart is forced. Set `gateway.reload.deferralTimeoutMs` to `0` for an indefinite safe wait that never forces. `--safe` cannot be combined with `--force` or `--wait`.
     - `gateway restart --wait 30s` overrides the configured restart drain budget for that restart. Bare numbers are milliseconds; units such as `s`, `m`, and `h` are accepted. `--wait 0` waits indefinitely.
     - `gateway restart --safe --skip-deferral` runs the OpenClaw-aware safe restart but bypasses the deferral gate so the Gateway emits the restart immediately even when blockers are reported. Operator escape hatch for stuck-task-run deferrals; requires `--safe`.
     - `gateway restart --force` skips the active-work drain and restarts immediately. Use it when an operator has already inspected the listed task blockers and wants the gateway back now.
@@ -31191,8 +31198,14 @@ openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
+openclaw plugins marketplace entries
+openclaw plugins marketplace entries --offline
+openclaw plugins marketplace entries --json
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile clawhub-public --json
+openclaw plugins marketplace refresh --feed-url https://clawhub.ai/v1/feeds/plugins --expected-sha256 <sha256>
 openclaw plugins init my-tool --name "My Tool"
 openclaw plugins init my-provider --name "My Provider" --type provider
 openclaw plugins init my-provider --name "My Provider" --type provider --directory ./my-provider
@@ -31573,6 +31586,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
+
     That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
@@ -31658,11 +31673,36 @@ Use `plugins registry` to inspect whether the persisted registry is present, cur
 ### Marketplace
 
 ```bash
+openclaw plugins marketplace entries
+openclaw plugins marketplace entries --offline
+openclaw plugins marketplace entries --json
+openclaw plugins marketplace entries --feed-profile <name>
+openclaw plugins marketplace entries --feed-url <url>
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile <name>
+openclaw plugins marketplace refresh --feed-url <url>
+openclaw plugins marketplace refresh --expected-sha256 <sha256> --json
 ```
 
-Marketplace list accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
+`plugins marketplace entries` lists entries from the configured OpenClaw marketplace feed. By default it attempts the hosted feed and falls back to the latest accepted snapshot or bundled data. Use `--feed-profile <name>` to read a specific configured profile, `--feed-url <url>` to read an explicit hosted feed URL, and `--offline` to read the latest accepted snapshot without fetching the feed.
+
+`plugins marketplace refresh` refreshes the configured hosted feed snapshot and reports whether OpenClaw accepted hosted data, a hosted snapshot, or bundled fallback data. Use `--expected-sha256` when a caller needs the command to fail unless a fresh hosted payload matches a pinned checksum.
+
+Marketplace `list` accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
+
+Marketplace refresh loads a hosted OpenClaw marketplace feed and persists the
+validated response as the local hosted-feed snapshot. Without options, it uses
+the configured default feed profile. Use `--feed-profile <name>` to refresh a
+specific configured profile, `--feed-url <url>` to refresh an explicit hosted
+feed URL, `--expected-sha256 <sha256>` to require a matching payload checksum
+(`sha256:<hex>` or a bare 64-character hex digest), and `--json` for
+machine-readable output. Explicit hosted feed URLs must not include
+credentials, query strings, or fragments. Unpinned refreshes can report a
+hosted snapshot or bundled fallback result without failing the command. Pinned
+refreshes fail unless they accept a fresh hosted payload, and successful hosted
+refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 ## Related
 
@@ -41038,10 +41078,19 @@ collection root.
 
 ## Indexing session transcripts
 
-Enable session indexing to recall earlier conversations:
+Enable session indexing to recall earlier conversations. QMD needs both the general
+`memorySearch` session source and the QMD transcript exporter:
 
 ```json5
 {
+  agents: {
+    defaults: {
+      memorySearch: {
+        experimental: { sessionMemory: true },
+        sources: ["memory", "sessions"],
+      },
+    },
+  },
   memory: {
     backend: "qmd",
     qmd: {
@@ -41052,7 +41101,14 @@ Enable session indexing to recall earlier conversations:
 ```
 
 Transcripts are exported as sanitized User/Assistant turns into a dedicated QMD
-collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
+collection under `~/.openclaw/agents/<id>/qmd/sessions/`. Setting only
+`memorySearch.experimental.sessionMemory` does not export transcripts into QMD.
+
+Session hits are still filtered by
+[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+`tree` visibility does not expose unrelated same-agent sessions. If a
+gateway-dispatched session should be recallable from a separate DM session, set
+`tools.sessions.visibility: "agent"` intentionally.
 
 ## Search scope
 
@@ -41308,7 +41364,17 @@ setup.
 
 You can optionally index session transcripts so `memory_search` can recall
 earlier conversations. This is opt-in via
-`memorySearch.experimental.sessionMemory`. See the
+`memorySearch.experimental.sessionMemory` and `sources: ["sessions"]`; the default
+source list is memory-only. The experimental flag enables session transcript
+indexing, while `sources` controls whether session chunks are searched.
+
+Session hits obey `tools.sessions.visibility`: the default `tree` setting only
+exposes the current session and sessions it spawned. To recall an unrelated
+same-agent gateway-dispatched session from a separate DM session, intentionally
+widen visibility to `agent`.
+
+When using QMD, also set `memory.qmd.sessions.enabled: true` so transcripts are
+exported into a QMD collection. See the
 [configuration reference](/reference/memory-config) for details.
 
 ## Troubleshooting
@@ -61741,6 +61807,12 @@ on the public diagnostic event bus.
   internal request trace scope. Logs and diagnostic events inside that scope
   inherit the request trace by default, while agent run and model-call spans are
   created as children so provider `traceparent` headers stay on the same trace.
+- **Model-call correlation:** `openclaw.model.call` spans include safe prompt
+  component sizes by default and include per-call token attributes when the
+  provider result exposes usage. `openclaw.model.usage` remains the run-level
+  accounting span for aggregate cost, context, and channel dashboards; it stays
+  on the same diagnostic trace when the emitting runtime has trusted trace
+  context.
 
 ## Exported metrics
 
@@ -61880,6 +61952,8 @@ Liveness warnings also emit:
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`
   - `openclaw.errorCategory` and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
+  - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
+  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the model-call result carries provider usage for that individual call
   - `openclaw.provider.request_id_hash` (bounded SHA-based hash of the upstream provider request id; raw ids are not exported)
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, model-call spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}` and `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
@@ -70144,7 +70218,12 @@ and troubleshooting see the main [FAQ](/help/faq).
     Rough guide:
 
     - **Install:** 2-5 minutes
-    - **Onboarding:** 5-15 minutes depending on how many channels/models you configure
+    - **QuickStart onboarding:** usually a few minutes
+    - **Full onboarding:** longer when provider sign-in, channel pairing, daemon install,
+      network downloads, skills, or optional plugins need extra setup
+
+    The CLI wizard shows this timeline up front. You can skip optional steps and return
+    later with `openclaw configure`.
 
     If it hangs, use [Installer stuck](#quick-start-and-first-run-setup)
     and the fast debug loop in [I am stuck](#quick-start-and-first-run-setup).
@@ -70324,7 +70403,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Daemon install** (LaunchAgent on macOS; systemd user unit on Linux/WSL2)
     - **Health checks** and **skills** selection
 
-    It also warns if your configured model is unknown or missing auth.
+    It also sets duration expectations before the main prompts begin and warns if your
+    configured model is unknown or missing auth.
 
   </Accordion>
 
@@ -71235,8 +71315,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - **OAuth / CLI login** often leverages subscription access where the
       provider supports it. For Anthropic, OpenClaw's Claude CLI backend uses
       Claude Code `claude -p`; Anthropic currently treats that as Agent
-      SDK/programmatic usage, with a separate monthly Agent SDK credit starting
-      June 15, 2026.
+      SDK/programmatic usage. Anthropic paused the June 15, 2026 separate Agent
+      SDK credit change, so for now this still draws from subscription usage
+      limits. See Anthropic's [Agent SDK plan
+      article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+      for the current pause notice.
     - **API keys** use pay-per-token billing.
 
     The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.
@@ -73679,7 +73762,7 @@ Notes:
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
-- `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because Claude currently routes third-party app usage through extra-usage billing instead of normal subscription plan limits.
+- `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because it consumes the signed-in subscription's usage limits and Anthropic can change Claude Agent SDK / `claude -p` billing and rate-limit behavior without an OpenClaw release.
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
@@ -77206,9 +77289,22 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ./scripts/docker/setup.sh
     ```
 
-    Pre-built images are published at the
+    Pre-built images are published first to the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
-    Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
+    GHCR is the primary registry for release automation, pinned deployments,
+    and provenance checks. The same release workflow also publishes an official
+    Docker Hub mirror at `openclaw/openclaw` for hosts that prefer Docker Hub:
+
+    ```bash
+    export OPENCLAW_IMAGE="openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh
+    ```
+
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw`. Avoid community
+    Docker Hub mirrors because OpenClaw does not control their release timing,
+    rebuilds, or retention policy. Common official tags: `main`, `latest`,
+    `<version>` (e.g. `2026.2.26`), and beta versions such as
+    `2026.2.26-beta.1`. Beta tags do not move `latest` or `main`.
 
   </Step>
 
@@ -80233,7 +80329,7 @@ OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh
 Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 
 ```yaml
-image: ghcr.io/openclaw/openclaw:latest # or pin to a specific version from https://github.com/openclaw/openclaw/releases
+image: ghcr.io/openclaw/openclaw:latest # primary; official Docker Hub mirror: openclaw/openclaw:latest
 ```
 
 ### Expose beyond port-forward
@@ -112710,11 +112806,9 @@ two-party event loops that do not go through the shared inbound reply runner.
     await api.runtime.agent.ensureAgentWorkspace(cfg);
 
     // Run an embedded agent turn
-    const agentDir = api.runtime.agent.resolveAgentDir(cfg);
     const result = await api.runtime.agent.runEmbeddedAgent({
       sessionId: "my-plugin:task-1",
       runId: crypto.randomUUID(),
-      sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
       workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
       prompt: "Summarize the latest changes",
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
@@ -112745,9 +112839,9 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
 
-    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Pass `sessionFile` only when adapting code that already receives an active transcript artifact and needs each helper to operate on that same artifact.
+    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Passing `sessionFile`, using `resolveSessionTranscriptLegacyFileTarget(...)`, or importing low-level `appendSessionTranscriptMessage(...)` / `emitSessionTranscriptUpdate(...)` from `openclaw/plugin-sdk/agent-harness-runtime` is deprecated; those paths exist only for legacy code that already receives an active transcript artifact.
 
-    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are compatibility helpers for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers should migrate to entry helpers.
+    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveAndPersistSessionFile(...)` are deprecated compatibility helpers for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers should migrate to entry helpers and transcript identity helpers.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -120582,16 +120676,18 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 <Warning>
 OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
 non-interactive print mode. Anthropic's current Claude Code docs describe
-`claude -p` as Agent SDK/programmatic usage. Starting June 15, 2026, Anthropic
-says subscription-plan `claude -p` usage no longer draws from normal Claude
-plan limits; it draws from a separate monthly Agent SDK credit first, then from
-usage credits at standard API rates when those credits are enabled.
+`claude -p` as Agent SDK/programmatic usage. Anthropic's June 15, 2026 support
+update paused the announced Agent SDK billing change. For now, Anthropic says
+Claude Agent SDK, `claude -p`, and third-party app usage still draw from a
+subscription's usage limits. The previously announced monthly Agent SDK credit
+is not available while Anthropic revises that plan.
 
 Interactive Claude Code still draws from the signed-in Claude plan limits. API
 key auth remains direct pay-as-you-go API billing. For long-lived gateway hosts,
 shared automation, and predictable production spend, use an Anthropic API key.
 
-Anthropic's current public docs:
+Check Anthropic's current support articles before relying on subscription
+billing behavior:
 
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
@@ -120710,13 +120806,22 @@ Anthropic's current public docs:
     OpenClaw uses Claude Code's non-interactive `claude -p` path for Claude CLI
     runs. Anthropic currently treats that path as Agent SDK/programmatic usage:
 
-    - Until June 15, 2026, subscription-plan handling follows Anthropic's active
-      Claude Code rules for the signed-in account.
-    - Starting June 15, 2026, subscription-plan `claude -p` usage draws from the
-      user's monthly Agent SDK credit first, then from usage credits at standard
-      API rates if usage credits are enabled.
+    - Anthropic's June 15, 2026 support update paused the previously announced
+      separate Agent SDK credit plan.
+    - For now, subscription-plan Claude Agent SDK, `claude -p`, and third-party
+      app usage still draw from the signed-in subscription's usage limits.
+    - The previously announced monthly Agent SDK credit is not available while
+      Anthropic revises that plan.
     - Console/API-key logins use pay-as-you-go API billing and do not receive
       the subscription Agent SDK credit.
+
+    See Anthropic's [Agent SDK plan
+    article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+    for the pause notice, and the Claude Code plan articles for
+    [Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
+    and
+    [Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
+    subscription behavior.
 
     Anthropic can change Claude Code billing and rate-limit behavior without an
     OpenClaw release. Check `claude auth status`, `/status`, and
@@ -122238,9 +122343,17 @@ usage outside Claude Code in the past. You must decide for yourself whether to u
 it and verify Anthropic's current billing rules before relying on it.
 
 Anthropic's current support docs say `claude -p` is Agent SDK/programmatic usage.
-Starting June 15, 2026, subscription-plan `claude -p` usage draws from a separate
-monthly Agent SDK credit first, then from usage credits at standard API rates if
-usage credits are enabled.
+Anthropic's June 15, 2026 support update paused the announced separate Agent SDK
+credit plan. For now, Claude Agent SDK, `claude -p`, and third-party app usage
+still draw from the signed-in subscription's usage limits.
+
+Before relying on this path, check Anthropic's [Agent SDK plan
+article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan),
+plus the Claude Code support articles for
+[Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
+or
+[Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
+accounts.
 </Warning>
 
 ## Why use this?
@@ -131034,7 +131147,7 @@ as one OpenCode setup.
 
 <Tabs>
   <Tab title="Zen catalog">
-    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini).
+    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini, GLM).
 
     <Steps>
       <Step title="Run onboarding">
@@ -131105,10 +131218,10 @@ as one OpenCode setup.
 
 ### Zen
 
-| Property         | Value                                                                   |
-| ---------------- | ----------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                              |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3-pro` |
+| Property         | Value                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                    |
+| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3.1-pro`, `opencode/glm-5.2` |
 
 ### Go
 
@@ -142368,6 +142481,66 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
+Session transcript hits also obey
+[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+`tree` visibility only exposes the current session and sessions it spawned. To
+recall an unrelated same-agent gateway-dispatched session from a different
+session, such as a DM, intentionally widen visibility to `agent` (or `all` only
+when cross-agent recall is also required and agent-to-agent policy allows it).
+
+The examples below place these settings under `agents.defaults`. You can also
+apply equivalent `memorySearch` settings in a per-agent override when only one
+agent should index and search session transcripts.
+
+For same-agent gateway-to-DM recall:
+
+<Tabs>
+  <Tab title="Builtin backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+  <Tab title="QMD backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: { enabled: true },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+</Tabs>
+
+When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
+`sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
+`memory.qmd.sessions.enabled: true` as well.
+
 ---
 
 ## SQLite vector acceleration (sqlite-vec)
@@ -142403,7 +142576,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
 | `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
 | `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.enabled`       | `boolean` | `false`  | Export session transcripts into QMD                                                   |
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
@@ -147881,7 +148054,10 @@ Need to install Node? See [Node setup](/install/node).
     ```
 
     The wizard walks you through choosing a model provider, setting an API key,
-    and configuring the Gateway. It takes about 2 minutes.
+    and configuring the Gateway. QuickStart is usually only a few minutes, but
+    provider sign-in, channel pairing, daemon install, network downloads, skills,
+    or optional plugins can make full onboarding take longer. You can skip optional
+    steps and return later with `openclaw configure`.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
 
@@ -150026,6 +150202,12 @@ and workspace defaults in one guided flow.
 ```bash
 openclaw onboard
 ```
+
+QuickStart is usually only a few minutes, but full onboarding can take longer
+when provider sign-in, channel pairing, daemon install, network downloads,
+skills, or optional plugins need extra setup. The wizard shows this timeline up
+front, and optional steps can be skipped and revisited later with
+`openclaw configure`.
 
 ## Locale
 
@@ -164503,10 +164685,10 @@ Session logs should make it possible to answer:
 
 ## E2E validation
 
-The gateway E2E runner proves both paths with the OpenClaw runtime:
+The QA Lab gateway scenario proves both paths with the OpenClaw runtime:
 
 ```bash
-node --import tsx scripts/tool-search-gateway-e2e.ts
+pnpm openclaw qa suite --provider-mode mock-openai --scenario tool-search-gateway-e2e
 ```
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock
