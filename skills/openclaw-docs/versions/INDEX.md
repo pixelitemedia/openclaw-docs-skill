@@ -21,12 +21,13 @@ Note: `https://.../main/versions/openclaw-docs.<version>.md` returns 404 — onl
 
 ## Latest (in-tree)
 
-- **2026.6.10** — `openclaw-docs.latest.md` (7834 KB) · [release v2026.6.10](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.10)
+- **2026.6.11** — `openclaw-docs.latest.md` (7956 KB) · [release v2026.6.11](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.11)
 
 ## Archived (release assets)
 
 | Version | Release | Markdown | TOC | Sections |
 |---|---|---|---|---|
+| 2026.6.11 | [v2026.6.11](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.11) | [.md](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.11/openclaw-docs.2026.6.11.md) | [.toc.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.11/openclaw-docs.2026.6.11.toc.jsonl) | [.sections.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.11/openclaw-docs.2026.6.11.sections.jsonl) |
 | 2026.6.10 | [v2026.6.10](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.10) | [.md](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.10/openclaw-docs.2026.6.10.md) | [.toc.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.10/openclaw-docs.2026.6.10.toc.jsonl) | [.sections.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.10/openclaw-docs.2026.6.10.sections.jsonl) |
 | 2026.6.9 | [v2026.6.9](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.9) | [.md](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.9/openclaw-docs.2026.6.9.md) | [.toc.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.9/openclaw-docs.2026.6.9.toc.jsonl) | [.sections.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.9/openclaw-docs.2026.6.9.sections.jsonl) |
 | 2026.6.8 | [v2026.6.8](https://github.com/pixelitemedia/openclaw-docs-skill/releases/tag/v2026.6.8) | [.md](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.8/openclaw-docs.2026.6.8.md) | [.toc.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.8/openclaw-docs.2026.6.8.toc.jsonl) | [.sections.jsonl](https://github.com/pixelitemedia/openclaw-docs-skill/releases/download/v2026.6.8/openclaw-docs.2026.6.8.sections.jsonl) |
