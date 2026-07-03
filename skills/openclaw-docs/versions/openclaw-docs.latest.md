@@ -791,7 +791,7 @@ For normal PRs, follow scoped CI/check evidence instead of treating parity as a 
 
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -801,6 +801,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 | `/codeql-security-high/channel-runtime-boundary`  | Core channel implementation contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, audit touchpoints              |
 | `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                |
 | `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                           |
+| `/codeql-security-high/process-exec-boundary`     | Local shell, process spawn helpers, subprocess-owning bundled plugin runtimes, and workflow script glue                             |
 | `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, package-manager install, source-loading, and Plugin SDK package contract trust surfaces |
 
 ### Platform-specific security shards
@@ -5861,6 +5862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Pair + name
   - H3: Allowlist the commands
   - H3: Point exec at the node
+  - H3: Local model inference
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -6813,6 +6815,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Renderer contract
   - H2: Core render flow
   - H2: Degradation rules
+  - H3: Button value fallback visibility
   - H2: Provider mapping
   - H2: Presentation vs InteractiveReply
   - H2: Delivery pin
@@ -8761,6 +8764,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Cloud models
   - H2: Model discovery (implicit provider)
+  - H2: Node-local inference
   - H2: Vision and image description
   - H2: Configuration
   - H2: Common recipes
@@ -14600,7 +14604,7 @@ Room events stay strict even when other group requests use automatic replies. Un
 
 Set `historyLimit: 0` to disable group history context.
 
-Supported room-event channels keep recent ambient room messages as context. Discord keeps room-event history until a visible Discord send succeeds, so quiet context is not lost before message-tool delivery.
+Supported room-event channels keep recent ambient room messages as context. Telegram keeps an always-on rolling per-group window bounded by `historyLimit`; user-request turns select entries after the bot's last recorded reply, while room-event turns receive the full recent window so the model can see its own recent posts. The retired Telegram `includeGroupHistoryContext` mode key is removed by `openclaw doctor --fix`.
 
 ## Troubleshooting
 
@@ -16494,6 +16498,7 @@ Default slash command settings:
 
   <Accordion title="Gateway proxy">
     Route Discord gateway WebSocket traffic and startup REST lookups (application ID + allowlist resolution) through an HTTP(S) proxy with `channels.discord.proxy`.
+    Discord Gateway WebSocket proxying is explicit; WebSocket connections do not inherit ambient proxy environment variables from the Gateway process. Startup REST lookups use this proxy when `channels.discord.proxy` is configured.
 
 ```json5
 {
@@ -28243,22 +28248,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Group history context defaults to `mention-only`: prior group messages are
-    included only when they were addressed to the bot, are replies to the bot,
-    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
-    include recent room history for trusted groups. Set
-    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
-    with the next turn.
-
-```json5
-{
-  channels: {
-    telegram: {
-      includeGroupHistoryContext: "recent",
-    },
-  },
-}
-```
+    Group history context is always on for groups and bounded by
+    `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the
+    Telegram group history window. The retired `includeGroupHistoryContext`
+    key is removed by `openclaw doctor --fix`.
 
     Getting the group chat ID:
 
@@ -55225,9 +55218,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
   `openai:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical. If that local refresh token is rejected,
-  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
-  fallback; other integrations can remain externally managed and re-read their
-  CLI auth store
+  OpenClaw reports the managed profile for re-authentication instead of using
+  Codex CLI token material as a sibling runtime fallback. Other integrations can
+  remain externally managed and re-read their CLI auth store
 - status and startup paths that already know the configured provider set scope
   external CLI discovery to that set, so an unrelated CLI login store is not
   probed for a single-provider setup
@@ -55336,11 +55329,12 @@ At runtime:
   the secondary agent store
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
-  Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical. If the local Codex refresh fails and Codex CLI has a
-  usable token for the same account, OpenClaw may use that token for the current
-  runtime request without writing it back to `auth-profiles.json`.
+  Codex CLI bootstrap is intentionally narrower: it can seed an empty
+  `openai:default` or explicitly requested OpenAI profile only before OpenClaw
+  owns OAuth for the provider. After that, OpenClaw-owned refreshes keep local
+  profiles canonical and discovery does not add Codex CLI auth in any sibling
+  slot. If a managed refresh fails, OpenClaw reports the affected profile for
+  re-authentication instead of returning external CLI token material.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 
@@ -73095,7 +73089,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Talk and TTS">
-    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
+    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config. Current Gateways set `ready` after applying runtime provider selection; clients should treat its absence as unverified for compatibility with older Gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
     - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
@@ -100563,6 +100557,14 @@ Related:
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
 
+### Local model inference
+
+A desktop or server node can expose chat-capable models from an Ollama server
+running on that node. Agents use the Ollama plugin's `node_inference` tool to
+discover installed models and run a bounded prompt remotely; the Gateway does
+not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference)
+for setup, model filtering, and direct verification commands.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -101503,6 +101505,7 @@ title: "Talk mode"
 Talk mode has two runtime shapes:
 
 - Native macOS/iOS/Android Talk uses local speech recognition, Gateway chat, and `talk.speak` TTS. Nodes advertise the `talk` capability and declare the `talk.*` commands they support.
+- iOS Talk uses client-owned WebRTC for OpenAI realtime configurations that select `webrtc` or omit the transport. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configurations stay on the Gateway-owned relay; non-realtime configurations use the native speech loop.
 - Browser Talk uses `talk.client.create` for client-owned `webrtc` and `provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
 - Android Talk can opt into Gateway-owned realtime relay sessions with `talk.realtime.mode: "realtime"` and `talk.realtime.transport: "gateway-relay"`. Otherwise it stays on native speech recognition, Gateway chat, and `talk.speak`.
 - Transcription-only clients use `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` when they need captions or dictation without an assistant voice response.
@@ -101514,7 +101517,7 @@ Native Talk is a continuous voice conversation loop:
 3. Wait for the response
 4. Speak it via the configured Talk provider (`talk.speak`)
 
-Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
+Client-owned realtime Talk forwards provider tool calls through `talk.client.toolCall`; those clients do not call `chat.send` directly for realtime consults.
 While a realtime consult is active, Talk clients can use `talk.client.steer` or
 `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or
 `followup`. Accepted steering is queued into the active embedded run; rejected
@@ -101605,14 +101608,14 @@ Defaults:
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
 - `consultThinkingLevel`: optional thinking level override for the full OpenClaw agent run behind realtime `openclaw_agent_consult` calls.
 - `consultFastMode`: optional fast-mode override for realtime `openclaw_agent_consult` calls.
-- `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
+- `realtime.provider`: selects the active realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
 - `realtime.providers.<provider>` stores provider-owned realtime config. The browser receives only ephemeral or constrained session credentials, never a standard API key.
 - `realtime.providers.openai.voice`: built-in OpenAI Realtime voice id. Current `gpt-realtime-2` voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`; `marin` and `cedar` are recommended for best quality.
-- `realtime.transport`: `webrtc` and `provider-websocket` are browser realtime transports. Android uses realtime relay only when this is `gateway-relay`; otherwise Android Talk uses its native STT/TTS loop.
+- `realtime.transport`: `webrtc` uses client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket` is browser-owned but stays on the Gateway relay on iOS. `gateway-relay` keeps provider audio on the Gateway; Android uses realtime only for this transport and otherwise keeps its native STT/TTS loop.
 - `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility behavior; `none` is for transcription or external orchestration.
 - `realtime.consultRouting`: `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` makes Gateway relay route finalized user transcripts through OpenClaw instead.
 - `realtime.instructions`: appends provider-facing system instructions to OpenClaw's built-in realtime prompt. Use it for voice style and tone; OpenClaw keeps the default `openclaw_agent_consult` guidance.
-- `talk.catalog` exposes each provider's valid modes, transports, brain strategies, realtime audio formats, and capability flags so first-party Talk clients can avoid unsupported combinations.
+- `talk.catalog` exposes canonical provider ids and registry aliases alongside each provider's valid modes, transports, brain strategies, realtime audio formats, capability flags, and the runtime-selected readiness result. First-party Talk clients should use that catalog instead of maintaining provider aliases locally; an older Gateway that omits group readiness is unverified rather than definitively unconfigured.
 - Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until the dedicated Talk transcription config surface is added.
 - `speechLocale`: optional BCP 47 locale id for on-device Talk speech recognition on iOS/macOS. Leave unset to use the device default.
 - `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
@@ -101632,6 +101635,7 @@ Defaults:
 
 - Voice tab toggle: **Talk**
 - Manual **Mic** and **Talk** are mutually exclusive runtime capture modes.
+- Manual Mic and realtime Talk prefer a connected Bluetooth Classic or BLE headset microphone. If it disconnects, the app requests another headset input or lets Android use the default microphone; stopping capture restores the default microphone preference.
 - Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
 - Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
 
@@ -101639,7 +101643,7 @@ Defaults:
 
 - Requires Speech + Microphone permissions.
 - Native Talk uses the active Gateway session and only falls back to history polling when response events are unavailable.
-- Browser realtime Talk uses `talk.client.toolCall` for `openclaw_agent_consult` instead of exposing `chat.send` to provider-owned browser sessions.
+- Client-owned realtime Talk uses `talk.client.toolCall` for `openclaw_agent_consult` instead of exposing `chat.send` to provider-owned sessions.
 - Transcription-only Talk uses `talk.session.create`, `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close`; clients subscribe to `talk.event` for partial/final transcript updates.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development.
@@ -103565,6 +103569,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare
   `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`;
   the Gateway allows those push-to-talk commands by default for trusted
@@ -117428,6 +117433,26 @@ Fallback text includes:
 - button labels, including URLs for link buttons
 - select option labels
 
+### Button value fallback visibility
+
+When a channel cannot render interactive controls, button and select values
+fall back to plain text. The fallback behavior preserves usability while
+keeping opaque callback data private:
+
+- **`command`-typed actions** render as `label: \`command\`` so users can
+  copy the command and run it manually in the channel input.
+- **`callback`-typed actions** and legacy **`value`** fields render as
+  label-only. The opaque callback value is not exposed in fallback text.
+- **`url` / `webApp`** buttons render the URL text alongside the button
+  label, since the URL is user-facing.
+- **Select options** render as label-only. The underlying option value is not
+  exposed in fallback text.
+
+Channel adapters that add manual-command guidance in their fallback UI (e.g.
+Feishu document-comment instructions) must derive the command-present check
+from the same presentation blocks that the fallback renderer uses, so the
+guidance text only appears when a manual command is actually shown.
+
 Unsupported native controls should degrade rather than fail the whole send.
 Examples:
 
@@ -119180,13 +119205,14 @@ Most channel plugins do not need approval-specific code.
 - `ChannelPlugin.approvals` is removed. Put approval delivery/native/render/auth facts on `approvalCapability`.
 - `plugin.auth` is login/logout only; core no longer reads approval auth hooks from that object.
 - `approvalCapability.authorizeActorAction` and `approvalCapability.getActionAvailabilityState` are the canonical approval-auth seam.
-- Use `approvalCapability.getActionAvailabilityState` for same-chat approval auth availability.
+- Use `approvalCapability.getActionAvailabilityState` for same-chat approval auth availability. Keep configured approvers available for `/approve` even when native delivery is disabled; use native initiating-surface state for delivery/setup guidance instead.
 - If your channel exposes native exec approvals, use `approvalCapability.getExecInitiatingSurfaceState` for the initiating-surface/native-client state when it differs from same-chat approval auth. Core uses that exec-specific hook to distinguish `enabled` vs `disabled`, decide whether the initiating channel supports native exec approvals, and include the channel in native-client fallback guidance. `createApproverRestrictedNativeApprovalCapability(...)` fills this in for the common case.
 - Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.
 - Use `approvalCapability.delivery` only for native approval routing or fallback suppression.
 - Use `approvalCapability.nativeRuntime` for channel-owned native approval facts. Keep it lazy on hot channel entrypoints with `createLazyChannelApprovalNativeRuntimeAdapter(...)`, which can import your runtime module on demand while still letting core assemble the approval lifecycle.
 - Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
+- Use `approvalCapability.describePluginApprovalSetup` when plugin approval failure guidance is safe to show for plugin approval no-route and timeout failures. `createApproverRestrictedNativeApprovalCapability(...)` does not infer this from `describeExecApprovalSetup`; pass the same helper explicitly only when plugin and exec approvals truly use the same native setup.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
 - If custom approval auth intentionally allows only same-chat fallback, return `markImplicitSameChatApprovalAuthorization({ authorized: true })` from `openclaw/plugin-sdk/approval-auth-runtime`; otherwise core treats the result as explicit approver authorization.
 - If a channel-owned native callback resolves approvals directly, use `isImplicitSameChatApprovalAuthorization(...)` before resolving so implicit fallback still goes through the channel's normal actor authorization.
@@ -139045,6 +139071,107 @@ The new model will be automatically discovered and available to use.
 If you set `models.providers.ollama` explicitly, or configure a custom remote provider such as `models.providers.ollama-cloud` with `api: "ollama"`, auto-discovery is skipped and you must define models manually. Loopback custom providers such as `http://127.0.0.2:11434` are still treated as local. See the explicit config section below.
 </Note>
 
+## Node-local inference
+
+Agents can delegate a short task to an Ollama model installed on a paired
+desktop or server node. The prompt and response cross the existing authenticated
+Gateway/node connection; the model request runs on the selected node against
+its standard loopback Ollama endpoint (`http://127.0.0.1:11434`).
+
+<Steps>
+  <Step title="Start Ollama on the node">
+    Pull at least one chat model and keep Ollama running:
+
+    ```bash
+    ollama pull qwen3:0.6b
+    ollama list
+    ```
+
+  </Step>
+  <Step title="Connect the node host">
+    On the same machine as Ollama, connect a node host to the Gateway:
+
+    ```bash
+    openclaw node run \
+      --host <gateway-host> \
+      --port 18789 \
+      --display-name "Local inference"
+    ```
+
+    Approve the new device and its declared node commands on the Gateway host,
+    then verify the node:
+
+    ```bash
+    openclaw devices list
+    openclaw devices approve <deviceRequestId>
+    openclaw nodes pending
+    openclaw nodes approve <nodeRequestId>
+    openclaw nodes status --connected
+    ```
+
+    A first connection and an upgrade that adds the Ollama commands can both
+    trigger node-command approval. If the node connects without advertising
+    `ollama.models` and `ollama.chat`, check `openclaw nodes pending` again.
+
+  </Step>
+  <Step title="Ask an agent to use local inference">
+    The bundled Ollama plugin exposes the `node_inference` tool. Agents first
+    use `action: "discover"`, then `action: "run"` with a returned node and
+    model. If exactly one capable node is connected, `run` can omit the node.
+
+    For example: “Discover the Ollama models on my nodes, then use the fastest
+    loaded model to summarize this text.”
+
+  </Step>
+</Steps>
+
+Discovery reads `/api/tags`, checks `/api/show` capabilities, and uses `/api/ps`
+when available to rank already-loaded models first. It returns only local
+chat-capable models: Ollama Cloud rows and embedding-only models are excluded.
+Each run asks Ollama to disable model thinking and caps output at 512 tokens
+unless the tool call requests a different `maxTokens` value. Some models, such
+as GPT-OSS, do not support disabling thinking and may still use reasoning tokens.
+
+To keep Ollama running on a node without making it available to agents, set the
+following in the config used by that node host:
+
+```bash
+openclaw config set plugins.entries.ollama.config.nodeInference.enabled false
+```
+
+If the node uses the foreground `openclaw node run` command from the setup
+above, stop that process and run the command again. If it uses an installed node
+service, run `openclaw node restart`.
+
+The node stops advertising `ollama.models` and `ollama.chat`; Ollama itself and
+the Gateway's Ollama provider remain unchanged. Set the value to `true` and
+restart the node to advertise local inference again. A changed command surface
+may require approval through `openclaw nodes pending` after reconnect.
+
+You can verify the same node commands without an agent turn:
+
+```bash
+openclaw nodes invoke \
+  --node "Local inference" \
+  --command ollama.models \
+  --params '{}' \
+  --invoke-timeout 90000 \
+  --timeout 100000
+
+openclaw nodes invoke \
+  --node "Local inference" \
+  --command ollama.chat \
+  --params '{"model":"qwen3:0.6b","prompt":"Reply with exactly: pong","maxTokens":32,"timeoutMs":120000}' \
+  --invoke-timeout 130000 \
+  --timeout 140000
+```
+
+Node-local inference intentionally does not reuse a remote or cloud
+`models.providers.ollama.baseUrl`. Start Ollama on the node's standard loopback
+endpoint. The node commands are available by default on macOS, Linux, and
+Windows node hosts and remain subject to the normal node pairing and command
+policy.
+
 ## Vision and image description
 
 The bundled Ollama plugin registers Ollama as an image-capable media-understanding provider. This lets OpenClaw route explicit image-description requests and configured image-model defaults through local or hosted Ollama vision models.
@@ -141757,8 +141884,8 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
     replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
     required follow-up shape. OpenClaw sends OpenRouter-supported
-    `reasoning_effort` values for these routes; `xhigh` is the highest advertised
-    level, and stale `max` overrides are mapped to `xhigh`.
+    `reasoning.effort` values for these routes; lower non-off levels map to
+    `high`, and stale `max` overrides are mapped to `xhigh`.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">
@@ -174905,7 +175032,7 @@ title: "Thinking levels"
   - Anthropic Claude Opus 4.7+ maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus effort setting.
   - Anthropic Claude Opus 4.7+ also exposes `/think max`; it maps to the same provider-owned max effort path.
   - Direct DeepSeek V4 models expose `/think xhigh|max`; both map to DeepSeek `reasoning_effort: "max"` while lower non-off levels map to `high`.
-  - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning_effort` values. Stored `max` overrides fall back to `xhigh`.
+  - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
   - Ollama thinking-capable models expose `/think low|medium|high|max`; `max` maps to native `think: "high"` because Ollama's native API accepts `low`, `medium`, and `high` effort strings.
   - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
@@ -178180,14 +178307,14 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The chat header shows the agent filter before the session picker, and the session picker is scoped by the selected agent. Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
+    - The sidebar lists recent sessions with a New Session action, an All Sessions link, and a session search button that opens the full session picker (scoped by the selected agent, with search and pagination). Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - Typing `/new` in the Control UI creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - When fresh Gateway session usage reports include current context tokens, the chat composer area shows a compact context usage indicator. It switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
+    - When fresh Gateway session usage reports include current context tokens, the chat composer toolbar shows a small context usage ring with the used percentage; the full token detail lives in its tooltip. The ring switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
