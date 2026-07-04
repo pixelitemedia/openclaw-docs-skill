@@ -437,15 +437,15 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runners
 
-| Runner                          | Jobs                                                                                                                                                                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                       |
-| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                |
-| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                               |
-| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                     |
-| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                   |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                  |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                          |
+| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                   |
+| `blacksmith-16vcpu-ubuntu-2404` | QA Smoke CI, `build-artifacts` in CI and Testbox, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                   |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                        |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                      |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                     |
 
 ## Runner registration budget
 
@@ -1439,7 +1439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /channels/channel-routing
 - Headings:
-  - H1: Channels & routing
+  - H1: Channels &amp; routing
   - H2: Key terms
   - H2: Outbound target prefixes
   - H2: Session key shapes (examples)
@@ -1967,9 +1967,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (behavior)
   - H2: Media + limits
   - H2: Typing + read receipts
+  - H2: Lifecycle status reactions
   - H2: Reactions (message tool)
   - H2: Approval reactions
   - H2: Delivery targets (CLI/cron)
+  - H2: Aliases
   - H2: Troubleshooting
   - H2: Security notes
   - H2: Configuration reference (Signal)
@@ -2376,7 +2378,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents bindings
   - H3: agents bind
   - H3: agents unbind
-  - H3: agents delete
+  - H3: agents delete &lt;id&gt;
   - H2: Identity files
   - H2: Set identity
   - H2: Related
@@ -2568,13 +2570,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: openclaw devices
   - H2: Commands
   - H3: openclaw devices list
-  - H3: openclaw devices remove
+  - H3: openclaw devices remove &lt;deviceId&gt;
   - H3: openclaw devices clear --yes [--pending]
   - H3: openclaw devices approve [requestId] [--latest]
   - H2: Paperclip / openclawgateway first-run approval
-  - H3: openclaw devices reject
-  - H3: openclaw devices rotate --device --role [--scope ]
-  - H3: openclaw devices revoke --device --role
+  - H3: openclaw devices reject &lt;requestId&gt;
+  - H3: openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]
+  - H3: openclaw devices revoke --device &lt;id&gt; --role &lt;role&gt;
   - H2: Common options
   - H2: Notes
   - H2: Token drift recovery checklist
@@ -2656,7 +2658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: gateway status
   - H3: gateway probe
   - H4: Remote over SSH (Mac app parity)
-  - H3: gateway call
+  - H3: gateway call &lt;method&gt;
   - H2: Manage the Gateway service
   - H3: Install with a wrapper
   - H2: Discover gateways (Bonjour)
@@ -2897,11 +2899,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: JSONL
   - H3: YAML
   - H2: Subcommand reference
-  - H3: resolve
-  - H3: find
-  - H3: set
-  - H3: validate
-  - H3: emit
+  - H3: resolve &lt;oc-path&gt;
+  - H3: find &lt;pattern&gt;
+  - H3: set &lt;oc-path&gt; &lt;value&gt;
+  - H3: validate &lt;oc-path&gt;
+  - H3: emit &lt;file&gt;
   - H2: Exit codes
   - H2: Output mode
   - H2: Notes
@@ -3189,12 +3191,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: wiki status
   - H3: wiki doctor
   - H3: wiki init
-  - H3: wiki ingest
-  - H3: wiki okf import
+  - H3: wiki ingest &lt;path-or-url&gt;
+  - H3: wiki okf import &lt;path&gt;
   - H3: wiki compile
   - H3: wiki lint
-  - H3: wiki search
-  - H3: wiki get
+  - H3: wiki search &lt;query&gt;
+  - H3: wiki get &lt;lookup&gt;
   - H3: wiki apply
   - H3: wiki bridge import
   - H3: wiki unsafe-local import
@@ -5642,7 +5644,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Volume (required)
   - H3: Variables
   - H2: Connect a channel
-  - H2: Backups & migration
+  - H2: Backups &amp; migration
   - H2: Next steps
 
 ## install/raspberry-pi.md
@@ -6112,7 +6114,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/bundled-gateway
 - Headings:
-  - H2: Install the CLI (required for local mode)
+  - H2: Automatic setup
+  - H2: Manual recovery
   - H2: Launchd (Gateway as LaunchAgent)
   - H2: Version compatibility
   - H2: State directory on macOS
@@ -6152,7 +6155,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prerequisites
   - H2: 1. Install Dependencies
   - H2: 2. Build and Package the App
-  - H2: 3. Install the CLI
+  - H2: 3. Install the CLI and Gateway
   - H2: Troubleshooting
   - H3: Build fails: toolchain or SDK mismatch
   - H3: App crashes on permission grant
@@ -6280,7 +6283,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/voicewake
 - Headings:
-  - H1: Voice Wake & Push-to-Talk
+  - H1: Voice Wake &amp; Push-to-Talk
   - H2: Requirements
   - H2: Modes
   - H2: Runtime behavior (wake-word)
@@ -7001,6 +7004,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/chutes
 - Headings:
   - H1: Chutes plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/clawrouter.md
+
+- Route: /plugins/reference/clawrouter
+- Headings:
+  - H1: ClawRouter plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -8420,6 +8432,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## providers/clawrouter.md
+
+- Route: /providers/clawrouter
+- Headings:
+  - H2: Getting started
+  - H2: Model discovery
+  - H2: Protocol and provider plugins
+  - H2: Quotas and usage
+  - H2: Troubleshooting
+  - H2: Security behavior
+  - H2: Related
+
 ## providers/cloudflare-ai-gateway.md
 
 - Route: /providers/cloudflare-ai-gateway
@@ -9697,7 +9721,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 3.6 Discovery (AML.TA0008)
   - H4: T-DISC-001: Tool Enumeration
   - H4: T-DISC-002: Session Data Extraction
-  - H3: 3.7 Collection & Exfiltration (AML.TA0009, AML.TA0010)
+  - H3: 3.7 Collection &amp; Exfiltration (AML.TA0009, AML.TA0010)
   - H4: T-EXFIL-001: Data Theft via webfetch
   - H4: T-EXFIL-002: Unauthorized Message Sending
   - H4: T-EXFIL-003: Credential Harvesting
@@ -24611,9 +24635,9 @@ That bootstrap token carries the built-in pairing bootstrap profile:
   `node` plus a bounded `operator` handoff
 - the handed-off `node` token stays `scopes: []`
 - the handed-off `operator` token is limited to `operator.approvals`,
-  `operator.read`, and `operator.write`
-- `operator.admin` and `operator.pairing` are not granted by QR/setup-code
-  bootstrap; they require a separate approved operator pairing or token flow
+  `operator.read`, `operator.talk.secrets`, and `operator.write`
+- `operator.admin` is not granted by QR/setup-code bootstrap; it requires a
+  separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
@@ -25582,6 +25606,24 @@ Groups:
 - **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let Signal show the shared
+queued/thinking/tool/compaction/done/error reaction lifecycle on inbound turns.
+Signal uses the inbound message timestamp as the reaction target; group
+reactions are sent with the Signal group id plus the original sender as the
+target author.
+
+Status reactions also require an ack reaction and a matching
+`messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`).
+Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
+The message-tool `react` action remains stricter: it requires
+`reactionLevel: "minimal"` or `"extensive"`.
+
+`messages.removeAckAfterReply: true` clears the final status reaction after the
+configured hold time. Otherwise Signal restores the initial ack reaction after
+the final done/error state.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=signal`.
@@ -25626,6 +25668,58 @@ without explicit approvers; no-approver group approvals keep the local fallback 
 - UUID DMs: `uuid:<id>` (or bare UUID).
 - Groups: `signal:group:<groupId>`.
 - Usernames: `username:<name>` (if supported by your Signal account).
+
+## Aliases
+
+Configure aliases when you want stable names for recurring Signal targets.
+Aliases are OpenClaw-side config only; they do not create or edit Signal contacts.
+
+```json5
+{
+  channels: {
+    signal: {
+      aliases: {
+        me: "+15557654321",
+        jane: "uuid:123e4567-e89b-12d3-a456-426614174000",
+        ops: "group:<groupId>",
+      },
+      defaultTo: "signal:me",
+    },
+  },
+}
+```
+
+Use aliases anywhere Signal delivery targets are accepted:
+
+```bash
+openclaw message send --channel signal --target signal:ops --message "Deployment is complete"
+```
+
+Per-account aliases inherit the top-level aliases and can add or override names:
+
+```json5
+{
+  channels: {
+    signal: {
+      aliases: {
+        me: "+15557654321",
+      },
+      accounts: {
+        work: {
+          aliases: {
+            ops: "group:<workGroupId>",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`openclaw directory peers list --channel signal` and
+`openclaw directory groups list --channel signal` list configured aliases. The
+Signal directory is config-backed; it does not live-query Signal contacts or
+mutate the Signal account.
 
 ## Troubleshooting
 
@@ -25691,10 +25785,12 @@ Provider options:
 - `channels.signal.sendReadReceipts`: forward read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID ids.
+- `channels.signal.aliases`: OpenClaw-side aliases for DM or group delivery targets.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
 - `channels.signal.groups`: per-group overrides keyed by Signal group id (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
+- `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
@@ -28463,7 +28559,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap is node-only: the first connect creates a pending node request, and after approval the Gateway returns a durable node token with `scopes: []`. It does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
+    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap returns a durable node token with `scopes: []` plus a bounded operator handoff token for trusted mobile onboarding. That operator token can read setup-time native configuration, but it does not grant pairing mutation scopes or `operator.admin`.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -35655,6 +35751,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 ## ID formats (by channel)
 
 - WhatsApp: `+15551234567` (DM), `1234567890-1234567890@g.us` (group), `120363123456789@newsletter` (Channel/Newsletter outbound target)
+- Signal: configured aliases resolve to E.164/UUID DM targets or `group:<id>` group targets
 - Telegram: `@username` or numeric chat id; groups are numeric ids
 - Slack: `user:U…` and `channel:C…`
 - Discord: `user:<id>` and `channel:<id>`
@@ -42833,7 +42930,7 @@ openclaw qr --url wss://gateway.example/ws
 - `--token` and `--password` are mutually exclusive.
 - The setup code itself now carries an opaque short-lived `bootstrapToken`, not the shared gateway token/password.
 - Built-in setup-code bootstrap returns a primary `node` token with `scopes: []` plus a bounded `operator` handoff token for trusted mobile onboarding.
-- The handed-off operator token is limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`; `operator.admin` and `operator.pairing` require a separate approved operator pairing or token flow.
+- The handed-off operator token is limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`; pairing mutation scopes and `operator.admin` still require a separate approved operator pairing or token flow.
 - Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs. Private LAN addresses and `.local` Bonjour hosts remain supported over `ws://`, but Tailscale/public mobile routes should use Tailscale Serve/Funnel or a `wss://` gateway URL.
 - With `--remote`, OpenClaw requires either `gateway.remote.url` or
   `gateway.tailscale.mode=serve|funnel`.
@@ -53736,6 +53833,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | Provider                                | Id                               | Auth env                                             | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                            |
+| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                                 | `clawrouter/anthropic/claude-sonnet-4-6`                   |
 | Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-03-2025`                                 |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                          |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                      |
@@ -62718,10 +62816,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and iMessage.
-- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Telegram, and WhatsApp.
+- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Signal, Telegram, WhatsApp, and iMessage.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
-  On Telegram and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
+  On Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
 - `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
   `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
   `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
@@ -65963,6 +66061,7 @@ See [Inferred commitments](/concepts/commitments).
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
+- `remote.sshHostKeyPolicy`: macOS SSH tunnel host-key policy. `strict` is the default and requires an already trusted key. `openssh` is an explicit opt-in to the effective OpenSSH configuration for managed aliases; review matching user and system SSH settings before using it. The macOS app and `configure-remote` reset this policy to `strict` when changing targets unless explicitly opted in again.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
 - `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used after relay-backed iOS builds publish registrations to the gateway. Public App Store builds use the hosted OpenClaw relay. Custom relay URLs must match a deliberately separate iOS build/deployment path whose relay URL points at that relay.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
@@ -72879,10 +72978,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin` or `operator.pairing`.
-It does include `operator.talk.secrets` so the native client can read the Talk
-configuration it needs after bootstrap. Broader admin and pairing scopes require
-a separate approved operator pairing or token flow. Clients should persist
+mobile operator loop and complete native setup without granting pairing
+mutation scopes or `operator.admin`. It includes `operator.talk.secrets` so the
+native client can read the Talk configuration it needs after bootstrap. Broader
+pairing and admin access requires a separate approved operator pairing or token
+flow. Clients should persist
 `hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
@@ -73441,8 +73541,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  includes `operator.talk.secrets` for native Talk configuration reads and
-  excludes `operator.admin` and `operator.pairing`.
+  includes `operator.talk.secrets` for native Talk configuration reads, but
+  excludes pairing mutation scopes and `operator.admin`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
@@ -73840,6 +73940,10 @@ In the macOS app's SSH tunnel transport, discovered gateway hostnames belong in
 `gateway.remote.sshTarget`; `gateway.remote.url` remains the local tunnel URL.
 If those ports differ, set `gateway.remote.remotePort` to the gateway port on
 the SSH host.
+Host-key verification is strict by default. Managed aliases can explicitly use
+their effective OpenSSH trust policy with
+`gateway.remote.sshHostKeyPolicy: "openssh"`; review matching user and system
+SSH settings before enabling it.
 
 For a gateway already reachable on a trusted LAN or Tailnet, use direct mode:
 
@@ -82906,7 +83010,7 @@ lives on the [Models FAQ](/help/faq-models).
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
-    - Built-in setup-code bootstrap is node-only. After approval, it returns a node device token with `scopes: []` and does not return a handed-off operator token.
+    - Built-in setup-code bootstrap returns a node device token with `scopes: []` plus a bounded operator handoff token for trusted mobile onboarding. The operator handoff can read setup-time native configuration but does not grant pairing mutation scopes or `operator.admin`.
 
     Fix:
 
@@ -84554,9 +84658,10 @@ temporary directories. They make ownership explicit and keep cleanup in the same
 test lifecycle:
 
 ```ts
+import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("uses a temp workspace", () => {
   const workspace = tempDirs.make("openclaw-example-");
@@ -84564,7 +84669,7 @@ it("uses a temp workspace", () => {
 });
 ```
 
-`useAutoCleanupTempDirTracker()` intentionally exposes no manual cleanup method; Vitest
+`useAutoCleanupTempDirTracker(afterEach)` intentionally exposes no manual cleanup method; Vitest
 owns cleanup after each test. Existing lower-level helpers remain for tests that
 have not moved yet, but new and migrated tests should use the auto-cleaning
 tracker. Avoid new manual `makeTempDir`, `cleanupTempDirs`, or
@@ -91346,7 +91451,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 22.19 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22.19+, Node 23.11+, or Node 24+**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
 
 ## Check your version
 
@@ -91354,7 +91459,7 @@ OpenClaw requires **Node 22.19 or newer**. **Node 24 is the default and recommen
 node -v
 ```
 
-If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.19.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
+If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.19.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. Node 23 versions before `v23.11.0` are unsupported. If Node isn't installed or the version is outside the supported range, pick an install method below.
 
 ## Install Node
 
@@ -103776,10 +103881,10 @@ app from source with [macOS dev setup](/platforms/mac/dev-setup).
 ## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Complete the macOS permission checklist.
-3. Pick **Local** or **Remote** mode.
-4. Install the `openclaw` CLI if the app asks for it.
-5. Open WebChat from the menu bar and send a test message.
+2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
+3. For local mode, wait while the app installs its user-space runtime and Gateway.
+4. Complete provider setup and the macOS permission checklist.
+5. Send the onboarding test message.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
@@ -103791,8 +103896,9 @@ For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 | Local  | This Mac should run the Gateway and keep it alive with launchd.                         | [Gateway on macOS](/platforms/mac/bundled-gateway) |
 | Remote | Another host runs the Gateway and this Mac should control it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-Local mode requires an installed `openclaw` CLI. The app can install it, or you
-can follow [Gateway on macOS](/platforms/mac/bundled-gateway).
+Local mode requires an installed `openclaw` CLI. On a fresh Mac, the app installs
+the matching CLI and runtime automatically before starting the Gateway wizard.
+See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
@@ -104206,17 +104312,30 @@ expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
 child process, and manages a per-user launchd service to keep the Gateway
 running (or attaches to an existing local Gateway if one is already running).
 
-## Install the CLI (required for local mode)
+## Automatic setup
 
-Node 24 is the default runtime on the Mac. Node 22 LTS, currently `22.19+`, still works for compatibility. Then install `openclaw` globally:
+On a fresh Mac, choose **This Mac** during onboarding. The app runs its signed,
+bundled installer before the Gateway wizard, installs a user-space Node runtime
+and the matching `openclaw` CLI under `~/.openclaw`, then installs and starts the
+per-user launchd service. This path does not require Terminal, Homebrew, or
+administrator access.
+
+The app bundles the installer script, not the Node or Gateway payload. Setup
+therefore needs an internet connection to download the runtime and matching
+OpenClaw package.
+
+## Manual recovery
+
+Node 24 is recommended for a manual install. Node 22 LTS, currently `22.19+`,
+also works. Then install `openclaw` globally:
 
 ```bash
 npm install -g openclaw@<version>
 ```
 
-The macOS app's **Install CLI** button runs the same global install flow the app
-uses internally: it prefers npm first, then pnpm, then bun if that is the only
-detected package manager. Node remains the recommended Gateway runtime.
+Use **Retry setup** after a failed automatic setup. If that still fails, install
+the CLI manually with the command above, then choose **Check again** in
+onboarding. Node remains the recommended Gateway runtime.
 
 ## Launchd (Gateway as LaunchAgent)
 
@@ -104248,8 +104367,10 @@ Logging:
 
 ## Version compatibility
 
-The macOS app checks the gateway version against its own version. If they're
-incompatible, update the global CLI to match the app version.
+The macOS app checks the Gateway version against its own version. Onboarding
+automatically runs managed setup when an existing CLI is missing or
+incompatible. Use **Retry setup** to repeat the installation or **Check again**
+after repairing an external CLI.
 
 ## State directory on macOS
 
@@ -104566,17 +104687,13 @@ For dev run modes, signing flags, and Team ID troubleshooting, see the macOS app
 
 > **Note**: Ad-hoc signed apps may trigger security prompts. If the app crashes immediately with "Abort trap 6", see the [Troubleshooting](#troubleshooting) section.
 
-## 3. Install the CLI
+## 3. Install the CLI and Gateway
 
-The macOS app expects a global `openclaw` CLI install to manage background tasks.
+The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
+fresh profile, choose **This Mac** during onboarding; the app installs the
+matching user-space CLI and runtime before starting the Gateway wizard.
 
-**To install it (recommended):**
-
-1. Open the OpenClaw app.
-2. Go to the **General** settings tab.
-3. Click **"Install CLI"**.
-
-Alternatively, install it manually:
+For manual development recovery, install the matching CLI yourself:
 
 ```bash
 npm install -g openclaw@<version>
@@ -105093,6 +105210,10 @@ Remote mode supports two transports:
 - **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node's IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
+The app disables SSH connection multiplexing and post-authentication backgrounding for app-owned SSH processes so it can monitor and restart the exact process even when the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.
+
+SSH host-key verification is strict by default because gateway credentials travel through this tunnel. For a managed SSH alias whose trust behavior you explicitly intend to use, opt in with `openclaw-mac configure-remote --ssh-target <alias> --ssh-host-key-policy openssh` or set `gateway.remote.sshHostKeyPolicy` to `"openssh"`. This opt-in uses the effective OpenSSH host-key policy; review the alias and any matching `Host *` or system configuration first. Changing the SSH target in the app or with `configure-remote` resets the policy to `strict` unless you explicitly opt in again.
+
 In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
 `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
 tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
@@ -105165,7 +105286,7 @@ the selected transport when it starts.
 ## Security notes
 
 - Prefer loopback binds on the remote host and connect via SSH, Tailscale Serve, or a trusted Tailnet/LAN direct URL.
-- SSH tunneling uses strict host-key checking; trust the host key first so it exists in `~/.ssh/known_hosts`.
+- SSH tunneling requires an already trusted host key by default. Trust the host key first so it exists in the configured known-hosts file, or explicitly choose `gateway.remote.sshHostKeyPolicy: "openssh"` for a managed alias whose OpenSSH trust policy you accept.
 - If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
 
@@ -107733,7 +107854,7 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
-- Use Node 22.19 or newer and a package manager such as `npm` or `pnpm`.
+- Use Node 22.19+, Node 23.11+, or Node 24+ and a package manager such as `npm` or `pnpm`.
 - Be familiar with TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw loads bundled
@@ -110520,9 +110641,16 @@ guard instead of releasing the session lane immediately. Only
 final/non-commentary completed `agentMessage` items and pre-tool raw
 assistant completions arm the assistant-output release: if Codex then goes quiet
 without `turn/completed`, OpenClaw best-effort interrupts the native turn and
-releases the session lane. Replay-safe stdio app-server failures, including
-turn-completion idle timeouts without assistant, tool, active-item, or
-side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+releases the session lane. If another turn watch wins that release race,
+OpenClaw still accepts the completed final assistant item once no native
+request, item, or dynamic tool completion remains active and the
+assistant-output release still belongs to the latest completed item, with no
+later item completion. This can preserve the final answer after completed tool
+work without replaying the turn. Partial assistant deltas, stale earlier
+replies, and empty later completions do not qualify. Replay-safe stdio
+app-server failures,
+including turn-completion idle timeouts without assistant, tool, active-item,
+or side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
 session lane. They also clear the stale native thread binding instead of being
 replayed automatically. Completion-watch timeouts surface Codex-specific timeout
@@ -117823,7 +117951,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-59 plugins
+60 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -117840,6 +117968,8 @@ Each entry lists the package, distribution route, and description.
 - **[byteplus](/plugins/reference/byteplus)** (`@openclaw/byteplus-provider`) - included in OpenClaw. Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
 
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Experimental Canvas control and A2UI rendering surfaces for paired nodes.
+
+- **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
 
 - **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
 
@@ -118312,7 +118442,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 129
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 130
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -127350,6 +127480,34 @@ providers: chutes
 
 
 
+# Section: plugins/reference/clawrouter.md
+
+---
+summary: "Adds ClawRouter model provider support to OpenClaw."
+read_when:
+  - You are installing, configuring, or auditing the clawrouter plugin
+title: "ClawRouter plugin"
+---
+
+# ClawRouter plugin
+
+Adds ClawRouter model provider support to OpenClaw.
+
+## Distribution
+
+- Package: `@openclaw/clawrouter`
+- Install route: included in OpenClaw
+
+## Surface
+
+providers: clawrouter
+
+## Related docs
+
+- [clawrouter](/providers/clawrouter)
+
+
+
 # Section: plugins/reference/clickclack.md
 
 ---
@@ -129164,7 +129322,7 @@ Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
 ## Surface
 
-providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders
+providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, tools, webSearchProviders
 
 ## Related docs
 
@@ -132631,6 +132789,163 @@ For native Anthropic integration with Claude CLI or API keys, see [Anthropic pro
 
 
 
+# Section: providers/clawrouter.md
+
+---
+summary: "Route credential-scoped models through ClawRouter and show managed quotas"
+title: "ClawRouter"
+read_when:
+  - You want one managed key for multiple model providers
+  - You need ClawRouter model discovery or quota reporting in OpenClaw
+---
+
+ClawRouter gives OpenClaw one policy-scoped key for multiple upstream model
+providers. The bundled plugin discovers only the models allowed for that key,
+routes each model through its declared protocol, and reports the key's budget
+and aggregate usage on OpenClaw usage surfaces.
+
+You do not install or authenticate each upstream provider plugin on the
+OpenClaw host. Upstream credentials and provider-specific forwarding stay in
+ClawRouter. OpenClaw needs only the bundled `@openclaw/clawrouter` plugin and an
+issued ClawRouter credential.
+
+| Property      | Value                                    |
+| ------------- | ---------------------------------------- |
+| Provider      | `clawrouter`                             |
+| Package       | `@openclaw/clawrouter`                   |
+| Auth          | `CLAWROUTER_API_KEY`                     |
+| Default URL   | `https://clawrouter.openclaw.ai`         |
+| Model catalog | Credential-scoped via `/v1/catalog`      |
+| Quotas        | Monthly budget and usage via `/v1/usage` |
+
+## Getting started
+
+<Steps>
+  <Step title="Get a scoped credential">
+    Ask your ClawRouter administrator for a credential whose policy includes
+    the providers, models, and monthly budget you should use. Credentials are
+    revealed once when issued.
+  </Step>
+  <Step title="Configure OpenClaw">
+    ```bash
+    export CLAWROUTER_API_KEY="..."
+    openclaw onboard --auth-choice clawrouter-api-key
+    openclaw plugins enable clawrouter
+    ```
+
+    The plugin is bundled with OpenClaw. If your configuration sets
+    `plugins.allow`, add `clawrouter` to that list before enabling it. For a
+    custom deployment, set `models.providers.clawrouter.baseUrl` to the
+    ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
+
+  </Step>
+  <Step title="List granted models">
+    ```bash
+    openclaw models list --all --provider clawrouter
+    ```
+
+    Use the returned model refs exactly as shown. They retain the upstream
+    namespace, such as `clawrouter/openai/...`, `clawrouter/anthropic/...`, or
+    `clawrouter/google/...`. If `agents.defaults.models` is an allowlist in your
+    configuration, add each selected ClawRouter ref to it.
+
+  </Step>
+  <Step title="Select a model">
+    ```bash
+    openclaw models set clawrouter/<provider>/<model>
+    ```
+
+    You can also select a returned model for one run with
+    `openclaw agent --model clawrouter/<provider>/<model> --message "..."`.
+
+  </Step>
+</Steps>
+
+## Model discovery
+
+`GET /v1/catalog` is the source of truth. OpenClaw does not ship a second,
+fixed list of ClawRouter models. A model configured in ClawRouter appears when:
+
+- the credential's policy grants its provider;
+- the provider connection is enabled and ready;
+- the catalog model advertises a supported LLM capability; and
+- the catalog exposes a transport contract supported by the plugin.
+
+Adding another model to a supported ClawRouter provider therefore does not
+require an OpenClaw release or another provider plugin. The next catalog
+refresh discovers it. A model that needs a new wire protocol requires support
+in the ClawRouter plugin before OpenClaw advertises it.
+
+## Protocol and provider plugins
+
+You do not need to install every upstream company's auth plugin. ClawRouter
+owns upstream credentials; its catalog tells OpenClaw which transport to use.
+The plugin supports:
+
+| Catalog route                  | OpenClaw transport     |
+| ------------------------------ | ---------------------- |
+| OpenAI-compatible chat         | `openai-completions`   |
+| OpenAI-compatible Responses    | `openai-responses`     |
+| Native Anthropic Messages      | `anthropic-messages`   |
+| Native Google Gemini streaming | `google-generative-ai` |
+
+The plugin also applies the matching replay and tool-schema policies for those
+families. Catalog rows using another request/stream format are intentionally
+not advertised as OpenClaw text models. Normalize those providers to one of the
+supported contracts in ClawRouter rather than sending an incompatible payload.
+
+## Quotas and usage
+
+ClawRouter's `/v1/usage` response feeds the normal OpenClaw provider-usage
+surfaces. `/status` and related dashboard status show the monthly budget window
+when the key has a limit, plus request, token, and spend totals. Unmetered keys
+still show aggregate usage without a percentage window.
+
+Quota lookup uses the same scoped key as model discovery. A failed quota lookup
+does not block model execution.
+
+Check the live snapshot with:
+
+```bash
+openclaw status --usage
+openclaw models status
+```
+
+The same provider snapshot is available to `/status` in chat and OpenClaw's
+usage UI. The budget is policy-wide, so requests made by another client using
+the same ClawRouter policy can change the remaining percentage.
+
+## Troubleshooting
+
+| Symptom                                  | Check                                                                                                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| No ClawRouter models                     | Confirm the plugin is enabled and allowed by `plugins.allow`, then check that the credential is active and grants at least one ready provider. |
+| A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route format. Unsupported transport contracts are intentionally filtered.                             |
+| `Unknown model: clawrouter/...`          | Add the exact catalog ref to `agents.defaults.models` when that configuration map is being used as an allowlist.                               |
+| `401` or `403` from catalog or usage     | Reissue or re-scope the ClawRouter credential; OpenClaw does not fall back to upstream provider keys.                                          |
+| Model call fails after discovery         | Check the provider connection and upstream health in ClawRouter, then retry after its readiness state recovers.                                |
+| Usage has totals but no percentage       | The policy is unmetered; add a monthly budget in ClawRouter to expose a percentage window.                                                     |
+
+## Security behavior
+
+- Catalog discovery is scoped to the configured proxy key and cached per key.
+- The proxy key is attached only at request dispatch; it is not stored in model metadata.
+- Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
+- Unsupported or ungranted catalog rows fail closed and are not selectable.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+    Provider configuration and model selection.
+  </Card>
+  <Card title="Usage tracking" href="/concepts/usage-tracking" icon="chart-line">
+    OpenClaw usage and status surfaces.
+  </Card>
+</CardGroup>
+
+
+
 # Section: providers/cloudflare-ai-gateway.md
 
 ---
@@ -135944,6 +136259,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
+- [ClawRouter (managed multi-provider routing)](/providers/clawrouter)
 - [Cohere](/providers/cohere)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [ComfyUI](/providers/comfy)
@@ -160745,7 +161061,11 @@ It does not install or modify anything on the remote host.
   <Step title="Skills">
     - Reads available skills and checks requirements.
     - Lets you choose node manager: npm, pnpm, or bun.
-    - Installs optional dependencies (some use Homebrew on macOS).
+    - Installs optional dependencies for trusted bundled skills when the required
+      installer is available.
+    - Skips unavailable Homebrew, uv, and Go installers, then groups the affected
+      skills with manual setup guidance. Run `openclaw doctor` after installing
+      the missing prerequisites.
 
   </Step>
   <Step title="Finish">
@@ -173361,8 +173681,14 @@ metadata:
       formulas into system package commands. In Linux containers without
       `brew`, brew-only installers are hidden; use a custom image or install
       the dependency manually.
-    - **Go:** if `go` is missing and `brew` is available, the gateway installs
-      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`.
+    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs and
+      preserves the existing `GOBIN`, `GOPATH`, and `GOTOOLCHAIN` settings. If the
+      configured toolchain cannot satisfy a module's required Go version,
+      onboarding groups the skill with manual Go prerequisites after the install
+      attempt. If `go` is missing and Homebrew is available, OpenClaw installs
+      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`. On Linux,
+      OpenClaw can instead use `apt-get` as root or through passwordless `sudo`
+      when the refreshed `golang-go` candidate meets the minimum version.
     - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
       `extract` (default: auto when archive detected), `stripComponents`,
       `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
