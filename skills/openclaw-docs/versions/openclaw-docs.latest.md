@@ -1276,6 +1276,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How cron works
   - H2: Schedule types
   - H3: Day-of-month and day-of-week use OR logic
+  - H2: Event triggers (condition watchers)
   - H2: Payloads
   - H3: Agent-turn options
   - H3: Command payloads
@@ -12486,6 +12487,41 @@ Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When
 
 This fires roughly 5-6 times a month instead of 0-1 times a month. To require both conditions, use croner's `+` day-of-week modifier (`0 9 15 * +1`), or schedule on one field and guard the other in your job's prompt or command.
 
+## Event triggers (condition watchers)
+
+An event trigger adds a headless condition script to an `every` or `cron` schedule. Cron evaluates the script when the job is due and runs the normal payload only when the script returns `fire: true`:
+
+```json5
+{
+  schedule: { kind: "every", everyMs: 30000 },
+  trigger: {
+    // Fires only when the observed status differs from the last evaluation.
+    script: "const res = await tools.call('exec', { command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.result?.details?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
+    once: false,
+  },
+  payload: { kind: "agentTurn", message: "Investigate the CI status change." },
+}
+```
+
+The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, cron appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
+
+`fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a configurable minimum interval (30 seconds by default). Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
+
+<Warning>
+Enabling `cron.triggers.enabled` lets agent-authored scripts run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
+</Warning>
+
+Create a watcher from a local script file (`-` reads the script from stdin):
+
+```bash
+openclaw cron add \
+  --name "PR CI watcher" \
+  --every 30s \
+  --trigger-script ./watch-pr-ci.js \
+  --message "Respond to the CI status change" \
+  --session isolated
+```
+
 ## Payloads
 
 Every job carries exactly one payload kind, chosen by flag:
@@ -12895,6 +12931,10 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 8,
+    triggers: {
+      enabled: false,
+      minIntervalMs: 30000,
+    },
     retry: {
       maxAttempts: 3,
       backoffMs: [30000, 60000, 300000],
@@ -19110,11 +19150,12 @@ The shortest safe path when you already know your old BlueBubbles config:
 
    ```bash
    brew install steipete/tap/imsg
+   brew update && brew upgrade imsg
    imsg --version
    imsg chats --limit 3
    ```
 
-   If `imsg chats` fails with `unable to open database file`, empty output, or `authorization denied`, grant Full Disk Access to the terminal, editor, Node process, Gateway service, or SSH parent process that launches `imsg`, then reopen that parent process.
+   For the usual local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: repeat the Homebrew update in the same local or remote user context that will run `imsg`. If `imsg chats` fails with `unable to open database file`, empty output, or `authorization denied`, grant Full Disk Access to the terminal, editor, Node process, Gateway service, or SSH parent process that launches `imsg`, then reopen that parent process.
 
 2. Verify the read, watch, send, and RPC surfaces before changing OpenClaw config:
 
@@ -19128,14 +19169,14 @@ The shortest safe path when you already know your old BlueBubbles config:
 
    Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use. If reads work but sends fail with AppleEvents `-1743`, check whether Automation landed on `/usr/libexec/sshd-keygen-wrapper`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#requirements-and-permissions-macos).
 
-3. Enable the private API bridge when you need advanced actions:
+3. Enable the private API bridge. It is strongly encouraged for OpenClaw iMessage because replies, tapbacks, effects, polls, attachment replies, and group actions depend on it:
 
    ```bash
    imsg launch
    imsg status --json
    ```
 
-   `imsg launch` requires SIP to be disabled (and on modern macOS, library validation relaxed — see [Enabling the imsg private API](/channels/imessage#enabling-the-imsg-private-api)). Basic send, history, and watch work without `imsg launch`; advanced actions do not.
+   `imsg launch` requires SIP to be disabled (and on modern macOS, library validation relaxed — see [Enabling the imsg private API](/channels/imessage#enabling-the-imsg-private-api)). Basic send, history, and watch work without `imsg launch`; the full OpenClaw iMessage action surface does not.
 
 4. After you enable `channels.imessage` and start the Gateway, verify the bridge through OpenClaw:
 
@@ -19306,7 +19347,7 @@ title: "iMessage"
 ---
 
 <Note>
-For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
+For the usual OpenClaw iMessage deployment, run the Gateway and `imsg` on the same signed-in macOS Messages host. If your Gateway runs elsewhere, point `channels.imessage.cliPath` at a transparent SSH wrapper that runs `imsg` on the Mac.
 
 **Inbound recovery is automatic.** After a bridge or gateway restart, iMessage replays the messages missed while it was down and suppresses the stale "backlog bomb" Apple can flush after a Push recovery, deduping so nothing is dispatched twice. There is no config to enable — see [Inbound recovery after a bridge or gateway restart](#inbound-recovery-after-a-bridge-or-gateway-restart).
 </Note>
@@ -19315,7 +19356,9 @@ For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host
 BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
-Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Advanced actions require `imsg launch` and a successful private API probe.
+Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel; replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
+
+For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
@@ -19341,10 +19384,13 @@ Status: native external CLI integration. The Gateway spawns `imsg rpc` and speak
 
 ```bash
 brew install steipete/tap/imsg
+brew update && brew upgrade imsg
 imsg rpc --help
 imsg launch
 openclaw channels status --probe
 ```
+
+        When the local setup wizard detects a missing default `imsg` command, it can prompt to install `steipete/tap/imsg` through Homebrew. If it detects a Homebrew-managed `imsg`, it can prompt to reinstall or update it. Custom `cliPath` wrappers are not modified.
 
       </Step>
 
@@ -19386,11 +19432,16 @@ openclaw pairing approve imessage <CODE>
   </Tab>
 
   <Tab title="Remote Mac over SSH">
-    OpenClaw only requires a stdio-compatible `cliPath`, so you can point `cliPath` at a wrapper script that SSHes to a remote Mac and runs `imsg`.
+    Most setups do not need SSH. Use this topology only when the Gateway cannot run on the signed-in Messages Mac. OpenClaw only requires a stdio-compatible `cliPath`, so you can point `cliPath` at a wrapper script that SSHes to a remote Mac and runs `imsg`.
+    Install and update `imsg` on that remote Mac, not on the Gateway host:
+
+```bash
+ssh messages-mac 'brew install steipete/tap/imsg && brew update && brew upgrade imsg'
+```
 
 ```bash
 #!/usr/bin/env bash
-exec ssh -T gateway-host imsg "$@"
+exec ssh -T messages-mac imsg "$@"
 ```
 
     Recommended config when attachments are enabled:
@@ -19475,12 +19526,12 @@ Use one of the supported `imsg` process contexts instead:
 
 ## Enabling the imsg private API
 
-`imsg` ships in two operational modes:
+`imsg` ships in two operational modes. For OpenClaw, Private API mode is the recommended setup because it gives the channel the native iMessage actions users expect. Basic mode remains useful for low-risk installs, initial verification, or hosts where SIP cannot be disabled.
 
 - **Basic mode** (default, no SIP changes needed): outbound text and media via `send`, inbound watch/history, chat list. This is what you get out of the box from a fresh `brew install steipete/tap/imsg` plus the standard macOS permissions above.
 - **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `poll` and `poll-vote` (native Messages polls), `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
 
-The advanced action surface on this page requires Private API mode. The `imsg` README is explicit about the requirement:
+The recommended action surface on this page requires Private API mode. The `imsg` README is explicit about the requirement:
 
 > Advanced features such as `read`, `typing`, `launch`, bridge-backed rich send, message mutation, and chat management are opt-in. They require SIP to be disabled and a helper dylib to be injected into `Messages.app`. `imsg launch` refuses to inject when SIP is enabled.
 
@@ -19489,7 +19540,7 @@ The helper-injection technique uses `imsg`'s own dylib to reach Messages private
 <Warning>
 **Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
-Treat this as a deliberate operational choice, not a default. If your threat model cannot tolerate SIP being off, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
+Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>
 
 ### Setup
@@ -19498,6 +19549,7 @@ Treat this as a deliberate operational choice, not a default. If your threat mod
 
    ```bash
    brew install steipete/tap/imsg
+   brew update && brew upgrade imsg
    imsg --version
    imsg status --json
    ```
@@ -32479,7 +32531,7 @@ openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
 ```
 
-`get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result.
+`get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result. Nodes with a host-native policy, such as the Windows companion, show that policy directly instead of applying OpenClaw approvals-file policy math.
 
 Precedence:
 
@@ -32501,6 +32553,19 @@ openclaw approvals set --gateway --file ./exec-approvals.json
 
 `set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
 
+Host-native Windows nodes use their own policy shape:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  defaultAction: "deny",
+  rules: [{ pattern: "hostname", action: "allow" }]
+}
+EOF
+```
+
+The CLI reads the node's current hash first and sends it with the update, so concurrent local edits are rejected instead of overwritten. `rules` is required because this operation replaces the node's complete rule list; `defaultAction` is optional. A node that reports its native policy as disabled cannot be configured remotely; enable or configure the policy on that host first. Host-native policies do not support the `allowlist add|remove` helpers.
+
 ## "Never prompt" / YOLO example
 
 Set the host approvals defaults to `full` + `off` for a host that should never stop on exec approvals:
@@ -32518,7 +32583,7 @@ openclaw approvals set --stdin <<'EOF'
 EOF
 ```
 
-Node variant: same body with `openclaw approvals set --node <id|name|ip> --stdin`.
+For nodes that expose an OpenClaw approvals file, use the same body with `openclaw approvals set --node <id|name|ip> --stdin`. Host-native nodes require their owner-specific shape shown above.
 
 This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
 
@@ -32562,7 +32627,7 @@ No target flag means the local approvals file on disk.
 
 ## Notes
 
-- The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
+- The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
 - Approvals files are stored per host in the OpenClaw state dir: `$OPENCLAW_STATE_DIR/exec-approvals.json`, or `~/.openclaw/exec-approvals.json` when the variable is unset.
 
 ## Related
@@ -34035,6 +34100,7 @@ restart gateway
 agents
 create agent work workspace ~/Projects/work
 models
+configure model provider
 set default model openai/gpt-5.5
 plugins list
 plugins search slack
@@ -34050,7 +34116,9 @@ quit
 
 Crestodian uses typed operations instead of editing config ad hoc.
 
-Read-only, run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path. Starting the guided channel setup (`connect telegram`) also runs immediately — the wizard itself collects explicit answers and commits only at the end.
+Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
+
+Starting guided channel setup (`connect telegram`) or model-provider setup (`configure model provider`) also runs immediately. Each wizard collects explicit answers and owns the resulting writes.
 
 Persistent, require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
 
@@ -34062,6 +34130,11 @@ Channel setup can run as a hosted conversation when the host supports masked
 input. The local Crestodian TUI does not accept sensitive wizard answers;
 instead it directs you to `openclaw channels add --channel <channel>`, whose
 interactive prompts mask credentials.
+
+Model-provider setup uses the same provider/auth and default-model steps as
+`openclaw onboard`. In the local Crestodian TUI, approval exits the chat shell,
+runs those steps with masked terminal prompts, and then resumes Crestodian. A
+gateway/app chat that supports sensitive replies hosts the same steps inline.
 
 ## Setup bootstrap
 
@@ -34082,7 +34155,7 @@ When no model is configured, setup picks the first usable backend in this order 
 5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
 6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
 
-If none are available, setup still writes the default workspace and leaves the model unset. Install or log into Codex/Claude Code/Gemini CLI, or expose `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, then run setup again.
+If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
 The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 
@@ -36961,7 +37034,7 @@ Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness sessio
 | Let an external MCP client read/send OpenClaw channel conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes Gateway-backed conversations over stdio.                                 |
 | Save third-party MCP servers for OpenClaw-managed agent runs        | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
 | Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
-| Edit MCP config from a browser                                      | Control UI `/mcp`                                                    | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
+| Edit MCP config from a browser                                      | Control UI `/settings/mcp` (`/mcp` alias)                            | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
 | Give Codex app-server a scoped native MCP server                    | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
 | Run ACP-hosted harness sessions                                     | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
 
@@ -37725,7 +37798,7 @@ Registry commands do not start the channel bridge. Only `probe` and `doctor --pr
 
 ## Control UI
 
-The browser Control UI includes a dedicated MCP settings page at `/mcp`. It shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
+The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
@@ -41273,6 +41346,8 @@ workspace config:
   `agents.list[].tools.deny` when policy requires those tools to be denied
 - set insecure `gateway.controlUi.*` toggles to `false`
 - set `gateway.mode=local` when policy denies remote gateway mode
+- set reported `gateway.http.endpoints.*.enabled` paths to `false` when policy
+  denies Gateway HTTP API endpoints
 - set reported channel ingress `groupPolicy` paths to `allowlist` when policy
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
@@ -41295,7 +41370,9 @@ the reported `agents.list[].tools.deny` path.
 
 Scoped channel ingress repairs are skipped when the finding reports inherited
 `channels.defaults.*`, because changing the shared channel default would affect
-more than the scoped policy target.
+more than the scoped policy target. Gateway HTTP URL-fetch allowlist findings
+remain manual because automatic repair cannot choose the correct endpoint URL
+allowlist values.
 
 ```jsonc
 {
@@ -47746,6 +47823,8 @@ Experimental features are opt-in preview surfaces behind explicit flags. They ne
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
+In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
+
 ### Why these tools
 
 These tools have the largest descriptions, broadest parameter shapes, or highest chance of distracting a small model from the normal coding and conversation path. On a small-context or stricter OpenAI-compatible backend that is the difference between:
@@ -48255,20 +48334,22 @@ If Slack login expired, repair it in VNC on a kept lease and rerun with
 # Section: concepts/mantis.md
 
 ---
-summary: "Mantis is the visual end-to-end verification system for reproducing OpenClaw bugs on live transports, capturing before and after evidence, and attaching artifacts to PRs."
+summary: "Mantis captures visual end-to-end evidence for live transport comparisons and focused candidate-only browser proofs, then attaches the artifacts to PRs."
 title: "Mantis"
 read_when:
   - Building or running live visual QA for OpenClaw bugs
   - Adding before and after verification for a pull request
   - Adding Discord, Slack, WhatsApp, or other live transport scenarios
+  - Running focused Control UI browser proof for a candidate ref
   - Debugging QA runs that need screenshots, browser automation, or VNC access
 ---
 
-Mantis reruns a bug scenario against a known-bad baseline ref and a candidate
-ref on a real transport, then publishes a before/after comparison as CI
-artifacts and a PR comment. Discord shipped first: real bot auth, real guild
-channels, reactions, threads, and a browser witness a human can check. Slack
-and Telegram lanes exist too; WhatsApp and Matrix are unimplemented.
+Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
+Live transport scenarios compare a known-bad baseline with a candidate ref;
+focused browser lanes may instead prove one candidate against a deterministic
+mocked transport. Discord shipped first with real bot auth, guild channels,
+reactions, threads, and a browser witness. Slack, Telegram, and focused Control
+UI chat lanes exist too; WhatsApp and Matrix are unimplemented.
 
 ## Ownership
 
@@ -48556,14 +48637,15 @@ Comments post through the Mantis GitHub App (`MANTIS_GITHUB_APP_ID` /
 `MANTIS_GITHUB_APP_PRIVATE_KEY`), not `github-actions[bot]`, using a hidden
 marker comment as the upsert key.
 
-| Workflow                          | Trigger                                                                                    | What it does                                                                                                                                                                                                                                                                                |
-| --------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Mantis Discord Smoke`            | manual dispatch                                                                            | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                  |
-| `Mantis Discord Status Reactions` | PR comment or manual dispatch                                                              | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.            |
-| `Mantis Scenario`                 | manual dispatch                                                                            | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
-| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                            | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                 |
-| `Mantis Telegram Live`            | PR comment or manual dispatch                                                              | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.          |
-| `Mantis Telegram Desktop Proof`   | maintainer PR label (`mantis: telegram-visible-proof`) plus PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs the real-user Crabbox Telegram Desktop proof lane for both refs and posts a 2-column PR evidence table.                                         |
+| Workflow                          | Trigger                                                                                    | What it does                                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Mantis Discord Smoke`            | manual dispatch                                                                            | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                       |
+| `Mantis Discord Status Reactions` | PR comment or manual dispatch                                                              | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
+| `Mantis Scenario`                 | manual dispatch                                                                            | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
+| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                            | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                      |
+| `Mantis Telegram Live`            | PR comment or manual dispatch                                                              | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
+| `Mantis Telegram Desktop Proof`   | maintainer PR label (`mantis: telegram-visible-proof`) plus PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs the real-user Crabbox Telegram Desktop proof lane for both refs and posts a 2-column PR evidence table.                                                              |
+| `Mantis Web UI Chat Proof`        | PR comment or manual dispatch                                                              | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
 
 `Mantis Discord Status Reactions` and `Mantis Telegram Live` both accept
 `baseline_ref`/`candidate_ref` (or `baseline=`/`candidate=` in a PR comment)
@@ -48579,6 +48661,8 @@ Comment triggers, from a PR with write/maintain/admin access:
 @openclaw-mantis telegram
 @openclaw-mantis telegram scenario=telegram-status-command
 @openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis web ui chat
+@openclaw-mantis web-ui-chat candidate=HEAD
 ```
 
 Telegram comment triggers default to the PR head SHA as candidate and
@@ -48586,6 +48670,11 @@ Telegram comment triggers default to the PR head SHA as candidate and
 `lease=<cbx_...>` to target a specific Crabbox provider or a pre-warmed
 desktop. `Mantis Telegram Desktop Proof` only responds to a PR comment when
 the PR already carries the `mantis: telegram-visible-proof` label.
+
+Web UI chat comment triggers default to the PR head SHA as candidate. They run
+the Control UI mocked-Gateway chat proof and publish browser artifacts; use
+normal Playwright/browser proof, maintainer screenshots, Crabbox, or local
+artifacts for other web pages and native app surfaces.
 
 ClawSweeper can also dispatch a scenario directly:
 
@@ -48628,22 +48717,30 @@ rotate it after the replacement secret is stored.
 
 ## Run outcomes
 
-A scenario fails in one of two distinguishable ways, and the report separates
-them so a flaky environment does not read as a product regression:
+Before/after transport scenarios distinguish these outcomes so a flaky
+environment does not read as a product regression:
 
 - **Bug reproduced**: baseline failed the way the scenario expects.
 - **Harness failure**: environment setup, credentials, transport API, browser,
   or provider failed before the oracle was meaningful.
 
+Candidate-only browser proof reports whether the candidate passed the mocked
+Gateway and visible UI assertions; it does not claim baseline reproduction.
+
 ## Adding a scenario
 
-Scenarios are TypeScript-defined per transport (see
+Live transport scenarios are TypeScript-defined per transport (see
 `MANTIS_SCENARIO_CONFIGS` in `extensions/qa-lab/src/mantis/run.runtime.ts` for
 the Discord before/after shape), not a standalone declarative file format.
 Each scenario needs: id and title, transport, required credentials, baseline
 ref policy, candidate ref policy, OpenClaw config patch, setup/stimulus steps,
 expected baseline and candidate oracle, visual capture targets, timeout
 budget, and cleanup steps.
+
+Focused candidate-only browser proof can use a dedicated deterministic E2E test
+and workflow. Keep its scope explicit, validate the candidate ref before
+execution, isolate secret-backed publishing, and emit the same evidence
+manifest contract.
 
 Prefer small, typed oracles over vision checks: Discord reaction state or
 message references, Slack thread `ts`/reaction API state, email message ids
@@ -67064,7 +67161,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops heavyweight browser, cron, message, media-generation, voice, and PDF tools unless explicitly required, and defaults larger tool catalogs behind structured Tool Search controls. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
+3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops heavyweight browser, cron, message, media-generation, voice, and PDF tools unless explicitly required, and defaults larger tool catalogs behind structured Tool Search controls while keeping `exec` directly visible. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
@@ -84632,10 +84729,10 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
   </Step>
   <Step title="Post-install tasks">
-    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
-    - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
-    - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
-    - Runs a post-install smoke verify when `--verify` is set
+    - Resolves the just-installed `openclaw` binary for follow-up commands
+    - For an unconfigured install, starts onboarding before doctor or gateway probes. With `--no-onboard` or no TTY, it prints the command to finish setup later.
+    - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs doctor. Upgrades update plugins when possible, or print the manual command in a headless prompt-enabled run.
+    - When `--verify` runs, it checks the installed version and checks gateway health only after configuration exists.
 
   </Step>
 </Steps>
@@ -107459,6 +107556,12 @@ Twilio-only config:
 
 With `voiceCall.enabled: true` (the default) and Twilio transport, Voice Call places the DTMF sequence before opening the realtime media stream, then uses the saved intro text as the initial realtime greeting. If `voice-call` is not enabled, Google Meet can still validate and record the dial plan but cannot place the Twilio call.
 
+Leave `voiceCall.gatewayUrl` unset to use the local trusted Gateway runtime, which preserves the
+invoking agent for the full call. A configured Gateway URL remains an explicit WebSocket target and
+cannot authenticate plugin provenance; non-default agent joins fail closed instead of silently
+using another agent. Run Google Meet and Voice Call in the same Gateway process when per-agent
+routing is required.
+
 ## Tool
 
 Agents use the `google_meet` tool:
@@ -117261,7 +117364,7 @@ summary: "api.runtime -- the injected runtime helpers available to plugins"
 title: "Plugin runtime helpers"
 sidebarTitle: "Runtime helpers"
 read_when:
-  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent, nodes)
+  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
@@ -117471,6 +117574,27 @@ two-party event loops that do not go through the shared inbound reply runner.
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
     </Warning>
+
+  </Accordion>
+  <Accordion title="api.runtime.gateway">
+    Call another Gateway method in process while preserving the current plugin's trusted runtime
+    identity. This is intended for bundled or trusted official plugins that compose plugin-owned
+    Gateway capabilities without opening a loopback WebSocket connection.
+
+    ```typescript
+    if (await api.runtime.gateway.isAvailable()) {
+      const result = await api.runtime.gateway.request<{ callId: string }>(
+        "voicecall.start",
+        { to: "+15550001234", mode: "conversation" },
+        { timeoutMs: 60_000 },
+      );
+    }
+    ```
+
+    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
+    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
+    before choosing this path from tools that can also run in standalone agent processes.
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
@@ -157311,6 +157435,7 @@ openclaw browser select 9 OptionA OptionB
 openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref e12
 openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
@@ -157357,7 +157482,7 @@ Notes:
   download URL, suggested filename, and guarded local path. Explicit download
   interception is available for managed Playwright profiles; existing-session
   profiles return an unsupported-operation error.
-- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
+- Prefer atomic chooser uploads: pass the trigger `--ref` with the upload so OpenClaw arms and clicks in one request. Paths-only `upload` remains supported when a later trigger is intentional. Use `--input-ref` or `--element` to set a file input directly. `dialog` is an arming call; run it before the click/press that triggers the dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` accepts files from the OpenClaw temp uploads root and
@@ -158282,6 +158407,10 @@ browser-specific model settings.
    as a text block instead of an image block.
 4. If image understanding is unavailable, skipped, or fails, the browser falls
    back to returning the original image block.
+
+Screenshot image blocks are private tool results: the agent can inspect them,
+but OpenClaw does not automatically attach them to channel replies. To share a
+screenshot, ask the agent to send it explicitly with the message tool.
 
 Use the existing `tools.media.image` / `tools.media.models` fields for model
 fallbacks, timeouts, byte limits, profiles, and provider request settings.
@@ -161342,6 +161471,11 @@ Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
 node host). If a node does not advertise exec approvals yet, edit its
 local approvals file directly.
 
+Some node hosts, including the Windows companion, own a different approval
+policy format. Control UI shows these host-native policies read-only. Use the
+companion app or `openclaw approvals set --node <id|name|ip>` with the native
+policy shape to edit them; see [Approvals CLI](/cli/approvals).
+
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).
 
@@ -161592,7 +161726,7 @@ To hard-disable exec, deny it via tool policy (`tools.deny: ["exec"]` or per-age
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host. See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
-When approvals are required, the exec tool returns immediately with `status: "approval-pending"` and an approval id. Once approved (or denied / timed out), the Gateway emits command progress and completion system events only for approved runs (`Exec running` / `Exec finished`). Denied or timed-out approvals are terminal and do not wake the agent session with a denial system event.
+When a human approval is required, node-host and non-native gateway flows return immediately with `status: "approval-pending"` and an approval id. Native chat and Web UI gateway flows can instead wait inline and return the final command result after approval. An `approval-pending` result means the command has not started, so foreground fallback warnings appear only if the approved command actually runs inline. Approved asynchronous runs emit command progress and completion system events (`Exec running` / `Exec finished`); denied or timed-out approvals are terminal and do not wake the agent session with a denial system event.
 
 On channels with native approval cards/buttons, the agent should rely on that native UI first and only include a manual `/approve` command when the tool result explicitly says chat approvals are unavailable or manual approval is the only path.
 
@@ -172648,7 +172782,7 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
 
 The sidebar pins navigation above a scrollable recent-session list split into **Pinned**, one section per custom group (the session `category`, sorted alphabetically), and **Ungrouped** for the rest. Every pinned session stays visible, while unpinned sessions keep an independent nine-item recent budget. Opening a visible session moves the selection highlight without reordering the rows; an off-list deep link is surfaced at the top. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Group headers have their own menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session, including archived ones, and deleting a group keeps its sessions and moves them back to Ungrouped. Groups created from the header start empty and stay visible as move targets. The sort control in the session list header also has a Group by toggle: Custom groups (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. Multi-agent setups show a compact scope control in the Ungrouped header. **Overview** is the only destination pinned by default; expand **More** to reach every other destination. Select **Customize sidebar** under More, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set and More expansion state are stored in the current browser profile and survive reloads.
 
-The compact footer keeps connection status, **Settings**, **Docs**, mobile pairing, and the sidebar collapse toggle together. Collapsing shrinks the sidebar to an icon rail with the expand button at the top of the footer stack. At drawer breakpoints, the topbar hamburger button replaces that control.
+A **Search** field at the top of the sidebar opens the command palette (⌘K). The compact footer keeps connection status, **Settings**, **Docs**, mobile pairing, and the light/dark/system color-mode toggle together. The sidebar collapse toggle sits at the left edge of the top bar, macOS style; collapsing shrinks the sidebar to an icon rail. At drawer breakpoints, the same top bar button opens the sidebar as a slide-over drawer instead.
 
 ## What it can do (today)
 
@@ -172768,7 +172902,7 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists recent sessions by pinned/custom/ungrouped section with a New Session action and an All Sessions link. Pinned sessions always stay visible; unpinned sessions keep a nine-item budget and a stable recency order, so opening a visible row moves only the highlight. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Switching the compact agent scope shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
-    - Session search lives in the command palette (⌘K, or the search button in the top bar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The All Sessions page keeps the exhaustive searchable list with filters.
+    - Session search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The All Sessions page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
@@ -172812,13 +172946,15 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
-retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
-connection returns; **Retry now** in the banner forces an immediate attempt.
+stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
+bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
+actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
 
-The login gate only appears when there is no established session yet (first open, page reload
-before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
-pairing) — states that need your input rather than waiting.
+When this browser already holds credentials (a configured token/password or an approved device
+token), first opens and reloads show a small animated OpenClaw mark while the connection is
+established instead of flashing the login gate. The login gate only appears when no credentials
+are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
+states that need your input rather than waiting.
 
 ## PWA install and web push
 
