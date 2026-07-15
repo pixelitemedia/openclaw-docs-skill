@@ -325,7 +325,7 @@ dispatch.
 | `pnpm-store-warmup`                | Warm the lockfile-pinned pnpm store cache without blocking Linux Node shards                                                                                                                                          | Node or docs-check lanes selected                   |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                 | Node-relevant changes                               |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                               | Control UI i18n-relevant changes and manual CI      |
-| `checks-fast-core`                 | Fast Linux correctness lanes: changed-file TypeScript LOC ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                     | Node-relevant or production TypeScript changes      |
+| `checks-fast-core`                 | Fast Linux correctness lanes: suppression-baseline max-lines ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                  | Node-relevant changes                               |
 | `qa-smoke-ci-profile`              | Two self-contained balanced parts of the bounded automatic QA Smoke representative set; full taxonomy coverage remains available through explicit QA profiles                                                         | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                   | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                  | Node-relevant changes                               |
@@ -440,7 +440,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
-Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref. The optional `loc_base_ref` supplies an exact comparison SHA for standalone manual runs. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pr_number` to identify the open pull request. The workflow authenticates that PR's current head and base, waits for GitHub to finish computing mergeability, pins the reported test merge commit, fetches GitHub's synthetic pull-request merge ref, verifies its SHA and both parents, then checks out that tree before installing dependencies and running the changed-file TypeScript LOC ratchet. This matches automatic PR CI's merged tree and policy implementation. Target-owned workflow revisions without `pr_number` cannot provide equivalent merge-tree evidence; update the PR head to the current workflow and restart exact-head proof instead of using the fallback.
+PR max-lines checks derive the baseline from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; the max-lines baseline is compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
@@ -1549,6 +1549,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
   - H2: Targets
@@ -2618,19 +2619,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 ## cli/crestodian.md
 
 - Route: /cli/crestodian
-- Headings:
-  - H1: openclaw crestodian
-  - H2: When it starts
-  - H2: What Crestodian shows
-  - H2: Examples
-  - H2: Operations and approval
-  - H3: Switching to masked channel setup
-  - H2: Setup bootstrap
-  - H2: AI conversation
-  - H3: CLI harness trust model
-  - H2: Switching to an agent
-  - H2: Message rescue mode
-  - H2: Related
+- Headings: none
 
 ## cli/cron.md
 
@@ -3028,6 +3017,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Web-search follow-ups
   - H2: Other behaviors
   - H2: Common follow-up commands
+
+## cli/openclaw.md
+
+- Route: /cli/openclaw
+- Headings:
+  - H1: openclaw setup
+  - H2: When it starts
+  - H2: What OpenClaw shows
+  - H2: Examples
+  - H2: Operations and approval
+  - H3: Switching to masked channel setup
+  - H2: Setup bootstrap
+  - H2: AI conversation
+  - H3: CLI harness trust model
+  - H2: Switching to an agent
+  - H2: Message rescue mode
+  - H2: Related
 
 ## cli/pairing.md
 
@@ -6073,6 +6079,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS app
   - H3: macOS user setting
   - H3: CLI helper (node invoke)
+  - H2: Linux node host
   - H2: Safety + practical limits
   - H2: macOS screen video (OS-level)
   - H2: Related
@@ -6121,6 +6128,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Codex sessions and transcripts
   - H3: Claude sessions and transcripts
   - H3: OpenCode and Pi sessions
+  - H3: Terminal file uploads
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -6148,6 +6156,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Permissions mapping (node.permissions)
   - H2: Command: location.get
   - H2: Background behavior
+  - H2: Linux node host
   - H2: Model/tooling integration
   - H2: UX copy (suggested)
   - H2: Related
@@ -6399,7 +6408,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Canvas
   - H2: CLI and SSH alternative
+  - H2: Node capabilities
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills
@@ -7745,6 +7756,22 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/linux-canvas.md
+
+- Route: /plugins/reference/linux-canvas
+- Headings:
+  - H1: Linux Canvas plugin
+  - H2: Distribution
+  - H2: Surface
+
+## plugins/reference/linux-node.md
+
+- Route: /plugins/reference/linux-node
+- Headings:
+  - H1: Linux Node plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/litellm.md
 
 - Route: /plugins/reference/litellm
@@ -8585,6 +8612,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility policy
   - H2: How to migrate
   - H2: Import path reference
+  - H2: Removed compatibility surfaces
+  - H3: Private testing barrel
   - H2: Active deprecations
   - H2: Talk and realtime voice migration
   - H2: Removal timeline
@@ -8601,6 +8630,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Capability registration
   - H3: Tools and commands
   - H3: Infrastructure
+  - H4: Requester-scoped MCP connections
   - H3: Host hooks for workflow plugins
   - H3: Gateway discovery registration
   - H3: CLI registration metadata
@@ -9608,6 +9638,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: GLM models
   - H2: Getting started
   - H3: Endpoints
+  - H2: Rate limits and overloads
   - H2: Config example
   - H2: Built-in catalog
   - H2: Thinking levels
@@ -11658,7 +11689,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Keyboard shortcuts
   - H2: Slash commands
   - H2: Local shell commands
-  - H2: Crestodian setup and repair helper
+  - H2: OpenClaw setup and repair helper
   - H2: Tool output
   - H2: Terminal colors
   - H2: History + streaming
@@ -16184,6 +16215,7 @@ An account counts as configured only when `baseUrl`, `token`, and `workspace` ar
 | `agentId`               | route default       | Pin this account's inbound messages to one agent.                                       |
 | `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                     |
 | `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
+| `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
 | `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
@@ -16249,6 +16281,46 @@ bit:
 
 Keep the trust bit off if you only use the default `agent` reply mode; it is
 not needed there.
+
+## Command menu
+
+At gateway startup, each configured account publishes OpenClaw's native
+commands to ClickClack. They appear in composer autocomplete labeled with the
+bot's handle. The published set is replaced wholesale on each startup,
+including clearing a stale menu when the native command catalog is empty.
+
+Command-menu sync is enabled by default. Set `commandMenu: false` on an account
+to opt out:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      commandMenu: false,
+    },
+  },
+}
+```
+
+The token needs `commands:write`. Current ClickClack `bot:write` and
+`bot:admin` bundles include that scope, and it can also be granted
+individually. Tokens created before command menus were introduced may need the
+scope added or a replacement token.
+
+Sync is best effort and runs once per gateway start. A missing scope or network
+failure logs a warning; an older ClickClack server without the endpoint logs at
+debug level. None of these failures block realtime startup. Menus remain
+available while the agent is offline and are removed when the bot leaves the
+workspace.
+
+This release publishes native command specs only. Aliases and
+skill-, plugin-, or custom-command catalogs are not added to the menu. If a
+name is also registered as an HTTP slash command, ClickClack dispatches that
+registration first; other menu commands continue through normal message
+delivery.
 
 Use `agent` mode for cross-service correlation evidence. For an authoritative
 ClickClack message id in its canonical `msg_<ulid>` shape, the channel derives
@@ -16340,11 +16412,12 @@ openclaw message send --channel clickclack --target thread:msg_123 --message "fo
 ClickClack token scopes are enforced by the ClickClack API.
 
 - `bot:read`: read workspace/channel/message/thread/DM/realtime/profile data.
-- `bot:write`: `bot:read` plus channel messages, thread replies, DMs, and uploads.
+- `bot:write`: `bot:read` plus channel messages, thread replies, DMs, uploads, and command-menu publishing.
 - `bot:admin`: `bot:write` plus channel creation.
+- `commands:write`: publish the bot's command menu. Included in current `bot:write` and `bot:admin` bundles and grantable individually.
 - `agent_activity:write`: durable agent activity rows (`agent_commentary` / `agent_tool`). Not inherited by `bot:write` or `bot:admin`; required only when `agentActivity: true` is set.
 
-OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
+OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
 
 ## Troubleshooting
 
@@ -16352,6 +16425,7 @@ OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write
 - `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
 - No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
+- No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.
 
 
 
@@ -17033,10 +17107,9 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
       streaming: {
         mode: "progress",
         progress: {
-          label: "auto",
           maxLines: 8,
           maxLineChars: 120,
-          toolProgress: true,
+          toolProgress: false,
           commentary: false,
         },
       },
@@ -17048,11 +17121,11 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. When block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
-    - `progress` keeps one editable status draft and updates it with tool progress until final delivery. Raw tool progress uses the shared starter label as a rolling line; narrated status shows only the narration unless a label is explicitly configured.
+    - `progress` keeps one editable status draft until final delivery. By default it shows one line of the agent's latest preamble or narration, with no generated label, spacer, or tool rows.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.preview.toolProgress` (default `true`) controls whether tool/progress updates reuse the preview message.
-    - Tool/progress rows render as compact emoji + title + detail when available, for example `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`.
-    - `streaming.progress.commentary` (default `false`) opts into assistant commentary/preamble text in the temporary progress draft. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
+    - `streaming.preview.toolProgress` defaults to `true` in `partial`/`block` mode. Discord progress mode defaults to no tool rows; set `streaming.progress.toolProgress: true` to opt in.
+    - Set `streaming.progress.toolProgress: true` to add compact tool/progress rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`. For compatibility, an existing `progress.label` or `progress.labels` configuration retains the prior tool-row default; set `toolProgress: false` for a custom label without rows.
+    - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
 
@@ -17220,6 +17293,34 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `allowlist` (uses `guilds.<id>.users`)
 
     Reaction events are turned into system events and attached to the routed Discord session.
+
+  </Accordion>
+
+  <Accordion title="Online presence events">
+    Opt a guild into routed agent wakes when a human member transitions from offline to online:
+
+    ```json5
+    {
+      channels: {
+        discord: {
+          intents: { presence: true },
+          guilds: {
+            "111111111111111111": {
+              presenceEvents: {
+                channelId: "222222222222222222",
+                users: ["333333333333333333"], // optional; omit for all humans
+                reconnectSuppressSeconds: 300, // optional; new-session quiet window (0 disables)
+                burstLimit: 8, // optional; max events per burst window
+                burstWindowSeconds: 60, // optional; sliding burst-detection window
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    `presenceEvents` requires an enabled heartbeat for the routed agent and the privileged **Presence Intent** on the application's Bot page in the Discord Developer Portal. OpenClaw seeds current online members from each complete `GUILD_CREATE` snapshot, routes observed offline-to-online transitions, and also treats a later first online signal for an unseen member as newly available. That member may have come online or joined after the snapshot, so the event does not assert an exact prior status. OpenClaw ignores bots and unchanged online states and persists an eight-hour per-user cooldown across Gateway restarts. When Discord establishes a new Gateway session and sends `READY`, OpenClaw suppresses presence-derived events for `reconnectSuppressSeconds` (default 300, `0` disables) while guild presence state is rebuilt, so re-observed members cannot wake the agent one by one. It additionally rate-limits successfully queued events per guild to `burstLimit` events (default 8) per `burstWindowSeconds` sliding window (default 60), logging each guild's suppression episode once. A resumed session is not treated as a new session. Discord limits snapshots for guilds above 75,000 members; there, OpenClaw requires an explicit offline update before greeting. The system event carries immutable user, guild, and channel IDs without embedding mutable display names. The agent decides whether and how to greet.
 
   </Accordion>
 
@@ -19691,7 +19792,7 @@ Group owners can toggle per-group activation with a standalone message:
 - `/activation mention`
 - `/activation always`
 
-`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches the channel's `allowFrom` / `commands.ownerAllowFrom` (when no allowlist is configured, the account's own id counts as owner). The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
+`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches `commands.ownerAllowFrom`; channel `allowFrom` lists only control ordinary channel and command access. The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
 
 ## Context fields
 
@@ -19703,7 +19804,7 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session (and after `/activation` changes). It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Non-Telegram groups also discourage Markdown tables; Telegram rich-text guidance comes from the Telegram channel prompt. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
+The agent system prompt includes a group intro on the first turn of a new group session (and after `/activation` changes). It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channels whose declared table mode does not preserve native or raw tables also discourage Markdown tables. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 
@@ -20549,7 +20650,7 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
   </Accordion>
 
   <Accordion title="Message IDs">
-    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs (`MessageSidFull`) when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
+    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs (`MessageSidFull`) when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID expires, retry with its `MessageSidFull` while targeting the conversation that supplied it. Full IDs do not bypass conversation or account binding, so replace an ID from another chat with one from the current target. Remote delegated calls can reject stale full IDs when current-conversation evidence is unavailable.
 
   </Accordion>
 
@@ -22286,11 +22387,12 @@ All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (
 
 ```bash
 openclaw matrix encryption setup
+printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix encryption setup --recovery-key-stdin
 ```
 
 Bootstraps secret storage and cross-signing, creates a room-key backup if needed, then prints status and next steps. Useful flags:
 
-- `--recovery-key <key>` apply a recovery key before bootstrapping (prefer the stdin form below)
+- `--recovery-key-stdin` reads a recovery key from stdin without exposing it in process arguments; `--recovery-key <key>` remains available for compatibility
 - `--force-reset-cross-signing` discard the current cross-signing identity and create a new one (intentional use only)
 
 For a new account, enable E2EE at creation time:
@@ -23334,7 +23436,7 @@ When a user clicks a button:
 
 ### Direct API integration (external scripts)
 
-External scripts and webhooks can post buttons directly via the Mattermost REST API instead of going through the agent's `message` tool. Use `buildButtonAttachments()` from the plugin when possible; if posting raw JSON, follow these rules:
+External scripts and webhooks can post buttons directly via the Mattermost REST API instead of going through the agent's `message` tool. Prefer OpenClaw's `message` tool. For direct integrations, import `buildButtonAttachments` from `@openclaw/mattermost/api.js`; if posting raw JSON, follow these rules:
 
 **Payload structure:**
 
@@ -26124,6 +26226,9 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     openclaw channels add
     ```
     The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+
+    For non-interactive setup, `openclaw channels add --channel signal` also accepts `--signal-number <e164>` for the bot phone number, plus `--http-host <host>` and `--http-port <port>` for the Signal daemon endpoint (default `127.0.0.1:8080`).
+
   </Step>
   <Step title="Link or register the account">
     - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
@@ -35163,6 +35268,8 @@ Writes to `plugins.entries` (or any subpath) always require a restart, since the
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
 
+OpenClaw-owned writes reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
+
 <Warning>
 The active config path must be a regular file. Symlinked `openclaw.json` layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real file instead.
 </Warning>
@@ -35299,355 +35406,14 @@ When configure starts from a provider auth choice, the default-model and allowli
 # Section: cli/crestodian.md
 
 ---
-summary: "CLI reference and security model for the inference-backed Crestodian setup and repair helper"
+summary: "Redirect to the OpenClaw system-agent reference"
 read_when:
-  - You finished inference setup and want Crestodian to configure the rest
-  - You need to inspect or repair OpenClaw with the local setup agent
-  - You are designing or enabling message-channel rescue mode
-title: "Crestodian"
+  - You followed an older Crestodian documentation link
+title: "Crestodian (redirect)"
+redirect: /cli/openclaw
 ---
 
-# `openclaw crestodian`
-
-Conversational Crestodian is OpenClaw's local setup, repair, and configuration
-agent. It starts only after the effective default model completes a real turn.
-Fresh installs establish inference first; malformed config stays on the
-classic doctor path.
-
-## When it starts
-
-Running `openclaw` with no subcommand routes based on config state:
-
-- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts guided onboarding with live AI verification.
-- Config exists but fails validation: starts classic onboarding, which reports the issues and directs you to `openclaw doctor`.
-- Config exists and is valid: opens the normal agent TUI. A reachable
-  configured Gateway whose default agent has a model goes directly to that UI
-  without onboarding or Crestodian. Use `/crestodian` inside the TUI, or run
-  `openclaw crestodian` directly, to reach Crestodian later.
-
-Running `openclaw crestodian` first live-tests the configured default model. A passing turn starts Crestodian. An interactive failure opens guided inference setup and hands off to Crestodian after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
-
-Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh or invalid install, or to `openclaw agent --local ...` when config is valid.
-
-`openclaw onboard --modern` remains a compatibility alias for Crestodian, but uses the same inference gate: working inference opens the chat, interactive failures start guided inference setup, and noninteractive failures exit with onboarding guidance. `openclaw onboard --classic` opens the full step-by-step wizard.
-
-## What Crestodian shows
-
-Interactive Crestodian opens the same TUI shell as `openclaw tui`, with a Crestodian chat backend. The startup greeting covers:
-
-- config validity and the default agent
-- the verified model Crestodian is using
-- Gateway reachability from the first startup probe
-- the next recommended debug action
-
-It does not dump secrets or load plugin CLI commands just to start.
-
-Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, key/token presence, agents, model, and Gateway details.
-
-Crestodian uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
-
-## Examples
-
-```bash
-openclaw
-openclaw crestodian
-openclaw crestodian --json
-openclaw crestodian --message "models"
-openclaw crestodian --message "validate config"
-openclaw crestodian --message "setup workspace ~/Projects/work" --yes
-openclaw crestodian --message "set default model openai/gpt-5.6" --yes
-openclaw onboard --modern
-```
-
-Inside the Crestodian TUI:
-
-```text
-status
-health
-doctor
-validate config
-setup
-setup workspace ~/Projects/work
-config set gateway.port 19001
-config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
-gateway status
-restart gateway
-agents
-create agent work workspace ~/Projects/work
-models
-configure model provider
-set default model openai/gpt-5.6
-channels
-channel info slack
-connect slack
-open channel wizard for slack
-plugins list
-plugins search slack
-plugin install clawhub:openclaw-codex-app-server
-talk to work agent
-talk to agent for ~/Projects/work
-audit
-quit
-```
-
-## Operations and approval
-
-Crestodian uses typed operations instead of editing config ad hoc.
-
-Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
-
-Starting guided channel setup (`connect telegram`) also runs immediately. Its wizard collects explicit answers and owns the resulting writes.
-
-Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
-
-Doctor repairs are unavailable inside Crestodian because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit Crestodian and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside Crestodian.
-
-New agents inherit the live-verified default inference route. The agent id `crestodian` is reserved for the privileged virtual custodian and cannot be created as a normal agent.
-
-`config set` and `config set-ref` cannot change inference-route state,
-including inference-provider credentials, top-level `auth.*`, model catalogs,
-CLI backends, default/per-agent model routes, agent params/tools, or root
-`tools.*`. Raw writes under `env.*`, `secrets.*`, `plugins.*`, and `$include`
-are also refused because they can replace credential resolution or provider
-activation. Gateway and channel auth remain normal config surfaces. Use typed plugin/channel workflows and
-`set default model <provider/model>` for an already
-configured route; it live-tests the route before saving it. To configure or
-repair provider/auth access, exit Crestodian and run `openclaw onboard`.
-
-Plugin uninstall is refused inside Crestodian because removing a provider
-plugin could disable the inference route powering the session. Exit Crestodian
-and run `openclaw plugins uninstall <id>` from a terminal.
-
-Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
-
-Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
-
-Channel setup can run as a hosted conversation until it reaches a secret. The
-local Crestodian TUI does not accept sensitive wizard answers because terminal
-chat input is visible. It offers `open channel wizard` immediately, carrying
-the selected channel into the masked terminal wizard; you can also run
-`openclaw channels add --channel <channel>` later.
-
-### Switching to masked channel setup
-
-The local chat can hand control to the masked channel wizard:
-
-```text
-open channel wizard for slack
-channel info slack
-```
-
-`open channel wizard for <channel>` opens masked channel setup after the chat
-TUI closes. Use `channel info <channel>` first for the channel label, setup
-state, prerequisites summary, and docs link.
-
-Crestodian never changes provider/auth access from inside its own session: the
-session already depends on that inference route. For model-provider setup or
-repair, `configure model provider` returns exit/onboarding guidance without
-starting a wizard or writing config. Exit Crestodian and run `openclaw
-onboard`; onboarding stages the credentials and saves only a route that
-completes a real live turn. Start Crestodian again after onboarding succeeds.
-
-## Setup bootstrap
-
-`setup` configures the remaining workspace and Gateway state after guided onboarding has already established inference. It writes only through typed config operations and asks for approval first.
-
-```text
-setup
-setup workspace ~/Projects/work
-```
-
-`setup` preserves the verified effective model. It does not configure or
-replace inference.
-
-If inference is missing or its live check fails, leave Crestodian and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. Crestodian starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
-
-The macOS app skips this ladder entirely when it reaches a configured Gateway
-whose default agent already has a configured model; it opens the normal agent
-UI.
-For a fresh or incomplete Gateway, the app drives the inference ladder through
-the `crestodian.setup.detect` and `crestodian.setup.activate` Gateway methods:
-detect lists every candidate backend it finds, activate live-tests one
-candidate (a real "reply with OK" completion), and only persists the model,
-credential, and provider/runtime state needed for that route after the test passes. Workspace and Gateway defaults remain for Crestodian. A failing candidate
-never changes config; the app automatically walks down the ladder and finally
-offers a manual key/token step populated from the Gateway's active
-text-inference provider plugins. The selected provider owns its starter model
-and config, and the credential is verified the same way before it is saved.
-
-Codex supervision and other optional plugin features stay outside this
-inference activation transaction. Configure them only after inference is
-working and Crestodian has started; existing plugin policy and explicit
-supervision opt-outs remain untouched during inference setup.
-
-## AI conversation
-
-Interactive Crestodian's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `crestodian`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
-
-The host does not parse natural-language requests into operations. Free-form
-messages — including command-looking text and questions such as "why did my
-gateway stop?" — go to the AI, which can map the request to a typed operation
-through the `crestodian` tool.
-
-When a mutation is pending, only unambiguous approval or decline phrases from a
-closed list are resolved without inference. Ambiguous consent goes to a
-separate configured completion call and otherwise fails closed. Structured
-wizard fields and exact host navigation are UI controls, not natural-language
-operation parsing. One secret-hygiene exception is especially important: an
-exact `config set` on a sensitive path (tokens, keys, passwords) never reaches
-a model. The host creates a redacted proposal, and the value is masked in the
-AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
-
-Message-channel rescue mode never uses the model-assisted planner. Remote rescue stays deterministic so a broken or compromised normal agent path cannot be used as a config editor.
-
-### CLI harness trust model
-
-Embedded runtimes and the Codex app-server harness enforce the ring-zero
-restriction directly: the run carries an OpenClaw tool allow-list with only
-the `crestodian` tool. For Codex, OpenClaw also disables environments, native
-execution, multi-agent, goal, app/plugin, skill/MCP, web-search, and
-`request_user_input` surfaces for that run. Codex still injects its inert native `update_plan`
-utility; it can update the model's temporary checklist but cannot write files
-or OpenClaw configuration. CLI harnesses do not consume OpenClaw's allow-list,
-so Crestodian admits only backends whose own tool-selection contract can prove
-the same restriction:
-
-- Selectable backends, including Claude Code, launch with an empty native-tool
-  selection and one MCP tool, `crestodian`. Claude's generated MCP config is
-  applied with `--strict-mcp-config`, so no other MCP servers are loaded.
-- Backends that declare no native tools receive the same dedicated Crestodian
-  MCP server.
-- Always-on or unknown native-tool backends fail closed before inference; they
-  cannot host a Crestodian session.
-
-Only Crestodian sessions get the crestodian MCP server; normal agent runs
-never see this tool. Selectable/no-native CLI backends and API-key models
-therefore enforce the literal single-tool loop. Codex app-server models enforce
-a single OpenClaw authority tool plus the inert native planning utility. In all
-three cases, setup writes remain confined to Crestodian's audited approval
-contract.
-
-Gemini CLI remains available for normal agents, but it cannot enforce the
-tool-free probe required by the inference gate, so it cannot host Crestodian.
-
-## Switching to an agent
-
-Use a natural-language selector to leave Crestodian and open the normal TUI:
-
-```text
-talk to agent
-talk to work agent
-switch to main agent
-```
-
-`openclaw tui`, `openclaw chat`, and `openclaw terminal` open the normal agent TUI directly; they do not start Crestodian. After switching into the normal TUI, `/crestodian` returns to Crestodian, optionally with a follow-up request:
-
-```text
-/crestodian
-/crestodian restart gateway
-```
-
-## Message rescue mode
-
-Message rescue mode is the message-channel entrypoint for Crestodian: use it when your normal agent is dead but a trusted channel (for example WhatsApp) still receives commands.
-
-This is a deterministic emergency command handler, not the conversational
-Crestodian agent. It does not bootstrap a fresh setup or relax the inference
-gate for Crestodian chat.
-
-Supported command: `/crestodian <request>`. Rescue accepts the exact typed command grammar only — natural language is rejected with a hint, never guessed into an operation, and no model is ever consulted.
-
-```text
-You, in a trusted owner DM: /crestodian status
-OpenClaw: Crestodian rescue mode. Gateway reachable: no. Config valid: no.
-You: /crestodian restart gateway
-OpenClaw: Plan: restart the Gateway. Reply /crestodian yes to apply.
-You: /crestodian yes
-OpenClaw: Applied. Audit entry written.
-```
-
-Agent creation can also be queued locally or via rescue:
-
-```text
-create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
-/crestodian create agent work workspace ~/Projects/work
-```
-
-Agent creation may name only the current live-verified default model. Omit the
-model to inherit that route.
-
-Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
-
-Security contract for remote rescue:
-
-- Disabled when sandboxing is active for the agent/session; Crestodian refuses remote rescue and points to local CLI repair.
-- Default effective state is `auto`: allow remote rescue only in trusted YOLO operation, where the runtime already has unsandboxed local authority (`tools.exec.security` resolves to `full` and `tools.exec.ask` resolves to `off`, with sandbox mode `off`).
-- Requires an explicit owner identity; no wildcard sender rules, open group policy, unauthenticated webhooks, or anonymous channels.
-- Owner DMs only by default; group/channel rescue needs explicit opt-in.
-- Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local Crestodian and rescue; run `openclaw plugins uninstall <id>` from a terminal.
-- Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
-- Persistent writes still require approval, even in rescue mode.
-- Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.
-- Secrets are never echoed. SecretRef inspection reports availability, not values.
-- If the Gateway is alive, rescue prefers Gateway typed operations; if it is dead, rescue uses only the minimal local repair surface that does not depend on the normal agent loop.
-
-Config shape:
-
-```jsonc
-{
-  "crestodian": {
-    "rescue": {
-      "enabled": "auto",
-      "ownerDmOnly": true,
-      "pendingTtlMinutes": 15,
-    },
-  },
-}
-```
-
-- `enabled`: `"auto"` (default) allows rescue only when the effective runtime is YOLO and sandboxing is off; `false` never allows message-channel rescue; `true` explicitly allows rescue when owner/channel checks pass (still subject to the sandboxing denial).
-- `ownerDmOnly`: restrict rescue to owner direct messages. Default `true`.
-- `pendingTtlMinutes`: how long a pending rescue write stays open for `/crestodian yes` approval before expiring. Default `15`.
-
-Remote rescue is covered by the Docker lane:
-
-```bash
-pnpm test:docker:crestodian-rescue
-```
-
-An opt-in live channel command-surface smoke checks `/crestodian status` plus a persistent approval roundtrip through the rescue handler:
-
-```bash
-pnpm test:live:crestodian-rescue-channel
-```
-
-Inference-gated packaged one-shot setup is covered by:
-
-```bash
-pnpm test:docker:crestodian-first-run
-```
-
-That packaged-CLI lane starts with an empty state dir and proves Crestodian
-fails closed without inference. It then tests and activates fake Claude through
-the packaged activation module. Only afterward does a fuzzy request reach the
-planner and resolve to typed setup, followed by one-shot commands that create an
-additional agent, configure Discord through a plugin enablement plus token
-SecretRef, validate config, and check the audit log. This lane is supporting
-gate/operation evidence; it does not exercise interactive onboarding or the
-Crestodian agent/tool/approval conversation. The QA Lab scenario below redirects
-to the same Docker lane:
-
-```bash
-pnpm openclaw qa suite --scenario crestodian-ring-zero-setup
-```
-
-## Related
-
-- [CLI reference](/cli)
-- [Doctor](/cli/doctor)
-- [TUI](/cli/tui)
-- [Sandbox](/cli/sandbox)
-- [Security](/cli/security)
+This page moved to [OpenClaw setup and repair](/cli/openclaw).
 
 
 
@@ -38074,29 +37840,29 @@ the commands, global flags, and output styling rules that apply across the CLI.
 
 Setup commands by intent:
 
-- `openclaw setup` and `openclaw onboard` verify inference first, then start Crestodian for Gateway, workspace, channels, skills, and health setup.
+- `openclaw setup` and `openclaw onboard` verify inference first, then start OpenClaw for Gateway, workspace, channels, skills, and health setup.
 - `openclaw setup --baseline` creates the baseline config and workspace without walking the guided onboarding flow.
 - `openclaw configure` changes targeted parts of an existing setup: model auth, gateway, channels, plugins, or skills.
 - `openclaw channels add` configures channel accounts after the baseline exists; run without flags for guided setup, or with channel-specific flags for scripts.
 
 ## Command pages
 
-| Area                         | Commands                                                                                                                                                                                                                                  |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Setup and onboarding         | [`crestodian`](/cli/crestodian) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
-| Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                     |
-| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                             |
-| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`audit`](/cli/audit)                                                                                                                                   |
-| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                                 |
-| Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                            |
-| Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                         |
-| Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)                 |
-| Automation                   | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                     |
-| Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                                   |
-| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                                 |
-| Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                     |
-| Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                         |
-| Plugins (optional)           | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                                                              |
+| Area                         | Commands                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
+| Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                 |
+| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
+| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`audit`](/cli/audit)                                                                                                                               |
+| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
+| Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                        |
+| Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
+| Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
+| Automation                   | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                 |
+| Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
+| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                             |
+| Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
+| Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
+| Plugins (optional)           | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                                                          |
 
 ## Global flags
 
@@ -38145,7 +37911,7 @@ independently; run `<command> --help` for the authoritative, current list.
 
 ```
 openclaw [--dev] [--profile <name>] <command>
-  crestodian
+  openclaw
   setup
   onboard
   configure
@@ -41049,7 +40815,7 @@ Camera and Canvas commands have their own docs: [Camera nodes](/nodes/camera), [
 ---
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
-  - You want to establish inference, then finish setup with Crestodian
+  - You want to establish inference, then finish setup with OpenClaw
 title: "Onboard"
 ---
 
@@ -41057,8 +40823,10 @@ title: "Onboard"
 
 Guided setup that establishes inference first: it detects existing AI access,
 requires a live completion, persists only the working route, and then starts
-Crestodian to configure the rest. `openclaw setup` is the same entry point;
-`openclaw setup --baseline` only writes the baseline config/workspace.
+OpenClaw to configure the rest. `openclaw setup` reaches this flow on fresh
+systems or whenever an onboarding option is present; configured systems use
+bare `openclaw setup` for system-agent chat. `openclaw setup --baseline` only
+writes the baseline config/workspace.
 
 <CardGroup cols={2}>
   <Card title="CLI onboarding hub" href="/start/wizard" icon="rocket">
@@ -41099,8 +40867,8 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
-- `--modern` is a compatibility alias for the Crestodian conversational setup
-  assistant. It uses the same live-inference gate as `openclaw crestodian` and
+- `--modern` is a compatibility alias for the OpenClaw conversational setup
+  assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--accept-risk`,
   `--non-interactive`, and `--json`. Other setup flags are rejected instead of
   being silently ignored.
@@ -41120,21 +40888,21 @@ then appear in a second menu. Supported browser or device sign-in and masked
 API-key or token methods use the same live completion path. OpenClaw persists
 only the verified model route and its credential after the test succeeds; a
 failed candidate does not replace the configured model or save the attempted
-credential. Choose **Skip for now** to exit without starting Crestodian and
+credential. Choose **Skip for now** to exit without starting OpenClaw and
 rerun `openclaw onboard` when you are ready. Workspace and Gateway setup remain
-unchanged until Crestodian starts.
+unchanged until OpenClaw starts.
 
-In guided mode, `--workspace <dir>` supplies Crestodian's proposed workspace
+In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
-Crestodian setup proposal. Classic and noninteractive onboarding persist their
+OpenClaw setup proposal. Classic and noninteractive onboarding persist their
 workspace through their normal setup flow.
 
-After inference passes, guided onboarding immediately starts Crestodian with
-the verified model. Crestodian can then configure the workspace, Gateway,
-channels, agents, plugins, and other optional features. Inside Crestodian, use
+After inference passes, guided onboarding immediately starts OpenClaw with
+the verified model. OpenClaw can then configure the workspace, Gateway,
+channels, agents, plugins, and other optional features. Inside OpenClaw, use
 `open channel wizard for <channel>` to hand channel credential collection to a
 masked terminal wizard. To change the model provider or its authentication,
-exit Crestodian and run `openclaw onboard`; Crestodian does not open the guided
+exit OpenClaw and run `openclaw onboard`; OpenClaw does not open the guided
 or classic provider flows.
 
 On a configured install, running `openclaw onboard` again verifies the current
@@ -41145,10 +40913,10 @@ workspace, so a model provided by a workspace plugin can fail here while still
 working in the agent.
 Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
 remote Gateway setup, imports, or full Gateway controls. For conversational
-non-inference setup and repair, run `openclaw crestodian`; `openclaw onboard
+non-inference setup and repair, run `openclaw setup`; `openclaw onboard
 --modern` is a compatibility alias through the same inference gate. The classic
 wizard can optionally verify the default model with a live completion, but
-Crestodian will not start until its own live inference check passes.
+OpenClaw will not start until its own live inference check passes.
 
 In an interactive terminal, bare `openclaw` (no subcommand) routes by config
 state:
@@ -41156,12 +40924,12 @@ state:
 - If the active config file is missing or has no authored settings (empty or
   metadata-only), it starts guided onboarding.
 - If the config file exists but fails validation, it starts the classic
-  onboarding path with `openclaw doctor` guidance. Crestodian needs working
+  onboarding path with `openclaw doctor` guidance. OpenClaw needs working
   inference and is not used to repair this pre-inference state.
 - If the config file is valid, it opens the normal agent TUI. A reachable
   configured Gateway with an agent and model goes directly to that UI without
-  onboarding or Crestodian. On a configured install, reach Crestodian with
-  `/crestodian` inside the TUI or `openclaw crestodian`.
+  onboarding or OpenClaw. On a configured install, reach OpenClaw with
+  `/openclaw` inside the TUI or `openclaw setup`.
 
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 
@@ -41322,7 +41090,7 @@ Output: `--suppress-gateway-token-output` suppresses token-bearing Gateway/UI ou
 
 <Note>
 `--json` does not imply non-interactive mode in guided or classic onboarding.
-With `--modern`, JSON is a one-shot Crestodian overview and exits after that
+With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
 single result. Use `--non-interactive` for other scripts.
 </Note>
 
@@ -41355,6 +41123,364 @@ openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+
+
+# Section: cli/openclaw.md
+
+---
+summary: "CLI reference and security model for the inference-backed OpenClaw setup and repair helper"
+read_when:
+  - You finished inference setup and want OpenClaw to configure the rest
+  - You need to inspect or repair OpenClaw with the local setup agent
+  - You are designing or enabling message-channel rescue mode
+title: "OpenClaw setup agent"
+---
+
+# `openclaw setup`
+
+OpenClaw ships with a built-in system agent — it speaks as "OpenClaw" — for
+local setup, repair, and configuration (formerly called Crestodian). It starts only after the effective default model completes a real turn.
+Fresh installs establish inference first; malformed config stays on the
+classic doctor path.
+
+## When it starts
+
+Running `openclaw` with no subcommand routes based on config state:
+
+- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts guided onboarding with live AI verification.
+- Config exists but fails validation: starts classic onboarding, which reports the issues and directs you to `openclaw doctor`.
+- Config exists and is valid: opens the normal agent TUI. A reachable
+  configured Gateway whose default agent has a model goes directly to that UI
+  without onboarding or OpenClaw. Use `/openclaw` inside the TUI, or run
+  `openclaw setup` directly, to reach OpenClaw later.
+
+Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
+
+Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh or invalid install, or to `openclaw agent --local ...` when config is valid.
+
+`openclaw onboard --modern` remains a compatibility alias for OpenClaw, but uses the same inference gate: working inference opens the chat, interactive failures start guided inference setup, and noninteractive failures exit with onboarding guidance. `openclaw onboard --classic` opens the full step-by-step wizard.
+
+## What OpenClaw shows
+
+Interactive OpenClaw opens the same TUI shell as `openclaw tui`, with an OpenClaw chat backend. The startup greeting covers:
+
+- config validity and the default agent
+- the verified model OpenClaw is using
+- Gateway reachability from the first startup probe
+- the next recommended debug action
+
+It does not dump secrets or load plugin CLI commands just to start.
+
+Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, key/token presence, agents, model, and Gateway details.
+
+OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
+
+## Examples
+
+```bash
+openclaw
+openclaw setup
+openclaw setup --json
+openclaw setup --message "models"
+openclaw setup --message "validate config"
+openclaw setup --message "setup workspace ~/Projects/work" --yes
+openclaw setup --message "set default model openai/gpt-5.6" --yes
+openclaw onboard --modern
+```
+
+Inside the OpenClaw TUI:
+
+```text
+status
+health
+doctor
+validate config
+setup
+setup workspace ~/Projects/work
+config set gateway.port 19001
+config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
+gateway status
+restart gateway
+agents
+create agent work workspace ~/Projects/work
+models
+configure model provider
+set default model openai/gpt-5.6
+channels
+channel info slack
+connect slack
+open channel wizard for slack
+plugins list
+plugins search slack
+plugin install clawhub:openclaw-codex-app-server
+talk to work agent
+talk to agent for ~/Projects/work
+audit
+quit
+```
+
+## Operations and approval
+
+OpenClaw uses typed operations instead of editing config ad hoc.
+
+Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
+
+Starting guided channel setup (`connect telegram`) also runs immediately. Its wizard collects explicit answers and owns the resulting writes.
+
+Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
+
+Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
+
+New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
+
+`config set` and `config set-ref` cannot change inference-route state,
+including inference-provider credentials, top-level `auth.*`, model catalogs,
+CLI backends, default/per-agent model routes, agent params/tools, or root
+`tools.*`. Raw writes under `env.*`, `secrets.*`, `plugins.*`, and `$include`
+are also refused because they can replace credential resolution or provider
+activation. Gateway and channel auth remain normal config surfaces. Use typed plugin/channel workflows and
+`set default model <provider/model>` for an already
+configured route; it live-tests the route before saving it. To configure or
+repair provider/auth access, exit OpenClaw and run `openclaw onboard`.
+
+Plugin uninstall is refused inside OpenClaw because removing a provider
+plugin could disable the inference route powering the session. Exit OpenClaw
+and run `openclaw plugins uninstall <id>` from a terminal.
+
+Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
+
+Applied writes are recorded in `~/.openclaw/audit/system-agent.jsonl`. Discovery is not audited; only applied operations and writes are.
+
+Channel setup can run as a hosted conversation until it reaches a secret. The
+local OpenClaw TUI does not accept sensitive wizard answers because terminal
+chat input is visible. It offers `open channel wizard` immediately, carrying
+the selected channel into the masked terminal wizard; you can also run
+`openclaw channels add --channel <channel>` later.
+
+### Switching to masked channel setup
+
+The local chat can hand control to the masked channel wizard:
+
+```text
+open channel wizard for slack
+channel info slack
+```
+
+`open channel wizard for <channel>` opens masked channel setup after the chat
+TUI closes. Use `channel info <channel>` first for the channel label, setup
+state, prerequisites summary, and docs link.
+
+OpenClaw never changes provider/auth access from inside its own session: the
+session already depends on that inference route. For model-provider setup or
+repair, `configure model provider` returns exit/onboarding guidance without
+starting a wizard or writing config. Exit OpenClaw and run `openclaw
+onboard`; onboarding stages the credentials and saves only a route that
+completes a real live turn. Start OpenClaw again after onboarding succeeds.
+
+## Setup bootstrap
+
+`setup` configures the remaining workspace and Gateway state after guided onboarding has already established inference. It writes only through typed config operations and asks for approval first.
+
+```text
+setup
+setup workspace ~/Projects/work
+```
+
+`setup` preserves the verified effective model. It does not configure or
+replace inference.
+
+If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
+
+The macOS app skips this ladder entirely when it reaches a configured Gateway
+whose default agent already has a configured model; it opens the normal agent
+UI.
+For a fresh or incomplete Gateway, the app drives the inference ladder through
+the `openclaw.setup.detect` and `openclaw.setup.activate` Gateway methods:
+detect lists every candidate backend it finds, activate live-tests one
+candidate (a real "reply with OK" completion), and only persists the model,
+credential, and provider/runtime state needed for that route after the test passes. Workspace and Gateway defaults remain for OpenClaw. A failing candidate
+never changes config; the app automatically walks down the ladder and finally
+offers a manual key/token step populated from the Gateway's active
+text-inference provider plugins. The selected provider owns its starter model
+and config, and the credential is verified the same way before it is saved.
+
+Codex supervision and other optional plugin features stay outside this
+inference activation transaction. Configure them only after inference is
+working and OpenClaw has started; existing plugin policy and explicit
+supervision opt-outs remain untouched during inference setup.
+
+## AI conversation
+
+Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+
+The host does not parse natural-language requests into operations. Free-form
+messages — including command-looking text and questions such as "why did my
+gateway stop?" — go to the AI, which can map the request to a typed operation
+through the `openclaw` tool.
+
+When a mutation is pending, only unambiguous approval or decline phrases from a
+closed list are resolved without inference. Ambiguous consent goes to a
+separate configured completion call and otherwise fails closed. Structured
+wizard fields and exact host navigation are UI controls, not natural-language
+operation parsing. One secret-hygiene exception is especially important: an
+exact `config set` on a sensitive path (tokens, keys, passwords) never reaches
+a model. The host creates a redacted proposal, and the value is masked in the
+AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
+
+Message-channel rescue mode never uses the model-assisted planner. Remote rescue stays deterministic so a broken or compromised normal agent path cannot be used as a config editor.
+
+### CLI harness trust model
+
+Embedded runtimes and the Codex app-server harness enforce the ring-zero
+restriction directly: the run carries an OpenClaw tool allow-list with only
+the `openclaw` tool. For Codex, OpenClaw also disables environments, native
+execution, multi-agent, goal, app/plugin, skill/MCP, web-search, and
+`request_user_input` surfaces for that run. Codex still injects its inert native `update_plan`
+utility; it can update the model's temporary checklist but cannot write files
+or OpenClaw configuration. CLI harnesses do not consume OpenClaw's allow-list,
+so OpenClaw admits only backends whose own tool-selection contract can prove
+the same restriction:
+
+- Selectable backends, including Claude Code, launch with an empty native-tool
+  selection and one MCP tool, `openclaw`. Claude's generated MCP config is
+  applied with `--strict-mcp-config`, so no other MCP servers are loaded.
+- Backends that declare no native tools receive the same dedicated OpenClaw
+  MCP server.
+- Always-on or unknown native-tool backends fail closed before inference; they
+  cannot host an OpenClaw session.
+
+Only OpenClaw sessions get the openclaw MCP server; normal agent runs
+never see this tool. Selectable/no-native CLI backends and API-key models
+therefore enforce the literal single-tool loop. Codex app-server models enforce
+a single OpenClaw authority tool plus the inert native planning utility. In all
+three cases, setup writes remain confined to OpenClaw's audited approval
+contract.
+
+Gemini CLI remains available for normal agents, but it cannot enforce the
+tool-free probe required by the inference gate, so it cannot host OpenClaw.
+
+## Switching to an agent
+
+Use a natural-language selector to leave OpenClaw and open the normal TUI:
+
+```text
+talk to agent
+talk to work agent
+switch to main agent
+```
+
+`openclaw tui`, `openclaw chat`, and `openclaw terminal` open the normal agent TUI directly; they do not start OpenClaw. After switching into the normal TUI, `/openclaw` returns to OpenClaw, optionally with a follow-up request:
+
+```text
+/openclaw
+/openclaw restart gateway
+```
+
+## Message rescue mode
+
+Message rescue mode is the message-channel entrypoint for OpenClaw: use it when your normal agent is dead but a trusted channel (for example WhatsApp) still receives commands.
+
+This is a deterministic emergency command handler, not the conversational
+OpenClaw agent. It does not bootstrap a fresh setup or relax the inference
+gate for OpenClaw chat.
+
+Supported command: `/openclaw <request>`. Rescue accepts the exact typed command grammar only — natural language is rejected with a hint, never guessed into an operation, and no model is ever consulted.
+
+```text
+You, in a trusted owner DM: /openclaw status
+OpenClaw: OpenClaw rescue mode. Gateway reachable: no. Config valid: no.
+You: /openclaw restart gateway
+OpenClaw: Plan: restart the Gateway. Reply /openclaw yes to apply.
+You: /openclaw yes
+OpenClaw: Applied. Audit entry written.
+```
+
+Agent creation can also be queued locally or via rescue:
+
+```text
+create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
+/openclaw create agent work workspace ~/Projects/work
+```
+
+Agent creation may name only the current live-verified default model. Omit the
+model to inherit that route.
+
+Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
+
+Security contract for remote rescue:
+
+- Disabled when sandboxing is active for the agent/session; OpenClaw refuses remote rescue and points to local CLI repair.
+- Default effective state is `auto`: allow remote rescue only in trusted YOLO operation, where the runtime already has unsandboxed local authority (`tools.exec.security` resolves to `full` and `tools.exec.ask` resolves to `off`, with sandbox mode `off`).
+- Requires an explicit owner identity; no wildcard sender rules, open group policy, unauthenticated webhooks, or anonymous channels.
+- Owner DMs only by default; group/channel rescue needs explicit opt-in.
+- Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local OpenClaw and rescue; run `openclaw plugins uninstall <id>` from a terminal.
+- Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
+- Persistent writes still require approval, even in rescue mode.
+- Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.
+- Secrets are never echoed. SecretRef inspection reports availability, not values.
+- If the Gateway is alive, rescue prefers Gateway typed operations; if it is dead, rescue uses only the minimal local repair surface that does not depend on the normal agent loop.
+
+Config shape:
+
+```jsonc
+{
+  "systemAgent": {
+    "rescue": {
+      "enabled": "auto",
+      "ownerDmOnly": true,
+      "pendingTtlMinutes": 15,
+    },
+  },
+}
+```
+
+- `enabled`: `"auto"` (default) allows rescue only when the effective runtime is YOLO and sandboxing is off; `false` never allows message-channel rescue; `true` explicitly allows rescue when owner/channel checks pass (still subject to the sandboxing denial).
+- `ownerDmOnly`: restrict rescue to owner direct messages. Default `true`.
+- `pendingTtlMinutes`: how long a pending rescue write stays open for `/openclaw yes` approval before expiring. Default `15`.
+
+`openclaw doctor --fix` migrates the legacy `crestodian` config block to
+`systemAgent`. Runtime reads only the canonical block.
+
+Remote rescue is covered by the Docker lane:
+
+```bash
+pnpm test:docker:system-agent-rescue
+```
+
+An opt-in live channel command-surface smoke checks `/openclaw status` plus a persistent approval roundtrip through the rescue handler:
+
+```bash
+pnpm test:live:system-agent-rescue-channel
+```
+
+Inference-gated packaged one-shot setup is covered by:
+
+```bash
+pnpm test:docker:system-agent-first-run
+```
+
+That packaged-CLI lane starts with an empty state dir and proves OpenClaw
+fails closed without inference. It then tests and activates fake Claude through
+the packaged activation module. Only afterward does a fuzzy request reach the
+planner and resolve to typed setup, followed by one-shot commands that create an
+additional agent, configure Discord through a plugin enablement plus token
+SecretRef, validate config, and check the audit log. This lane is supporting
+gate/operation evidence; it does not exercise interactive onboarding or the
+OpenClaw agent/tool/approval conversation. The QA Lab scenario below redirects
+to the same Docker lane:
+
+```bash
+pnpm openclaw qa suite --scenario system-agent-ring-zero-setup
+```
+
+## Related
+
+- [CLI reference](/cli)
+- [Doctor](/cli/doctor)
+- [TUI](/cli/tui)
+- [Sandbox](/cli/sandbox)
+- [Security](/cli/security)
 
 
 
@@ -41414,7 +41540,7 @@ Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a conf
 
 If `commands.ownerAllowFrom` is empty when you approve a pairing code, OpenClaw also records the approved sender as the command owner, using a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`.
 
-The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions such as `/diagnostics`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent; it does not by itself grant owner privileges beyond this one-time bootstrap.
+The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions such as `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent; it does not by itself grant owner privileges beyond this one-time bootstrap.
 
 If you approved a sender before this bootstrap existed, run `openclaw doctor`; it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
 
@@ -42085,7 +42211,8 @@ generated README for first-time ClawHub publishing and trusted-publisher setup.
 
 ```bash
 openclaw plugins search "calendar"                      # search ClawHub plugins
-openclaw plugins install <package>                       # source auto-detection
+openclaw plugins install @openclaw/<package>            # trusted official catalog
+openclaw plugins install <package>                       # arbitrary npm package
 openclaw plugins install clawhub:<package>                # ClawHub only
 openclaw plugins install npm:<package>                    # npm only
 openclaw plugins install npm-pack:<path.tgz>               # local npm-pack tarball
@@ -42095,7 +42222,7 @@ openclaw plugins install <path>                            # local path or archi
 openclaw plugins install -l <path>                         # link instead of copy
 openclaw plugins install <plugin>@<marketplace>             # marketplace shorthand
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
-openclaw plugins install <package> --force                  # overwrite existing install
+openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
 openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
@@ -42107,6 +42234,18 @@ sources with guarded environment variables. See
 
 <Warning>
 Bare package names install from npm by default during the launch cutover, unless they match a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead of hitting the npm registry. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code; prefer pinned versions.
+</Warning>
+
+<Warning>
+ClawHub packages and OpenClaw's bundled/official catalog are trusted install
+sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or
+marketplace source warns and asks before continuing. Noninteractive arbitrary
+installs must pass `--force` after you review and trust the source. The same
+flag overwrites an existing install target when needed. Normal updates of an
+already tracked install do not require it. This confirmation is separate from
+`--acknowledge-clawhub-risk`, which only applies to risky ClawHub release trust
+warnings. `--force` does not bypass `security.installPolicy` or remaining
+install safety checks.
 </Warning>
 
 `plugins search` queries ClawHub for installable `code-plugin` and
@@ -42136,10 +42275,10 @@ non-npm sources are not rewritten.
     If config is invalid during install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only documented install-time exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
   </Accordion>
-  <Accordion title="--force and reinstall vs update">
-    `--force` reuses the existing install target and overwrites an already-installed plugin or hook pack in place. Use it when intentionally reinstalling the same id from a new local path, archive, ClawHub package, or npm artifact. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+  <Accordion title="--force confirmation and reinstall vs update">
+    `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also reuses the existing target and overwrites it in place. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
 
-    If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. `--force` is not supported with `--link`.
+    If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass `--force` after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. With `--link`, `--force` confirms the source but does not change the linked-path install mode.
 
   </Accordion>
   <Accordion title="--pin scope">
@@ -42279,9 +42418,10 @@ to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
-`--link` is not supported with `--force` (linked plugins point at the source
-path directly, so there is nothing to overwrite in place), `--marketplace`, or
-`git:` installs, and it requires a local path that already exists.
+`--link` is not supported with `--marketplace` or `git:` installs, and it
+requires a local path that already exists. For a noninteractive local link,
+pass `--force` after reviewing the source; it confirms provenance but does not
+copy or overwrite the linked directory.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not
@@ -42381,11 +42521,12 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
+openclaw plugins update @acme/demo
 openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in `hooks.internal.installs`.
+Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in `hooks.internal.installs`. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
@@ -44574,9 +44715,10 @@ Example truncate response (`--max-lines 200`):
 # Section: cli/setup.md
 
 ---
-summary: "CLI reference for `openclaw setup` (alias for onboarding, with baseline setup available by flag)"
+summary: "CLI reference for `openclaw setup` (system-agent chat with onboarding fallback)"
 read_when:
-  - You're doing first-run setup with the CLI onboarding wizard
+  - You want to chat with OpenClaw for setup or repair
+  - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
 title: "Setup"
@@ -44584,12 +44726,23 @@ title: "Setup"
 
 # `openclaw setup`
 
-`openclaw setup` runs the same guided onboarding flow as `openclaw onboard`:
-it verifies and persists inference first, then starts Crestodian to configure
-the workspace, Gateway, channels, skills, and health. Use `--baseline` when you
-only need to initialize config/workspace folders without the wizard.
+`openclaw setup` is the system-agent entry point. On a configured system, bare
+`openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
+falls through to guided onboarding. Use `-m`/`--message` for one request or
+`--baseline` to initialize config/workspace folders without the wizard.
 
-In guided mode, `--workspace <dir>` is the workspace proposed to Crestodian;
+Routing order:
+
+1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
+   non-interactive, flow, mode, Gateway, daemon, skip, import, remote, or auth
+   options) runs onboarding exactly as `openclaw onboard` does.
+2. `-m`/`--message` or `--yes` runs the system agent.
+3. With no routing option, a configured interactive system opens OpenClaw. A
+   fresh system runs onboarding. On a configured system, `--json` prints the
+   system overview even without a TTY; an onboarding option keeps onboarding's
+   JSON summary.
+
+In guided mode, `--workspace <dir>` is the workspace proposed to OpenClaw;
 it is persisted only after you approve that proposal. Baseline, classic, and
 noninteractive setup persist the supplied workspace through their normal flow.
 
@@ -44601,8 +44754,8 @@ Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,
 `--skip-health`, `--skip-ui`, `--skip-hooks`). See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
-non-interactive examples. `openclaw onboard --modern` is the compatibility
-alias for the inference-gated Crestodian assistant and has no `setup` equivalent.
+non-interactive examples. `openclaw onboard --modern` remains a compatibility
+entry for the same inference-gated OpenClaw assistant.
 
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
@@ -44612,9 +44765,11 @@ alias for the inference-gated Crestodian assistant and has no `setup` equivalent
 
 | Flag                       | Description                                                                                           |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`     | Run one OpenClaw request.                                                                             |
+| `--yes`                    | Approve persistent config writes for one `--message` request.                                         |
 | `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
 | `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
-| `--wizard`                 | Accepted for compatibility; setup runs onboarding by default.                                         |
+| `--wizard`                 | Force interactive onboarding.                                                                         |
 | `--non-interactive`        | Run onboarding without prompts.                                                                       |
 | `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
 | `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
@@ -44626,7 +44781,7 @@ alias for the inference-gated Crestodian assistant and has no `setup` equivalent
 | `--import-secrets`         | Import supported secrets during onboarding migration.                                                 |
 | `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                         |
 | `--remote-token <token>`   | Remote Gateway token (optional).                                                                      |
-| `--json`                   | Output a JSON summary.                                                                                |
+| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                           |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
@@ -44641,6 +44796,10 @@ running onboarding.
 
 ```bash
 openclaw setup
+openclaw setup -m "status"
+openclaw setup -m "restart gateway" --yes
+openclaw setup --json
+openclaw setup --wizard
 openclaw setup --baseline
 openclaw setup --workspace ~/.openclaw/workspace
 openclaw setup --import-from hermes --import-source ~/.hermes
@@ -44649,7 +44808,7 @@ openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://
 
 ## Notes
 
-- After baseline setup, run `openclaw setup` or `openclaw onboard` for the full guided journey, `openclaw configure` for targeted changes, or `openclaw channels add` to add channel accounts.
+- After baseline setup, run `openclaw onboard` for the full guided journey, `openclaw configure` for targeted changes, or `openclaw channels add` to add channel accounts.
 - If Hermes state is detected, interactive onboarding can offer migration automatically. Import onboarding requires a fresh setup; use [Migrate](/cli/migrate) for dry-run plans, backups, and overwrite mode outside onboarding.
 
 ## Related
@@ -45763,9 +45922,14 @@ third-party packages, and non-npm sources keep their existing intent.
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
 install: OpenClaw installs the new package into a temporary npm prefix,
-verifies the packaged `dist` inventory there, then swaps that clean package
-tree into the real global prefix. If verification fails, post-update doctor,
-plugin sync, and restart work do not run from the suspect tree. Even when the
+lets the candidate package validate the host Node version during `preinstall`,
+and verifies the packaged `dist` inventory there. A packed completion guard
+stays outside that inventory until `preinstall` succeeds, so package managers
+that skip lifecycle scripts also stop before activation. On npm 12 and newer,
+the updater approves only the candidate OpenClaw lifecycle; transitive
+dependency scripts remain blocked. OpenClaw then swaps the clean package tree
+into the real global prefix. If verification fails, post-update doctor, plugin
+sync, and restart work do not run from the suspect tree. Even when the
 installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned
@@ -46736,6 +46900,7 @@ What the key fields do:
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
 - `config.modelFallback` is used only when no explicit or inherited model resolves
+- `config.fastMode` optionally overrides fast mode for recall without changing the main agent
 - `config.promptStyle: "balanced"` is the default for `recent` mode
 - active memory still runs only for eligible interactive persistent chat sessions (see [When it runs](#when-it-runs))
 
@@ -47173,6 +47338,15 @@ adds user-visible latency):
 thinking: "medium"; // default: "off"
 ```
 
+`config.fastMode` overrides fast mode only for the blocking memory sub-agent.
+Use `true`, `false`, or `"auto"`; leave it unset to inherit the normal
+agent, session, and model defaults. `"auto"` uses the recall model's configured
+`fastAutoOnSeconds` cutoff:
+
+```json5
+fastMode: true;
+```
+
 `config.promptAppend` adds operator instructions after the default prompt
 and before the conversation context — pair it with a custom `toolsAllow` when
 a non-core memory plugin needs specific tool order or query shaping:
@@ -47243,6 +47417,7 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking sub-agent is when deciding whether to return memory                                                                                                                                                     |
 | `config.toolsAllow`          | `string[]`                                                                                           | Concrete memory tool names the blocking sub-agent may call; defaults to `["memory_search", "memory_get"]`, or `["memory_recall"]` when `plugins.slots.memory` is `memory-lancedb`; wildcards, `group:*` entries, and core agent tools are ignored |
 | `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking sub-agent; default `off` for speed                                                                                                                                                                    |
+| `config.fastMode`            | `boolean \| "auto"`                                                                                  | Optional fast-mode override for the blocking sub-agent; unset inherits normal agent, session, and model defaults                                                                                                                                  |
 | `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                                                                                  |
 | `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                                                                                          |
 | `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking sub-agent (range 250-120000 ms; default 15000)                                                                                                                                                                      |
@@ -57775,6 +57950,7 @@ OpenClaw appends a typed event to the shared state database (`session_state_even
 | Kind                   | Recorded when                                            | Notifies watchers |
 | ---------------------- | -------------------------------------------------------- | ----------------- |
 | `human_direct_message` | A human sends a turn directly to a watched session       | Yes               |
+| `upstream_missing`     | An adopted session's upstream source disappears          | Yes               |
 | `goal_changed`         | The session's goal state is created, updated, or cleared | Yes               |
 | `child_spawned`        | A sub-agent or ACP child session is created              | No (seeds cursor) |
 | `run_completed`        | A child run ends successfully                            | No (log only)     |
@@ -57800,6 +57976,8 @@ Watcher identity must be an agent-qualified session key. Under `session.scope="g
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are deleted with either session. There is no unwatch verb in v1.
 
 Watched sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+If an adopted session's upstream source is deleted externally, three consecutive missing checks (about three monitor ticks) produce one `upstream_missing` signal for its watchers and remove the upstream link. Continuing the catalog session again creates a fresh link.
 
 ## Notices: one, not many
 
@@ -57855,6 +58033,7 @@ Current limits:
 - Upstream self-echo detection compares normalized user text. An external prompt matching one of the session's 10 most recent OpenClaw-side user messages is treated as self-echo.
 - A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
 - Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
+- Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
 - Catalog sessions that have not been adopted remain outside the awareness layer in v1.
 - Sessions adopted before this feature carry no upstream link; continue them from the catalog once to start upstream monitoring.
 - Upstream links assume each adopted session key maps to one owning agent (adoption uses the default store agent). Multi-agent adoption of the same external thread is not monitored in v1.
@@ -60714,12 +60893,12 @@ If browsing works but resolving fails, you're usually hitting a LAN policy or mD
 The gateway writes a rolling log file (printed on startup as `gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
-- `bonjour: suppressing ciao cancellation ...`
+- `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
-- `bonjour: watchdog detected non-announced service ...`
-- `bonjour: disabling advertiser after ... failed restarts ...`
 
-The watchdog treats active `probing`, `announcing`, and fresh conflict-renames as in-progress states. If the service never reaches `announced`, OpenClaw recreates the advertiser and, after repeated failures, disables Bonjour for that gateway process instead of re-advertising forever.
+OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+
+When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution and do not indicate duplicate OCM supervision.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
 
@@ -60802,13 +60981,13 @@ If a node no longer auto-discovers the gateway after Docker setup:
    dns-sd -B _openclaw-gw._tcp local.
    ```
 
-   If browsing is empty, or Gateway logs show repeated ciao watchdog cancellations, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
+   If browsing is empty, or Gateway logs show repeated ciao probe failures, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
 
 ## Common failure modes
 
 - **Bonjour doesn't cross networks**: use Tailnet or SSH.
 - **Multicast blocked**: some Wi-Fi networks disable mDNS.
-- **Advertiser stuck in probing/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the ciao advertiser in a non-announced state. OpenClaw retries a few times, then disables Bonjour for the current gateway process instead of restarting the advertiser forever.
+- **Advertiser stuck in probing/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the responder in a non-announced state. The gateway remains available through direct, SSH, Tailnet, or wide-area DNS-SD routes; disable LAN Bonjour with `discovery.mdns.mode: "off"` or `OPENCLAW_DISABLE_BONJOUR=1` when multicast is unavailable.
 - **Docker bridge networking**: Bonjour auto-disables in detected containers. Set `OPENCLAW_DISABLE_BONJOUR=0` only for host, macvlan, or another mDNS-capable network.
 - **Sleep/interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or punctuation), then restart the gateway. The service instance name derives from the host name, so overly complex names can confuse some resolvers.
@@ -61053,9 +61232,9 @@ All CLI backends live under `agents.defaults.cliBackends`, keyed by provider id 
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.security: "full"` and `tools.exec.ask: "off"`) launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Per-agent `agents.list[].tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy.
+Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.security: "full"` and `tools.exec.ask: "off"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.list[].tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy and host restriction.
 
-The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
+The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 
@@ -61270,11 +61449,12 @@ Cloud workers are opt-in and invisible until you configure a profile. Unconfigur
 | Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                      |
 | Workspace git history                                   | Authored on the box credential-free; the Gateway adopts commits and owns push/PR |
 
-The box needs no inbound ports except `sshd` and no egress beyond what your setup command uses: the Gateway connects out via SSH and a reverse tunnel carries the worker's WebSocket back. No Tailscale or VPN required.
+The box needs no inbound ports except `sshd`: the Gateway connects out via pinned SSH, and a reverse tunnel carries the worker's WebSocket back. The bundled Crabbox provider forces the public SSH route and disables managed Tailscale enrollment. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
 
 ## Requirements
 
-- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). The `crabbox` binary must be on `PATH` (or set `settings.binary`) with provider credentials already configured.
+- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). The `crabbox` binary must be on `PATH` (or set `settings.binary`) with provider credentials already configured. AWS admission requires Crabbox 0.38.1 or newer.
+- For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected.
 - Node.js on the leased machine. Bare cloud images usually lack it — install it in the profile's `setup` command.
 - A session with a session-owned managed worktree (create one with `worktree: true`). Dispatch moves that worktree's contents; plain directories sync as a manifest mirror.
 
@@ -61304,12 +61484,12 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 Profile fields:
 
-| Key        | Meaning                                                                                                                                                                                   |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                             |
-| `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release. |
-| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup` and absolute `binary` path.                        |
-| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`).                                                                                                                      |
+| Key        | Meaning                                                                                                                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                  |
+| `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release.                                                      |
+| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup` and absolute `binary` path. OpenClaw forces public SSH and disables managed Tailscale for these leases. |
+| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`).                                                                                                                                                                           |
 
 ### The setup command
 
@@ -61322,7 +61502,13 @@ Profile fields:
 
 ## Dispatching a session
 
+In the Control UI, open **New Session**, choose an agent whose configured runtime is OpenClaw, select a configured **Cloud · profile** target from the **Where** menu, and start the task. Cloud selection enables the required managed worktree automatically; the Gateway creates the session, finishes dispatch, and only then sends the first turn. The server badge in the session sidebar shows the durable placement state. Cloud targets are not offered for external CLI session catalogs.
+
+The equivalent RPC flow is:
+
 Create a session with a managed worktree, then dispatch it (the RPC requires `operator.admin` and only exists when profiles are configured):
+
+Cloud workers run the OpenClaw agent runtime. Choose an `openai/*` or other model that resolves to that runtime; sessions configured for an external CLI runtime such as `claude-cli` cannot dispatch.
 
 ```bash
 openclaw gateway call sessions.create \
@@ -61335,20 +61521,23 @@ openclaw gateway call sessions.dispatch \
 
 `sessions.dispatch` closes local turn admission, drains active work, provisions the lease, runs setup, bootstraps OpenClaw, syncs the workspace, and returns once the placement reaches `active` worker ownership. Budget several minutes for the first dispatch; leases and installs are cached where the provider supports it. After that, talk to the session as usual — turns route to the worker automatically.
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. Dispatch is one-way in v1: there is no pull-back RPC yet, and a failed worker turn fail-stops the placement with the worker's stderr tail preserved in the placement error for diagnosis.
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. Dispatch is one-way in v1: there is no pull-back RPC yet. A failed worker turn fails that turn and keeps the active placement available for a retry; lifecycle failures instead move the placement to an error or reclaimed state and preserve their diagnostic tail.
 
 ## Security model
 
 - **Closed worker ingress.** Workers speak a dedicated protocol on the tunneled socket with a closed method allowlist — a worker cannot call operator RPCs.
 - **Minted credentials, hashed at rest.** Each dispatch mints a worker credential; the Gateway stores only its hash. Credential rotation and owner-epoch fencing guarantee at most one live owner per session — a stale worker that reconnects is fenced, never merged.
 - **Host-key pinning.** The provider must surface the box's SSH host key at provision time; bootstrap connects with strict pinning and fails closed without it.
-- **No secrets on the box.** Model auth stays on the Gateway (inference travels by `{provider, model}` reference), and workspace git commits are authored on the box without credentials.
+- **No standing model, forge, or cloud credentials on the box.** Model auth stays on the Gateway (inference travels by `{provider, model}` reference), workspace git commits are authored without forge credentials, and Crabbox AWS lease metadata is checked authoritatively for an instance role before setup. Keep setup commands credential-free too.
+- **Provider-owned egress.** The reverse tunnel removes any OpenClaw need for direct model access, but OpenClaw does not rewrite provider firewalls. Restrict outbound traffic in the worker provider when the task requires it.
 - **Durable, exactly-once transcripts.** The worker commits transcript batches through a compare-and-swap protocol against the session's leaf; a stale base fail-stops the run instead of duplicating or rebasing paid output.
 
 ## Troubleshooting
 
 - **`sessions.dispatch` is an unknown method** — no `cloudWorkers.profiles` are configured, or the caller lacks `operator.admin`.
+- **"Cloud worker turns require the OpenClaw runtime"** — choose a model whose configured runtime is OpenClaw. External CLI runtimes such as `claude-cli` do not support worker inference.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
+- **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
 - **Dispatch fails with a provider error** — the placement record and `environments.list` keep the last error, including the setup/bootstrap stderr tail. Boxes are destroyed on failure, so that tail is the primary forensic.
 - **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously (dispatch keeps running server-side either way, and a retry while provisioning is rejected with `session cannot dispatch from placement provisioning`).
 - **Lease housekeeping** — `crabbox list --provider <backend>` shows live leases; `crabbox stop --provider <backend> --id <lease>` releases one manually. Idle leases expire on the profile's `idleTimeout`.
@@ -61768,7 +61957,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Object form sets primary plus ordered failover models.
 - `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, and [progress-draft narration](/concepts/progress-drafts#narrated-status). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise fall back to the agent's primary model, and narration stays off. Set `utilityModel: ""` to disable utility routing entirely. `agents.list[].utilityModel` overrides the default (an empty per-agent value disables it for that agent), and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Choose a provider that matches your cost and data-handling requirements.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
-  - Used by the `image` tool path as its vision-model config.
+  - Used by the `image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
   - Also used as fallback routing when the selected/default model cannot accept image input.
   - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -62693,7 +62882,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `maxEntries`: maximum number of SQLite session entries (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
-  - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
+  - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
 - **`writeLock`**: session transcript write-lock controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default policies.
@@ -63321,6 +63510,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Discord defaults to `streaming.mode: "progress"` so tool/work progress appears in one edited preview message; set `streaming.mode: "off"` to disable it. Legacy flat keys (`streamMode`, `chunkMode`, `blockStreaming`, `draftChunk`, `blockStreamingCoalesce`) are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
+- `channels.discord.guilds.<id>.presenceEvents` routes human availability arrivals into one configured Discord channel as agent system events. It seeds current online members from complete `GUILD_CREATE` snapshots, routes observed offline-to-online transitions, and treats a first later online signal for an unseen member as newly available without asserting whether they came online or joined after the snapshot. Guilds above Discord's 75,000-member snapshot limit require an explicit offline update first. Throttling knobs: `reconnectSuppressSeconds` (quiet window after a new Gateway session while guild presence state is rebuilt, default 300, `0` disables) and `burstLimit`/`burstWindowSeconds` (per-guild successfully queued event rate limit, default 8 events per 60s sliding window). Resumed sessions do not start the reconnect suppression window. The existing per-user re-greet cooldown remains eight hours. It requires `channels.discord.intents.presence=true`, the privileged Presence Intent in Discord's Developer Portal, and an enabled agent heartbeat.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 - `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
@@ -66263,9 +66453,9 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
-<Warning>
-  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver. Current `crabbox inspect --json` output does not expose a provisioned `sshHostKey`, so Crabbox-backed workers still fail closed before bootstrap or tunnel setup. Crabbox must provision an authoritative per-lease host key and return `sshHostKey` as exactly `algorithm base64`, without a hostname or comment. Its current lease-local `known_hosts` cache is not provisioning trust material.
-</Warning>
+<Note>
+  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver and pins the authoritative `sshHostKey` returned by `crabbox inspect --json`. AWS admission also requires `providerMetadata.instanceProfileAttached`. Install Crabbox 0.38.1 or newer for this closed inspection contract.
+</Note>
 
 ### Static SSH development profile
 
@@ -73213,6 +73403,11 @@ above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The snapshot's optional `appliedConfigHash` is the resolved source-config revision
+accepted by the active Gateway runtime. Clients can compare it with
+`config.get.configRevisionHash` to determine whether a newer saved config still
+needs a restart. `config.get.hash` remains the raw root-file revision used by
+config write conflict guards.
 
 While the gateway is still finishing startup sidecars, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
@@ -73551,6 +73746,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Operator terminal">
     - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state.
     - `terminal.input`, `terminal.resize`, and `terminal.close` operate only on sessions owned by the calling connection.
+    - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
     - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
     - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
@@ -73587,7 +73783,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Secrets, config, update, and wizard">
     - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
-    - `config.get` returns the current config snapshot and hash.
+    - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
     - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.
@@ -73633,7 +73829,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
-    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`.
 
   </Accordion>
 
@@ -78625,8 +78821,9 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 Plugins run in-process with the Gateway - treat them as trusted code.
 
 - Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling; restart the Gateway after plugin changes.
-- Installing/updating (`openclaw plugins install <package>`, `openclaw plugins update <id>`) runs untrusted code:
+- Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
+  - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
   - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
@@ -84012,21 +84209,21 @@ When debugging real providers/models (requires real creds):
     through `npm-pack:`, verifies the dependency under the managed npm
     project root, then asks a live OpenAI model to call the plugin tool and
     return the hidden slug.
-- Crestodian rescue command smoke: `pnpm test:live:crestodian-rescue-channel`
+- OpenClaw rescue command smoke: `pnpm test:live:system-agent-rescue-channel`
   - Opt-in belt-and-suspenders check for the message-channel rescue command
-    surface. Exercises `/crestodian status`, queues a persistent model
-    change, replies `/crestodian yes`, and verifies the audit/config write
+    surface. Exercises `/openclaw status`, queues a persistent model
+    change, replies `/openclaw yes`, and verifies the audit/config write
     path.
-- Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
+- OpenClaw first-run Docker smoke: `pnpm test:docker:system-agent-first-run`
   - Starts from an empty OpenClaw state dir and first proves the packaged
-    `openclaw crestodian` CLI fails closed without inference. It then
+    `openclaw setup` CLI fails closed without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
     resolve to typed setup, followed by one-shot model, agent, Discord plugin,
     and SecretRef operations. It validates config and audit entries. This is
     supporting gate/operation evidence, not an interactive onboarding or
-    Crestodian agent/tool/approval proof. The same lane is exposed in QA Lab by
-    `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
+    OpenClaw agent/tool/approval proof. The same lane is exposed in QA Lab by
+    `pnpm openclaw qa suite --scenario system-agent-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
@@ -89113,8 +89310,8 @@ by default, plus git-checkout installs under the same prefix flow.
   </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
-    `openclaw gateway install --force`, then `openclaw gateway restart`, and
-    probes gateway health best-effort.
+    `openclaw gateway install --force`, which activates the replacement service,
+    and then probes gateway health best-effort.
   </Step>
 </Steps>
 
@@ -91547,8 +91744,13 @@ openclaw doctor --lint --json
 ```
 
 When `openclaw update` manages a global npm install, it installs the target
-into a temporary npm prefix first, verifies the packaged `dist` inventory, then
-swaps the clean package tree into the real global prefix — avoiding npm
+into a temporary npm prefix first. The candidate package validates the host
+Node version during `preinstall`; only then does OpenClaw verify the packaged
+`dist` inventory and swap the clean package tree into the real global prefix. A
+packed completion guard is omitted from the expected inventory and removed only
+after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
+swap. On npm 12 and newer, the updater approves only the candidate OpenClaw
+lifecycle; transitive dependency scripts remain blocked. This avoids npm
 overlaying a new package onto stale files from the old one. If the install
 command fails, OpenClaw retries once with `--omit=optional`, which helps hosts
 where native optional dependencies cannot compile.
@@ -91629,9 +91831,24 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
-The Control UI sidebar update card starts this same `update.run` flow. In the
-signed macOS app, the card updates the app through Sparkle first; after relaunch,
-the app brings its managed local Gateway to the matching version.
+The Control UI sidebar update card shows **Update Gateway** when it will start
+this `update.run` flow directly. This covers browser-hosted Control UI, remote
+Gateways, and manually managed local Gateways.
+
+In the signed macOS app, a local app-owned Gateway changes that card to
+**Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
+app runs `openclaw update --tag <app-version> --json`, restarts its Gateway,
+and verifies health in a setup-style progress window. Failure details stay
+visible with Retry, [Update guide](/install/updating), and
+[Discord](https://discord.gg/clawd) actions. The app never uses this coordinated
+path for a remote or externally managed Gateway, never downgrades a newer
+Gateway, and never overrides an `extended-stable` channel pin.
+
+When the update succeeds, the app queues a one-time welcome event for the most
+recent top-level direct session with a real user/channel interaction. Cron runs,
+heartbeats, and background-only session updates do not move that selection. In
+remote mode, the app updates only its local Mac node runtime and sends the event
+only when the connected remote Gateway is at least as new as the app.
 
 ## After updating
 
@@ -99226,14 +99443,14 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 # Section: nodes/camera.md
 
 ---
-summary: "Camera capture (iOS/Android nodes + macOS app) for agent use: photos (jpg) and short video clips (mp4)"
+summary: "Camera capture on iOS, Android, macOS, and Linux nodes for photos and short video clips"
 read_when:
-  - Adding or modifying camera capture on iOS/Android nodes or macOS
+  - Adding or modifying camera capture on node platforms
   - Extending agent-accessible MEDIA temp-file workflows
 title: "Camera capture"
 ---
 
-OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, and **macOS** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
+OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
 All camera access is gated behind a user-controlled setting per platform.
 
@@ -99350,6 +99567,38 @@ openclaw nodes camera clip --node <id> --no-audio
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
+
+## Linux node host
+
+The bundled Linux Node plugin adds camera capture to the CLI `openclaw node` service. It works on a headless host and does not require the Linux desktop app.
+
+Camera access defaults to off. Enable it under the plugin entry, then restart the node service so its Gateway advertisement is rebuilt:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          camera: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Requirements:
+
+- FFmpeg with V4L2 input, `libx264`, and AAC support
+- a `/dev/video*` device readable by the node-service user; on common distributions, add that user to the `video` group
+- for clips with the default `includeAudio: true`, a working PulseAudio server or PipeWire PulseAudio compatibility layer with a default source
+
+Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FFmpeg probes each `/dev/video*` candidate and omits metadata or output-only nodes. Device `position` is `unknown`, so facing requests without `deviceId` produce one `unknown`-position photo or clip instead of claiming a front or back camera. Use `deviceId` when a host has multiple cameras. `camera.snap` uses FFmpeg input warm-up for `delayMs` and preserves aspect ratio while limiting width. `camera.clip` records microphone audio as the MP4 audio track; OpenClaw deliberately exposes no standalone microphone command.
+
+The plugin uses `libx264` for MP4 video and does not silently change codecs. An FFmpeg build without the required input or encoders returns `CAMERA_UNAVAILABLE`. Photos and clips that would exceed the 25MB base64 payload budget fail with `PAYLOAD_TOO_LARGE`.
+
+`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.allowCommands` only when you intend to arm capture; enabling the plugin alone does not bypass Gateway policy.
 
 ## Safety + practical limits
 
@@ -99970,6 +100219,12 @@ Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
 
+### Terminal file uploads
+
+The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
+
+Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -100011,7 +100266,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
+`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -100102,7 +100357,7 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
+- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
 - `canvas eval` accepts inline JS (`--js`) or a positional arg.
 
 ### A2UI (Canvas)
@@ -100115,10 +100370,11 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
-- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
+- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 - macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
+- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
 
 ## Photos + videos (node camera)
 
@@ -100316,7 +100572,7 @@ Notes:
 # Section: nodes/location-command.md
 
 ---
-summary: "Location command for nodes (location.get), permission modes, and Android foreground behavior"
+summary: "Location command for nodes, platform permission modes, and Linux GeoClue setup"
 read_when:
   - Adding location node support or permissions UI
   - Designing Android location permissions or foreground behavior
@@ -100402,6 +100658,32 @@ Errors (stable codes):
 - Android third-party builds accept background `location.get` only when the user selected `Always` and Android granted background location. The existing persistent node service adds the `location` service type and discloses `Location: Always` while active.
 - Android Play builds and `While Using` mode deny `location.get` while backgrounded.
 - Other node platforms may differ.
+
+## Linux node host
+
+The bundled Linux Node plugin adds `location.get` to the CLI `openclaw node` service, including headless hosts without the Linux desktop app. Location defaults to off. Enable it under the plugin entry, then restart the node service:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Install GeoClue2 and its `where-am-i` demo (`geoclue-2-demo` on Debian and Ubuntu). The node-service user must be allowed by the host's GeoClue policy and authorization agent.
+
+The plugin uses `where-am-i` instead of a sequence of `busctl` calls. GeoClue ties client creation, properties, start, updates, and stop to one D-Bus client connection; the demo keeps that lifecycle together while separate `busctl` subprocesses do not. No npm dependency is added.
+
+Linux maps `coarse`, `balanced`, and `precise` to GeoClue accuracy levels `4`, `6`, and `8`. It validates `maxAgeMs` against the returned timestamp. GeoClue's demo does not expose the selected provider, so `source` is `unknown`; `isPrecise` is true only when reported accuracy is 100 meters or better.
+
+Linux uses the same stable errors: `LOCATION_DISABLED`, `LOCATION_TIMEOUT`, and `LOCATION_UNAVAILABLE`.
 
 ## Model/tooling integration
 
@@ -103127,6 +103409,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 summary: "Linux support + companion app status"
 read_when:
   - Looking for Linux companion app status
+  - Enabling camera, location, or notifications on a Linux node host
   - Planning platform coverage or contributions
   - Debugging Linux OOM kills or exit 137 on a VPS or container
 title: "Linux app"
@@ -103144,6 +103427,7 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - opens the Gateway-served Control UI with its resolved authentication URL
+- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
 Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
@@ -103167,6 +103451,14 @@ The `Linux App` CI workflow uploads the same bundles as the
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
 
+### Canvas
+
+Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
+
+The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
+
+Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
+
 ## CLI and SSH alternative
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
@@ -103180,6 +103472,49 @@ The CLI remains the simplest option for a headless server, a VPS, or a remote Ga
 
 Full server guide: [Linux Server](/vps). Step-by-step VPS example:
 [exe.dev](/install/exe-dev).
+
+## Node capabilities
+
+The bundled Linux Node plugin gives the CLI `openclaw node` service device capabilities without requiring the desktop app. Commands are advertised to the Gateway only when their capability is enabled and the required local tool exists.
+
+| Capability                              | Default | Requirement                                                           |
+| --------------------------------------- | ------- | --------------------------------------------------------------------- |
+| Desktop notifications (`system.notify`) | On      | `notify-send` from libnotify and a desktop notification session       |
+| Camera photos and clips (`camera.*`)    | Off     | FFmpeg, V4L2 camera access, and PulseAudio or PipeWire for clip audio |
+| Location (`location.get`)               | Off     | GeoClue2 and its `where-am-i` demo                                    |
+
+Configure the plugin in `openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          notify: { enabled: true },
+          camera: { enabled: true },
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Restart the node service after changing these settings. Availability is determined once per process and the node advertisement is rebuilt on restart.
+
+The Gateway approves the node's command and capability surface separately from device pairing. On first start, or after enabling more capabilities, approve the pending surface:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
+A node can be connected and device-paired while its effective `caps` and `commands` remain empty until this approval completes.
+
+Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
+
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 
@@ -103325,13 +103660,13 @@ has no macOS app asset, use the newest one that does, or build from source with
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
 3. Wait while the app installs the matching CLI runtime. In local mode it also
    installs and starts the Gateway.
-4. Establish inference with a live model check. After it passes, Crestodian
+4. Establish inference with a live model check. After it passes, OpenClaw
    handles the remaining setup.
 5. Complete the macOS permission checklist and send the onboarding test message.
 
 If the app reaches an existing Gateway whose default agent has a configured
 model, it treats that Gateway as already set up, skips provider onboarding and
-Crestodian, and opens the dashboard. If the Gateway cannot connect or its
+OpenClaw, and opens the dashboard. If the Gateway cannot connect or its
 default agent has no model, inference onboarding remains available for
 recovery.
 
@@ -103340,12 +103675,26 @@ For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
 ## Updates
 
-The dashboard update card updates the signed macOS app through Sparkle first.
-After the app relaunches, it automatically updates and restarts the matching
-app-managed local Gateway. Homebrew and other user-managed CLI installs keep
-the normal Gateway update flow (the card runs the Gateway update directly),
-and the automatic repair never downgrades a newer Gateway or overrides an
-`extended-stable` channel pin.
+The dashboard update card names what the app will update:
+
+- **Update Mac app + Gateway** means the signed app owns the local launchd
+  Gateway. Sparkle updates the app first; after relaunch, the app automatically
+  updates and restarts its Gateway at the matching version, then verifies the
+  connection.
+- **Update Gateway** means the app is connected to a remote Gateway, a manually
+  managed local Gateway, or another install the app does not own. The button
+  runs that Gateway's normal update flow instead of changing the Mac app.
+
+A failed coordinated update stays in its setup-style window with retry,
+[update guide](/install/updating), and Discord actions. Automatic repair never
+downgrades a newer Gateway or overrides an `extended-stable` channel pin.
+
+After a successful update, the app finds the most recently human-used,
+top-level direct session and gives that agent a one-time update event. Heartbeat
+and cron activity do not affect this choice. The agent can then welcome you back
+from the conversation you were most likely using. In remote mode, the app
+updates only the local Mac node runtime and skips the notification when the
+remote Gateway is older than the app.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
 to beta app builds; `stable`, `extended-stable`, and missing or unknown values
@@ -103353,7 +103702,7 @@ stay on stable app builds.
 
 ## Open dashboard links
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width while keeping the dashboard navigation visible. Drag the divider to choose another width; the app remembers it. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
@@ -109211,9 +109560,9 @@ and `HOME` stays inherited so subprocesses can use normal user-home state.
 ## Dynamic tools
 
 Codex dynamic tools default to `searchable` loading, exposed under the
-`openclaw` namespace with `deferLoading: true`. OpenClaw does not expose
-dynamic tools that duplicate Codex-native workspace operations or Codex's own
-tool-search surface:
+`openclaw` namespace with `deferLoading: true`. OpenClaw normally does not
+expose dynamic tools that duplicate Codex-native workspace operations or
+Codex's own tool-search surface:
 
 - `read`
 - `write`
@@ -109226,6 +109575,11 @@ tool-search surface:
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
+empty execution-environment selection. In that direct, unsandboxed case,
+OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
+fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
@@ -109839,7 +110193,10 @@ With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
 Codex also receives `node_exec` and `node_process` tools for commands on paired
 nodes. Native shell remains on the Codex app-server host and workspace
 (Gateway-local for the default stdio deployment); `node_exec` selects a node by
-name or id and keeps OpenClaw's node approval policy in force.
+name or id and keeps OpenClaw's node approval policy in force. If a finite
+runtime allowlist disables native Code Mode and leaves the turn without an
+execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
+tools available instead for direct, unsandboxed execution.
 
 This Codex-native feature is separate from
 [OpenClaw code mode](/reference/code-mode), an opt-in QuickJS-WASI runtime
@@ -110423,14 +110780,16 @@ normal user-home state.
 
 ### Dynamic tools and web search
 
-Codex dynamic tools default to `searchable` loading. OpenClaw does not
-expose dynamic tools that duplicate Codex-native workspace operations:
+Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, `update_plan`,
 `tool_call`, `tool_describe`, `tool_search`, and `tool_search_code`. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, and `heartbeat_respond`, are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
-context smaller.
+context smaller. The restricted-turn shell fallback is the exception for
+`exec` and `process` when a finite allowlist disables native Code Mode;
+runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
 tool, use the `openclaw_direct` namespace instead. Codex treats that namespace
@@ -112230,7 +112589,7 @@ plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
 
-The SDK Tool returned by `convertOpenClawToolToSdkTool` is marked with:
+Each SDK tool returned by the Copilot tool bridge is marked with:
 
 - `overridesBuiltInTool: true` — replaces the Copilot CLI's built-in tool of
   the same name (edit, read, write, bash, ...) so every tool call routes back
@@ -115197,12 +115556,17 @@ openclaw plugins install --link ./my-plugin
 Bare package specs install from npm during the launch cutover, unless the
 name matches a bundled or official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection.
+`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
+git, local path/archive, `npm-pack:`, or marketplace sources require
+`--force` in noninteractive installs after you review
+and trust the source.
 
-Use `--force` only to overwrite an existing install target from a different
-source. For routine upgrades of a tracked npm, ClawHub, or hook-pack install,
-use `openclaw plugins update` instead; `--force` is not supported with
-`--link`.
+`--force` confirms a non-ClawHub source without prompting and overwrites an
+existing install target when needed. For routine upgrades of a tracked npm,
+ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
+`--link`, `--force` only confirms the source; the linked directory is not
+copied or overwritten.
 
 ## Restart and inspect
 
@@ -118046,7 +118410,7 @@ When a channel cannot render interactive controls, button and select values
 fall back to plain text. The fallback behavior preserves usability while
 keeping opaque callback data private:
 
-- **`command`-typed actions** render as `label: \`command\`` so users can
+- **`command`-typed actions** render as `` label: `command` `` so users can
   copy the command and run it manually in the channel input.
 - **`callback`-typed actions** and legacy **`value`** fields render as
   label-only. The opaque callback value is not exposed in fallback text.
@@ -118678,7 +119042,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+68 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -118725,6 +119089,10 @@ Each entry lists the package, distribution route, and description.
 - **[huggingface](/plugins/reference/huggingface)** (`@openclaw/huggingface-provider`) - included in OpenClaw. Adds Hugging Face model provider support to OpenClaw.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - included in OpenClaw. Adds the iMessage channel surface for sending and receiving OpenClaw messages.
+
+- **[linux-canvas](/plugins/reference/linux-canvas)** (`@openclaw/linux-canvas`) - included in OpenClaw. Canvas rendering bridge for the OpenClaw Linux desktop app.
+
+- **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
 
@@ -119193,7 +119561,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 139
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 141
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -119269,7 +119637,7 @@ implementation that completed the probe. When
 matching `runtimeArtifact.validate(...)` capability that rechecks that binding
 without loading a different harness or scanning unrelated plugins.
 
-Verified Crestodian continuations also pass `params.expectedRuntimeArtifact`.
+Verified OpenClaw continuations also pass `params.expectedRuntimeArtifact`.
 The harness must compare it with the exact native process it acquired and fail
 before starting or resuming a native thread if they differ. Ordinary agent
 turns omit both fields, so content hashing stays out of the normal request hot
@@ -119755,9 +120123,7 @@ generic policy: DM/group allowlists, pairing-store DM entries, route gates,
 command gates, event auth, mention activation, redacted diagnostics, and
 admission.
 
-Use `openclaw/plugin-sdk/channel-ingress-runtime` for new receive paths. The
-older `openclaw/plugin-sdk/channel-ingress` subpath stays exported as a
-deprecated compatibility facade for third-party plugins.
+Use `openclaw/plugin-sdk/channel-ingress-runtime` for receive paths.
 
 ## Runtime resolver
 
@@ -120162,11 +120528,11 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply helpers such as `createChannelTurnReplyPipeline`,
-`dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
-remain available for compatibility dispatchers. Do not use them for new
-channel code; start with the `message` adapter, receipts, and receive/send
-lifecycle helpers on `openclaw/plugin-sdk/channel-outbound` instead.
+Legacy reply helpers such as `dispatchInboundReplyWithBase` and
+`recordInboundSessionAndDispatchReply` remain available for compatibility
+dispatchers. Do not use them for new channel code; start with the `message`
+adapter, receipts, and receive/send lifecycle helpers on
+`openclaw/plugin-sdk/channel-outbound` instead.
 
 ### Inbound ingress (experimental)
 
@@ -120179,9 +120545,7 @@ effects stay in the plugin. Keep plugin identity normalization in the
 descriptor you pass to the resolver; do not serialize raw match values from
 the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
-ownership boundary, and test expectations. The older
-`openclaw/plugin-sdk/channel-ingress` subpath stays exported as a deprecated
-compatibility facade for third-party plugins.
+ownership boundary, and test expectations.
 
 ### Typing indicators
 
@@ -121383,6 +121747,25 @@ register(api) {
 }
 ```
 
+Long-lived services may emit small invalidation or lifecycle events through
+their service context:
+
+```typescript
+api.registerService({
+  id: "index-events",
+  start(ctx) {
+    ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
+  },
+});
+```
+
+OpenClaw namespaces this as `plugin.<plugin-id>.changed`. Event names are one
+lowercase segment, payloads must be bounded JSON, and the scope must be
+`operator.read`, `operator.write`, or `operator.admin`. The emitter exists only
+for the service lifetime and is revoked after stop or failed start. Prefer
+version or invalidation payloads over full records so authorized clients reread
+canonical state through the plugin's scoped Gateway methods.
+
 Discovery mode builds a non-activating registry snapshot. It may still
 evaluate the plugin entry and the channel plugin object so OpenClaw can
 register channel capabilities and static CLI descriptors. Treat module
@@ -121598,7 +121981,10 @@ SDK.
     runtime-neutral middleware:
 
     ```typescript
-    // OpenClaw and Codex runtime dynamic tools
+    // OpenClaw runtime tools and Codex runtime dynamic tools (result may be
+    // transformed). Codex-native tool results are also relayed for observation,
+    // but their transformed output never reaches the model: the Codex
+    // PostToolUse hook contract cannot replace a native tool response.
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
@@ -121969,7 +122355,6 @@ SDK.
   | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
   | `plugin-sdk/memory-host-status` | Deprecated memory host status alias | Use `plugin-sdk/memory-core-host-status` |
-  | `plugin-sdk/testing` | Test utilities | Repo-local deprecated compatibility barrel; use focused repo-local test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
 This table is the common migration subset, not the full SDK surface. The
@@ -121987,6 +122372,16 @@ through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
+
+## Removed compatibility surfaces
+
+### Private testing barrel
+
+`openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
+artifacts, so it was removed before its 2026-07-28 `removeAfter` date. Repository
+tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
+`plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
+`plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
 ## Active deprecations
 
@@ -122443,11 +122838,22 @@ apps own device capture/playback UX.
 
 ## Removal timeline
 
-| When                                        | What happens                                                                                                                           |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Now**                                     | Deprecated surfaces emit runtime warnings.                                                                                             |
-| **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes. |
-| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                       |
+| When                                        | What happens                                                                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Now**                                     | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins. |
+| **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.    |
+| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                          |
+
+The deprecated public SDK subpaths below have registry-backed removal windows.
+They do not currently emit a runtime warning when an external plugin imports
+them; `scripts/check-deprecated-api-usage.mjs` only diagnoses imports from core
+and bundled plugin source.
+
+| `removeAfter` | Deprecated SDK subpaths                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-07-30`  | `agent-dir-compat`, `channel-envelope`, `channel-inbound-roots`, `channel-location`, `channel-message-runtime`, `channel-pairing-paths`, `channel-reply-options-runtime`, `config-schema`, `config-types`, `direct-dm`, `direct-dm-access`, `mattermost`, `media-generation-runtime-shared`, `memory-core`, `memory-core-engine-runtime`, `memory-core-host-events`, `memory-core-host-multimodal`, `memory-core-host-query`, `memory-host-files`, `memory-host-status`, `music-generation-core`, `outbound-runtime`, `outbound-send-deps`, `provider-auth-login`, `provider-zai-endpoint`, `reply-dedupe`, `runtime-logger`, `runtime-secret-resolution`, `self-hosted-provider-setup`, `setup-adapter-runtime`, `telegram-command-config`, `webhook-path`, `zalouser` |
+| `2026-08-15`  | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `2026-09-01`  | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which
@@ -122662,28 +123068,99 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                            |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                   |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                        |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                           |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                           |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                               |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                      |
-| `api.registerService(service)`                  | Background service                                           |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                          |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                               |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                      |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                           |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                 |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites      |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                              |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling    |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                      |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
+| Method                                          | What it registers                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                  | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+
+#### Requester-scoped MCP connections
+
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
+bundle manifest. Optionally register a connection resolver so each trusted
+message requester gets their own transport:
+
+```ts
+api.registerMcpServerConnectionResolver({
+  serverName: "user-email",
+  resolve: async (ctx) => {
+    // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    const token = await lookupUserToken(ctx.requesterSenderId);
+    if (!token) {
+      return null; // omit this server for the current run
+    }
+    return {
+      url: "https://mcp.example.com/email",
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  },
+});
+```
+
+Contract notes:
+
+- Resolver context carries trusted host identity only (`requesterSenderId`,
+  optional `agentAccountId` / `messageChannel`). Future trusted fields (for
+  example cron/subagent user context) can be added additively.
+- One plugin owns one server name: a duplicate
+  `registerMcpServerConnectionResolver` for the same `serverName` from another
+  plugin is rejected with an error diagnostic (first registration wins), so
+  connection ownership never depends on plugin load order.
+- Tool names are derived from the full declared server set so partial resolution
+  never changes safe server names between requesters or turns. Core does not
+  verify that different requester endpoints serve identical tool schemas; a
+  resolver must point every requester at the same logical service, or tool
+  schemas (and prompt-cache stability) diverge per requester.
+- Runs without a trusted `requesterSenderId` (cron, subagent, heartbeat, public
+  gateway) never materialize requester-scoped servers. There is no shared
+  fallback connection.
+- `resolve` is bounded at 10 seconds per server; a timeout or throw omits that
+  server for the run without failing static MCP.
+- Resolved connections are revalidated at most every 5 minutes per requester:
+  rotation rebuilds the transport with fresh credentials, and a `null` result
+  revokes it (the cached runtime is disposed even mid-session). A revoked or
+  rotated credential can therefore stay in use for up to 5 minutes.
+- Resolved `headers` are never logged or persisted; core keeps only an ephemeral
+  in-memory keyed digest (process-local HMAC) to detect credential rotation, and
+  registers resolved header/URL credential values with the log/debug-capture
+  redaction registry.
+- Requester-scoped servers do not mint MCP App views: a view outlives the
+  requester-authenticated run and the gateway view boundary has no requester
+  identity, so app previews stay fail-closed for these servers. Tool results
+  are unaffected.
+- Static servers without a resolver keep the existing session-scoped lifecycle.
+- **Harness delivery rule:** requester-scoped servers never enter harness-native
+  MCP client config (Codex thread `mcp_servers`, CLI `-c mcp_servers=…`, or any
+  other session-shared MCP projection). Harnesses deliver them as run-scoped
+  tools instead:
+  - Embedded runner: session MCP runtime + bundle tools (static + scoped).
+  - Codex app-server: dynamic tools via
+    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
+    servers stay on Codex's native MCP client).
+- Scoped tool **specs** are session-stable after the first successful resolve in
+  that session, so shared-thread harnesses (Codex) do not rotate threads when
+  senders change. Before any requester resolves, no scoped specs are advertised.
+- Unauthenticated requesters on a shared-thread harness still see the advertised
+  scoped tools; calling one returns a clean not-connected tool error for that
+  requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
@@ -125776,12 +126253,11 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/telegram-command-config` | Deprecated Telegram command-name/description normalization and duplicate/conflict checks; use plugin-local command config handling in new plugin code |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-ingress` | Low-level channel ingress compatibility surface. New receive paths should use `plugin-sdk/channel-ingress-runtime`. |
     | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
     | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus reply pipeline options, receipts, live preview/streaming, lifecycle helpers, outbound identity, payload planning, durable sends, and message-send context helpers. See [Channel outbound API](/plugins/sdk-channel-outbound). |
-    | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
-    | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
+    | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
@@ -126001,7 +126477,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/inline-image-data-url-runtime` | Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
-    | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
+    | `plugin-sdk/response-limit-runtime` | Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
@@ -126022,7 +126498,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
-    | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
+    | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, quote-aware HTML tag tokenization, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
@@ -126039,7 +126515,6 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |
-    | `plugin-sdk/testing` | Repo-local deprecated compatibility barrel for legacy OpenClaw tests. New repo tests should import focused local test subpaths such as `plugin-sdk/agent-runtime-test-contracts`, `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` instead |
     | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
     | `plugin-sdk/agent-runtime-test-contracts` | Repo-local native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |
     | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
@@ -126155,12 +126630,12 @@ import {
 import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 ```
 
-Prefer these focused subpaths for new bundled plugin tests. The broad
-`openclaw/plugin-sdk/testing` barrel and `openclaw/plugin-sdk/test-utils` alias
-are legacy compatibility only: `pnpm run lint:plugins:no-extension-test-core-imports`
-(`scripts/check-no-extension-test-core-imports.ts`) rejects new imports of
-either from extension test files, and both remain solely for
-compatibility-record tests.
+Use these focused subpaths for bundled plugin tests. The former
+`openclaw/plugin-sdk/testing` barrel was repo-local, excluded from shipped
+packages, and has been removed. The legacy `openclaw/plugin-sdk/test-utils`
+alias remains repo-local; `pnpm run lint:plugins:no-extension-test-core-imports`
+(`scripts/check-no-extension-test-core-imports.ts`) rejects new extension-test
+imports of that alias.
 
 ### Available exports
 
@@ -126444,11 +126919,11 @@ pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 `scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
 import-boundary checks in CI; each can also be run standalone locally:
 
-| Command                                                        | Enforces                                                                                                                    |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.                                             |
-| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`).                                 |
-| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `openclaw/plugin-sdk/testing`, `plugin-sdk/test-utils`, or other core-only test helpers. |
+| Command                                                        | Enforces                                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.             |
+| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`). |
+| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `plugin-sdk/test-utils` or other core-only test helpers. |
 
 External plugins are not subject to these lint rules, but following the same
 patterns is recommended.
@@ -128507,6 +128982,28 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+The plugin and Control UI use one Workboard card contract. Dashboard refreshes
+therefore preserve workspace provenance and authority, claim state, diagnostic
+actions, and notification sequence numbers instead of projecting a smaller
+UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
+notification kinds are ignored until both surfaces support them; they are never
+rewritten into another valid state.
+
+The open dashboard updates from `plugin.workboard.changed` invalidations. Each
+event contains only a store epoch and revision; the UI then rereads canonical
+cards through the normal `operator.read` RPC. Multiple revisions coalesce into
+one follow-up read. Workboard defers that read while a card is being dragged,
+edited, or written, then resumes after the local interaction finishes. A
+reconnect always performs a canonical reload. There is no routine full-card
+poll, and **Refresh** remains available as manual recovery.
+
+When more than one board exists, the toolbar includes a **Board** filter backed
+by persisted board metadata rather than only the currently visible cards. Empty
+and archived boards therefore remain selectable. Cards without an explicit
+board id belong to the canonical `default` board. The selected board is stored
+in the `?board=` query parameter, so the filtered Workboard URL can be bookmarked
+or shared; choosing **All boards** removes the parameter.
+
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
 
@@ -128728,7 +129225,8 @@ the template id is stored as card metadata.
    optional linked session - or open Sessions and choose **Add to Workboard**
    for an existing session.
 3. Drag the card between columns, or focus its compact status control and use
-   the menu or ArrowLeft/ArrowRight.
+   the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
+   available drop columns gain an outline.
 4. Start work from the card to create or reuse a dashboard session.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
@@ -128942,7 +129440,9 @@ OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
 ## Surface
 
-skills; session catalog: pi
+skills
+
+<!-- openclaw-plugin-reference:manual-start -->
 
 ## Pi native sessions
 
@@ -128955,6 +129455,8 @@ from the directory containing their `settings.json` file.
 
 Turn **Pi Session Catalog** off under **Config > Plugins > ACPX Runtime** to
 disable discovery. It is enabled by default.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 
@@ -128982,7 +129484,7 @@ OpenClaw admin HTTP RPC endpoint.
 
 ## Surface
 
-contracts: gatewayMethodDispatch
+contracts: `gatewayMethodDispatch`
 
 ## Related docs
 
@@ -129010,7 +129512,7 @@ Adds video generation provider support.
 
 ## Surface
 
-contracts: videoGenerationProviders
+contracts: `videoGenerationProviders`
 
 ## Related docs
 
@@ -129038,7 +129540,7 @@ OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routi
 
 ## Surface
 
-providers: amazon-bedrock-mantle
+providers: `amazon-bedrock-mantle`
 
 ## Related docs
 
@@ -129066,7 +129568,7 @@ OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and gu
 
 ## Surface
 
-providers: amazon-bedrock; contracts: memoryEmbeddingProviders
+providers: `amazon-bedrock`; contracts: `memoryEmbeddingProviders`
 
 ## Related docs
 
@@ -129094,7 +129596,7 @@ OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
 ## Surface
 
-providers: anthropic-vertex
+providers: `anthropic-vertex`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -129140,7 +129642,7 @@ Anthropic models, Claude CLI, and native Claude session catalog.
 
 ## Surface
 
-providers: anthropic; contracts: mediaUnderstandingProviders, usageProviders
+providers: `anthropic`; contracts: `mediaUnderstandingProviders`, `usageProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -129176,7 +129678,7 @@ Adds Arcee model provider support to OpenClaw.
 
 ## Surface
 
-providers: arcee
+providers: `arcee`
 
 ## Related docs
 
@@ -129204,7 +129706,7 @@ Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony)
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 ## Related docs
 
@@ -129256,7 +129758,7 @@ OpenClaw Brave Search provider plugin for web search.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 
@@ -129284,7 +129786,7 @@ Adds agent-callable tools.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills
 
 ## Related docs
 
@@ -129312,7 +129814,7 @@ Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: byteplus, byteplus-plan; contracts: videoGenerationProviders
+providers: `byteplus`, `byteplus-plan`; contracts: `videoGenerationProviders`
 
 
 
@@ -129336,7 +129838,7 @@ Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills
 
 
 
@@ -129360,7 +129862,7 @@ Adds Cerebras model provider support to OpenClaw.
 
 ## Surface
 
-providers: cerebras
+providers: `cerebras`
 
 ## Related docs
 
@@ -129388,11 +129890,11 @@ Adds Chutes model provider support to OpenClaw.
 
 ## Surface
 
-providers: chutes
+providers: `chutes`
 
 ## Related docs
 
-- [chutes](/providers/chutes)
+- [Chutes](/providers/chutes)
 
 
 
@@ -129416,7 +129918,7 @@ Adds ClawRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: clawrouter; contracts: usageProviders
+providers: `clawrouter`; contracts: `usageProviders`
 
 ## Related docs
 
@@ -129444,7 +129946,7 @@ Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: clickclack
+channels: `clickclack`
 
 ## Related docs
 
@@ -129472,7 +129974,7 @@ Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 ## Surface
 
-providers: cloudflare-ai-gateway
+providers: `cloudflare-ai-gateway`
 
 ## Related docs
 
@@ -129500,7 +130002,7 @@ Codex app-server harness, model provider, and native session catalog.
 
 ## Surface
 
-providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, tools, webSearchProviders
+providers: `codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 
@@ -129528,7 +130030,7 @@ OpenClaw Cohere provider plugin.
 
 ## Surface
 
-providers: cohere
+providers: `cohere`
 
 ## Related docs
 
@@ -129556,7 +130058,7 @@ Adds ComfyUI model provider support to OpenClaw.
 
 ## Surface
 
-providers: comfy; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders
+providers: `comfy`; contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -129584,7 +130086,7 @@ Adds Copilot Proxy model provider support to OpenClaw.
 
 ## Surface
 
-providers: copilot-proxy
+providers: `copilot-proxy`
 
 
 
@@ -129636,7 +130138,7 @@ Cloud worker provider backed by the Crabbox CLI.
 
 ## Surface
 
-contracts: workerProviders
+contracts: `workerProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -129668,7 +130170,7 @@ Adds media understanding provider support. Adds realtime transcription provider 
 
 ## Surface
 
-contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders
+contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`
 
 ## Related docs
 
@@ -129696,7 +130198,7 @@ Adds DeepInfra model provider support to OpenClaw.
 
 ## Surface
 
-providers: deepinfra; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, speechProviders, videoGenerationProviders
+providers: `deepinfra`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -129724,7 +130226,7 @@ Adds DeepSeek model provider support to OpenClaw.
 
 ## Surface
 
-providers: deepseek; contracts: usageProviders
+providers: `deepseek`; contracts: `usageProviders`
 
 ## Related docs
 
@@ -129836,7 +130338,7 @@ OpenClaw read-only diff viewer plugin and file renderer for agents.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills
 
 
 
@@ -129860,11 +130362,11 @@ OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: discord; contracts: transcriptSourceProviders; skills
+channels: `discord`; contracts: `transcriptSourceProviders`; skills
 
 ## Related docs
 
-- [discord](/channels/discord)
+- [Discord](/channels/discord)
 
 
 
@@ -129888,7 +130390,7 @@ Extract text and fallback page images from local document attachments.
 
 ## Surface
 
-contracts: documentExtractors
+contracts: `documentExtractors`
 
 ## Related docs
 
@@ -129916,7 +130418,7 @@ Adds web search provider support.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 
@@ -129944,7 +130446,7 @@ Adds media understanding provider support. Adds realtime transcription provider 
 
 ## Surface
 
-contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders, speechProviders
+contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `speechProviders`
 
 ## Related docs
 
@@ -129972,7 +130474,7 @@ Adds web search provider support.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 
@@ -130000,7 +130502,7 @@ Adds fal model provider support to OpenClaw.
 
 ## Surface
 
-providers: fal; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders
+providers: `fal`; contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -130028,7 +130530,7 @@ OpenClaw Featherless AI provider plugin.
 
 ## Surface
 
-providers: featherless
+providers: `featherless`
 
 ## Related docs
 
@@ -130056,7 +130558,7 @@ OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community mai
 
 ## Surface
 
-channels: feishu; contracts: tools; skills
+channels: `feishu`; contracts: `tools`; skills
 
 ## Related docs
 
@@ -130084,7 +130586,7 @@ Fetch, list, and write files on paired nodes via dedicated node commands. Bypass
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 
 
@@ -130108,7 +130610,7 @@ Adds agent-callable tools. Adds web fetch provider support. Adds web search prov
 
 ## Surface
 
-contracts: tools, webFetchProviders, webSearchProviders
+contracts: `tools`, `webFetchProviders`, `webSearchProviders`
 
 ## Related docs
 
@@ -130136,11 +130638,11 @@ Adds Fireworks model provider support to OpenClaw.
 
 ## Surface
 
-providers: fireworks
+providers: `fireworks`
 
 ## Related docs
 
-- [fireworks](/providers/fireworks)
+- [Fireworks](/providers/fireworks)
 
 
 
@@ -130164,7 +130666,7 @@ Adds GitHub Copilot model provider support to OpenClaw.
 
 ## Surface
 
-providers: github-copilot; contracts: memoryEmbeddingProviders, usageProviders
+providers: `github-copilot`; contracts: `memoryEmbeddingProviders`, `usageProviders`
 
 ## Related docs
 
@@ -130192,7 +130694,7 @@ OpenClaw GMI Cloud provider plugin.
 
 ## Surface
 
-providers: gmi, gmi-cloud, gmicloud
+providers: `gmi`, `gmi-cloud`, `gmicloud`
 
 ## Related docs
 
@@ -130220,7 +130722,7 @@ OpenClaw Google Meet participant plugin for joining calls through Chrome or Twil
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 
@@ -130248,7 +130750,7 @@ Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw
 
 ## Surface
 
-providers: google, google-gemini-cli, google-vertex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, musicGenerationProviders, realtimeVoiceProviders, speechProviders, usageProviders, videoGenerationProviders, webSearchProviders
+providers: `google`, `google-gemini-cli`, `google-vertex`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `musicGenerationProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 
@@ -130276,11 +130778,11 @@ OpenClaw Google Chat channel plugin for spaces and direct messages.
 
 ## Surface
 
-channels: googlechat
+channels: `googlechat`
 
 ## Related docs
 
-- [googlechat](/channels/googlechat)
+- [Google Chat](/channels/googlechat)
 
 
 
@@ -130304,7 +130806,7 @@ Adds text-to-speech provider support.
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 ## Related docs
 
@@ -130332,7 +130834,7 @@ Adds Groq model provider support to OpenClaw.
 
 ## Surface
 
-providers: groq; contracts: mediaUnderstandingProviders
+providers: `groq`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 
@@ -130360,7 +130862,7 @@ Adds Hugging Face model provider support to OpenClaw.
 
 ## Surface
 
-providers: huggingface
+providers: `huggingface`
 
 ## Related docs
 
@@ -130388,11 +130890,11 @@ Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: imessage; skills
+channels: `imessage`; skills
 
 ## Related docs
 
-- [imessage](/channels/imessage)
+- [iMessage](/channels/imessage)
 
 
 
@@ -130416,7 +130918,7 @@ Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 ## Related docs
 
@@ -130444,7 +130946,7 @@ Adds the IRC channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: irc
+channels: `irc`
 
 ## Related docs
 
@@ -130472,7 +130974,7 @@ Adds Kilocode model provider support to OpenClaw.
 
 ## Surface
 
-providers: kilocode
+providers: `kilocode`
 
 ## Related docs
 
@@ -130500,7 +131002,7 @@ Adds Kimi, Kimi Coding model provider support to OpenClaw.
 
 ## Surface
 
-providers: kimi, kimi-coding
+providers: `kimi`, `kimi-coding`
 
 ## Related docs
 
@@ -130528,11 +131030,59 @@ OpenClaw LINE channel plugin for LINE Bot API chats.
 
 ## Surface
 
-channels: line
+channels: `line`
 
 ## Related docs
 
-- [line](/channels/line)
+- [LINE](/channels/line)
+
+
+
+# Section: plugins/reference/linux-canvas.md
+
+---
+summary: "Canvas rendering bridge for the OpenClaw Linux desktop app."
+read_when:
+  - You are installing, configuring, or auditing the linux-canvas plugin
+title: "Linux Canvas plugin"
+---
+
+# Linux Canvas plugin
+
+Canvas rendering bridge for the OpenClaw Linux desktop app.
+
+## Distribution
+
+- Package: `@openclaw/linux-canvas`
+- Install route: included in OpenClaw
+
+## Surface
+
+plugin
+
+
+
+# Section: plugins/reference/linux-node.md
+
+---
+summary: "Desktop notifications, camera capture, and location for Linux node hosts."
+read_when:
+  - You are installing, configuring, or auditing the linux-node plugin
+title: "Linux Node plugin"
+---
+
+# Linux Node plugin
+
+Desktop notifications, camera capture, and location for Linux node hosts.
+
+## Distribution
+
+- Package: `@openclaw/linux-node`
+- Install route: included in OpenClaw
+
+## Surface
+
+plugin
 
 
 
@@ -130556,7 +131106,7 @@ Adds LiteLLM model provider support to OpenClaw.
 
 ## Surface
 
-providers: litellm; contracts: imageGenerationProviders
+providers: `litellm`; contracts: `imageGenerationProviders`
 
 ## Related docs
 
@@ -130584,7 +131134,7 @@ Local GGUF embeddings through node-llama-cpp.
 
 ## Surface
 
-contracts: embeddingProviders
+contracts: `embeddingProviders`
 
 ## Related docs
 
@@ -130612,7 +131162,7 @@ Generic JSON-only LLM tool for structured tasks callable from workflows.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 
 
@@ -130636,7 +131186,7 @@ Adds LM Studio model provider support to OpenClaw.
 
 ## Surface
 
-providers: lmstudio; contracts: memoryEmbeddingProviders
+providers: `lmstudio`; contracts: `memoryEmbeddingProviders`
 
 ## Related docs
 
@@ -130664,7 +131214,7 @@ Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 
 
@@ -130716,7 +131266,7 @@ OpenClaw LongCat provider plugin.
 
 ## Surface
 
-providers: longcat
+providers: `longcat`
 
 ## Related docs
 
@@ -130744,11 +131294,11 @@ OpenClaw Matrix channel plugin for rooms and direct messages.
 
 ## Surface
 
-channels: matrix
+channels: `matrix`
 
 ## Related docs
 
-- [matrix](/channels/matrix)
+- [Matrix](/channels/matrix)
 
 
 
@@ -130772,7 +131322,7 @@ Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: mattermost
+channels: `mattermost`
 
 ## Related docs
 
@@ -130800,7 +131350,7 @@ Adds agent-callable tools.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 
 
@@ -130824,7 +131374,7 @@ OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, 
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 
@@ -130852,7 +131402,7 @@ Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills
 
 ## Related docs
 
@@ -130880,11 +131430,11 @@ Adds Meta model provider support to OpenClaw.
 
 ## Surface
 
-providers: meta
+providers: `meta`
 
 ## Related docs
 
-- [meta](/providers/meta)
+- [Meta](/providers/meta)
 
 
 
@@ -130908,7 +131458,7 @@ Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Surface
 
-providers: microsoft-foundry; contracts: imageGenerationProviders
+providers: `microsoft-foundry`; contracts: `imageGenerationProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -131026,7 +131576,7 @@ Adds text-to-speech provider support.
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 
 
@@ -131050,7 +131600,7 @@ Imports Claude Code and Claude Desktop instructions, MCP servers, skills, and sa
 
 ## Surface
 
-contracts: migrationProviders
+contracts: `migrationProviders`
 
 
 
@@ -131074,7 +131624,7 @@ Imports Hermes configuration, memories, skills, and supported credentials into O
 
 ## Surface
 
-contracts: migrationProviders
+contracts: `migrationProviders`
 
 
 
@@ -131098,7 +131648,7 @@ Adds MiniMax, MiniMax Portal model provider support to OpenClaw.
 
 ## Surface
 
-providers: minimax, minimax-portal; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, usageProviders, videoGenerationProviders, webSearchProviders
+providers: `minimax`, `minimax-portal`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 
@@ -131126,7 +131676,7 @@ Adds Mistral model provider support to OpenClaw.
 
 ## Surface
 
-providers: mistral; contracts: mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders
+providers: `mistral`; contracts: `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `realtimeTranscriptionProviders`
 
 ## Related docs
 
@@ -131154,7 +131704,7 @@ Adds Moonshot model provider support to OpenClaw.
 
 ## Surface
 
-providers: moonshot; contracts: mediaUnderstandingProviders, webSearchProviders
+providers: `moonshot`; contracts: `mediaUnderstandingProviders`, `webSearchProviders`
 
 ## Related docs
 
@@ -131182,11 +131732,11 @@ OpenClaw Microsoft Teams channel plugin for bot conversations.
 
 ## Surface
 
-channels: msteams
+channels: `msteams`
 
 ## Related docs
 
-- [msteams](/channels/msteams)
+- [Microsoft Teams](/channels/msteams)
 
 
 
@@ -131234,7 +131784,7 @@ OpenClaw Nextcloud Talk channel plugin for conversations.
 
 ## Surface
 
-channels: nextcloud-talk
+channels: `nextcloud-talk`
 
 ## Related docs
 
@@ -131262,7 +131812,7 @@ OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.
 
 ## Surface
 
-channels: nostr
+channels: `nostr`
 
 ## Related docs
 
@@ -131290,7 +131840,7 @@ Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
 
 ## Surface
 
-providers: novita, novita-ai, novitaai
+providers: `novita`, `novita-ai`, `novitaai`
 
 ## Related docs
 
@@ -131318,7 +131868,7 @@ Adds NVIDIA model provider support to OpenClaw.
 
 ## Surface
 
-providers: nvidia
+providers: `nvidia`
 
 ## Related docs
 
@@ -131374,7 +131924,7 @@ Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
 ## Surface
 
-providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, tools, webSearchProviders
+providers: `ollama`, `ollama-cloud`; contracts: `memoryEmbeddingProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 
@@ -131403,7 +131953,7 @@ Curated 1Password secrets broker with approval policy and SQLite audit history.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 
@@ -131455,7 +132005,7 @@ Adds OpenAI model provider support to OpenClaw.
 
 ## Surface
 
-providers: openai; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, usageProviders, videoGenerationProviders
+providers: `openai`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -131483,7 +132033,7 @@ Adds OpenCode Go model provider support to OpenClaw.
 
 ## Surface
 
-providers: opencode-go; contracts: mediaUnderstandingProviders
+providers: `opencode-go`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 
@@ -131494,7 +132044,7 @@ providers: opencode-go; contracts: mediaUnderstandingProviders
 # Section: plugins/reference/opencode.md
 
 ---
-summary: "Adds OpenCode model provider and native session catalog support to OpenClaw."
+summary: "Adds OpenCode model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the opencode plugin
 title: "OpenCode plugin"
@@ -131502,7 +132052,7 @@ title: "OpenCode plugin"
 
 # OpenCode plugin
 
-Adds OpenCode model provider and native session catalog support to OpenClaw.
+Adds OpenCode model provider support to OpenClaw.
 
 ## Distribution
 
@@ -131511,7 +132061,9 @@ Adds OpenCode model provider and native session catalog support to OpenClaw.
 
 ## Surface
 
-providers: opencode; contracts: mediaUnderstandingProviders; session catalog: opencode
+providers: `opencode`; contracts: `mediaUnderstandingProviders`
+
+<!-- openclaw-plugin-reference:manual-start -->
 
 ## Native sessions
 
@@ -131524,6 +132076,8 @@ Gateway credentials.
 
 Turn **OpenCode Session Catalog** off under **Config > Plugins > OpenCode** to
 disable discovery. It is enabled by default.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 
@@ -131551,7 +132105,7 @@ Adds OpenRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, usageProviders, videoGenerationProviders
+providers: `openrouter`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -131603,7 +132157,7 @@ Adds web search provider support.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 
@@ -131631,7 +132185,7 @@ OpenClaw PixVerse video generation provider plugin.
 
 ## Surface
 
-contracts: videoGenerationProviders
+contracts: `videoGenerationProviders`
 
 ## Related docs
 
@@ -131743,7 +132297,7 @@ Adds the QA Channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: qa-channel
+channels: `qa-channel`
 
 ## Related docs
 
@@ -131771,7 +132325,7 @@ OpenClaw QA lab plugin with private debugger UI and scenario runner.
 
 ## Surface
 
-contracts: tools, webSearchProviders, workerProviders
+contracts: `tools`, `webSearchProviders`, `workerProviders`
 
 
 
@@ -131819,7 +132373,7 @@ Adds Qianfan model provider support to OpenClaw.
 
 ## Surface
 
-providers: qianfan
+providers: `qianfan`
 
 ## Related docs
 
@@ -131847,7 +132401,7 @@ OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
 ## Surface
 
-channels: qqbot; contracts: tools; skills
+channels: `qqbot`; contracts: `tools`; skills
 
 ## Related docs
 
@@ -131875,7 +132429,7 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CL
 
 ## Surface
 
-providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwen-cli, qwen-token-plan, bailian-token-plan; contracts: mediaUnderstandingProviders, videoGenerationProviders
+providers: `qwen`, `qwencloud`, `modelstudio`, `dashscope`, `qwen-oauth`, `qwen-portal`, `qwen-cli`, `qwen-token-plan`, `bailian-token-plan`; contracts: `mediaUnderstandingProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -131904,11 +132458,11 @@ OpenClaw Raft channel plugin for secure CLI wake bridges.
 
 ## Surface
 
-channels: raft
+channels: `raft`
 
 ## Related docs
 
-- [raft](/channels/raft)
+- [Raft](/channels/raft)
 
 
 
@@ -131932,7 +132486,7 @@ Guarded end-to-end encrypted claw channel.
 
 ## Surface
 
-channels: reef
+channels: `reef`
 
 ## Related docs
 
@@ -131960,11 +132514,11 @@ Adds video generation provider support.
 
 ## Surface
 
-contracts: videoGenerationProviders
+contracts: `videoGenerationProviders`
 
 ## Related docs
 
-- [runway](/providers/runway)
+- [Runway](/providers/runway)
 
 
 
@@ -131988,7 +132542,7 @@ Adds web search provider support.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 
 
@@ -132012,7 +132566,7 @@ Adds media understanding provider support.
 
 ## Surface
 
-contracts: mediaUnderstandingProviders
+contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 
@@ -132040,7 +132594,7 @@ Adds SGLang model provider support to OpenClaw.
 
 ## Surface
 
-providers: sglang
+providers: `sglang`
 
 ## Related docs
 
@@ -132068,11 +132622,11 @@ Adds the Signal channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: signal
+channels: `signal`
 
 ## Related docs
 
-- [signal](/channels/signal)
+- [Signal](/channels/signal)
 
 
 
@@ -132096,11 +132650,11 @@ OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: slack; skills
+channels: `slack`; skills
 
 ## Related docs
 
-- [slack](/channels/slack)
+- [Slack](/channels/slack)
 
 
 
@@ -132124,7 +132678,7 @@ Twilio SMS channel plugin for OpenClaw text messages.
 
 ## Surface
 
-channels: sms
+channels: `sms`
 
 ## Related docs
 
@@ -132152,7 +132706,7 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: stepfun, stepfun-plan
+providers: `stepfun`, `stepfun-plan`
 
 ## Related docs
 
@@ -132180,7 +132734,7 @@ Synology Chat channel plugin for OpenClaw channels and direct messages.
 
 ## Surface
 
-channels: synology-chat
+channels: `synology-chat`
 
 ## Related docs
 
@@ -132208,11 +132762,11 @@ Adds Synthetic model provider support to OpenClaw.
 
 ## Surface
 
-providers: synthetic
+providers: `synthetic`
 
 ## Related docs
 
-- [synthetic](/providers/synthetic)
+- [Synthetic](/providers/synthetic)
 
 
 
@@ -132236,7 +132790,7 @@ Adds agent-callable tools. Adds web search provider support.
 
 ## Surface
 
-contracts: tools, webSearchProviders; skills
+contracts: `tools`, `webSearchProviders`; skills
 
 ## Related docs
 
@@ -132264,11 +132818,11 @@ Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: telegram
+channels: `telegram`
 
 ## Related docs
 
-- [telegram](/channels/telegram)
+- [Telegram](/channels/telegram)
 
 
 
@@ -132292,7 +132846,7 @@ Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 
 ## Surface
 
-providers: tencent-tokenhub, tencent-tokenplan
+providers: `tencent-tokenhub`, `tencent-tokenplan`
 
 ## Related docs
 
@@ -132320,7 +132874,7 @@ OpenClaw Tlon/Urbit channel plugin for chat workflows.
 
 ## Surface
 
-channels: tlon; skills
+channels: `tlon`; skills
 
 ## Related docs
 
@@ -132348,7 +132902,7 @@ Adds Together model provider support to OpenClaw.
 
 ## Surface
 
-providers: together; contracts: videoGenerationProviders
+providers: `together`; contracts: `videoGenerationProviders`
 
 ## Related docs
 
@@ -132376,11 +132930,11 @@ Compacts exec and bash tool results with tokenjuice reducers.
 
 ## Surface
 
-contracts: agentToolResultMiddleware
+contracts: `agentToolResultMiddleware`
 
 ## Related docs
 
-- [tokenjuice](/tools/tokenjuice)
+- [Tokenjuice](/tools/tokenjuice)
 
 
 
@@ -132404,7 +132958,7 @@ Adds text-to-speech provider support.
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 
 
@@ -132428,7 +132982,7 @@ OpenClaw Twitch channel plugin for chat and moderation workflows.
 
 ## Surface
 
-channels: twitch
+channels: `twitch`
 
 ## Related docs
 
@@ -132484,7 +133038,7 @@ Adds Venice model provider support to OpenClaw.
 
 ## Surface
 
-providers: venice; contracts: usageProviders
+providers: `venice`; contracts: `usageProviders`
 
 ## Related docs
 
@@ -132512,7 +133066,7 @@ Adds Vercel AI Gateway model provider support to OpenClaw.
 
 ## Surface
 
-providers: vercel-ai-gateway
+providers: `vercel-ai-gateway`
 
 ## Related docs
 
@@ -132540,7 +133094,7 @@ Adds vLLM model provider support to OpenClaw.
 
 ## Surface
 
-providers: vllm
+providers: `vllm`
 
 ## Related docs
 
@@ -132568,7 +133122,7 @@ OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills
 
 ## Related docs
 
@@ -132596,7 +133150,7 @@ Adds Volcengine, Volcengine Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: volcengine, volcengine-plan; contracts: speechProviders
+providers: `volcengine`, `volcengine-plan`; contracts: `speechProviders`
 
 ## Related docs
 
@@ -132624,7 +133178,7 @@ Adds memory embedding provider support.
 
 ## Surface
 
-contracts: memoryEmbeddingProviders
+contracts: `memoryEmbeddingProviders`
 
 
 
@@ -132648,7 +133202,7 @@ Adds Vydra model provider support to OpenClaw.
 
 ## Surface
 
-providers: vydra; contracts: imageGenerationProviders, speechProviders, videoGenerationProviders
+providers: `vydra`; contracts: `imageGenerationProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 
@@ -132676,7 +133230,7 @@ Extract readable article content from local HTML web fetch responses.
 
 ## Surface
 
-contracts: webContentExtractors
+contracts: `webContentExtractors`
 
 
 
@@ -132728,11 +133282,11 @@ OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
 
 ## Surface
 
-channels: whatsapp; contracts: tools; skills
+channels: `whatsapp`; contracts: `tools`; skills
 
 ## Related docs
 
-- [whatsapp](/channels/whatsapp)
+- [WhatsApp](/channels/whatsapp)
 
 
 
@@ -132756,7 +133310,7 @@ Dashboard workboard for agent-owned issues and sessions.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 
@@ -132784,7 +133338,7 @@ Agent-composable Workspaces document and control-plane backend.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 
 
@@ -132808,7 +133362,7 @@ Adds xAI model provider support to OpenClaw.
 
 ## Surface
 
-providers: xai; contracts: imageGenerationProviders, mediaUnderstandingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, tools, videoGenerationProviders, webSearchProviders
+providers: `xai`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `tools`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 
@@ -132836,7 +133390,7 @@ Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: xiaomi, xiaomi-token-plan; contracts: speechProviders, usageProviders
+providers: `xiaomi`, `xiaomi-token-plan`; contracts: `speechProviders`, `usageProviders`
 
 ## Related docs
 
@@ -132864,7 +133418,7 @@ Adds Z.AI model provider support to OpenClaw.
 
 ## Surface
 
-providers: zai; contracts: mediaUnderstandingProviders, usageProviders
+providers: `zai`; contracts: `mediaUnderstandingProviders`, `usageProviders`
 
 ## Related docs
 
@@ -132892,7 +133446,7 @@ OpenClaw Zalo channel plugin for bot and webhook chats.
 
 ## Surface
 
-channels: zalo
+channels: `zalo`
 
 ## Related docs
 
@@ -132920,7 +133474,7 @@ OpenClaw Zalo Personal Account plugin via native zca-js integration.
 
 ## Surface
 
-channels: zalouser; contracts: tools
+channels: `zalouser`; contracts: `tools`
 
 ## Related docs
 
@@ -133301,11 +133855,16 @@ is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local `~/.claude/projects/` directory exists.
 Approve the node pairing upgrade when those commands first appear.
 
-The sidebar starts with the newest bounded page from each host and refreshes on
-the normal 30-second cadence. Use **Load more sessions** below a catalog group
-to append the next page for every host that has more history; appended rows stay
-visible and are re-fetched to the same depth across refreshes. Catalog clients
-use `sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
+The sidebar groups rows by their Gateway or paired-node host, starts with the
+newest bounded page from each host, and refreshes on the normal 30-second
+cadence. Use **Load more sessions** below a catalog group to append the next page
+for every host that has more history; appended rows stay visible and are
+re-fetched to the same depth across refreshes. Catalog clients use
+`sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
+
+Terminal takeover resolves `claude` from the owning host user's login-shell
+PATH before the service/daemon PATH. This keeps app-launched sessions aligned
+with the Claude CLI the operator gets in a normal terminal.
 
 Selecting a row reads the newest transcript page first. **Load older transcript
 items** follows an opaque byte cursor and reads another bounded section from the
@@ -149697,6 +150256,38 @@ then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
 Use an explicit `--auth-choice` to force a Coding Plan endpoint if your key
 works on both.
 
+## Rate limits and overloads
+
+Z.AI documents the Coding Plan and general-purpose agent tools as capacity
+managed services. In Z.AI's own docs:
+
+- [General-purpose agent tools](https://docs.z.ai/devpack/tool/others),
+  including OpenClaw, are served on a best-effort basis. During high inference
+  load, typically around 2-6 PM Singapore time, some requests may face temporary
+  rate limits.
+- [Coding Plan rate and concurrency limits](https://docs.z.ai/devpack/usage-policy)
+  are tied to the plan tier and can be adjusted dynamically based on resource
+  availability. Off-peak hours may have higher concurrency.
+- [API error code `1302`](https://docs.z.ai/api-reference/api-code) means "Rate
+  limit reached for requests". API error code `1305` means "The service may be
+  temporarily overloaded, please try again later".
+
+If you see a temporary `429` or `1305` response during a busy period, wait and
+retry the request. If failures are repeatable outside peak periods, or only
+occur for one endpoint, model, or request shape, check the configured endpoint
+and model first:
+
+```bash
+openclaw models list --all --provider zai
+openclaw config get models.providers.zai.baseUrl
+```
+
+Coding Plan keys should use a Coding Plan endpoint such as
+`https://api.z.ai/api/coding/paas/v4`; general API keys should use a general API
+endpoint such as `https://api.z.ai/api/paas/v4`. Persistent failures with the
+same key and endpoint can indicate a provider-side rejection or plan limitation,
+not ordinary peak-load throttling.
+
 ## Config example
 
 <Tip>
@@ -150725,7 +151316,10 @@ The branch already has a real shared SQLite base:
   payload, but typed columns are authoritative for hot queue routing/state.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
-  The old TUI JSON file is doctor migration input only.
+  Runtime reads and writes only SQLite, atomically upserts each scope, and
+  excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
+  old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
+  and removes the unchanged legacy file instead of leaving an archive.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
@@ -151207,7 +151801,7 @@ sessionId}` and session key context.
 - Active-memory blocking subagent runs use SQLite transcript rows instead of
   creating temporary or persisted `session.jsonl` files under plugin state. The
   old `transcriptDir` option is removed.
-- One-off slug generation and Crestodian planner runs use SQLite transcript rows
+- One-off slug generation and system-agent planner runs use SQLite transcript rows
   instead of creating temporary `session.jsonl` files.
 - `llm-task` helper runs and hidden commitment extraction also use SQLite
   transcript rows, so these model-only helper sessions no longer create
@@ -151343,7 +151937,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Memory Wiki no longer creates `.openclaw-wiki/state.json` or the unused
   `.openclaw-wiki/locks` directory. The migration provider removes those retired
   plugin metadata files if an older vault still has them.
-- Crestodian audit entries now use core SQLite plugin state instead of
+- System-agent audit entries now use core SQLite plugin state instead of
   `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
 - Config write/observe audit entries now use core SQLite plugin state instead
@@ -151353,7 +151947,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   `logs/config-health.json` sidecars while editing `openclaw.json`. The config
   file remains file-backed, recovery snapshots stay next to the config file,
   and durable config audit/health state belongs to the Gateway SQLite store.
-- Crestodian rescue pending approvals now use core SQLite plugin state instead
+- System-agent rescue pending approvals now use core SQLite plugin state instead
   of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
   files and removes them after successful import.
 - Phone Control temporary arm state now uses SQLite plugin state instead of
@@ -154058,7 +154652,8 @@ identically-named `exec`/`wait` tools.
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` whose image result cannot survive the guest bridge.
+  such as `computer` or the native-vision `image` loader whose image result
+  cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
 - Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden from
@@ -156415,6 +157010,7 @@ Provider references:
 ### `cacheRetention`
 
 Values: `"none" | "short" | "long"`. Configurable as a global default, per model, and per agent.
+`"standard"` is not an alias; use `"short"` for the provider's default cache window. Invalid values are ignored with a warning.
 
 ```yaml
 agents:
@@ -165068,20 +165664,20 @@ sidebarTitle: "Onboarding Overview"
 
 OpenClaw has terminal and macOS app onboarding. Both establish inference first:
 they detect existing AI access, require a live completion, and only then start
-Crestodian to configure the remaining setup. A reachable, configured Gateway
+OpenClaw to configure the remaining setup. A reachable, configured Gateway
 whose default agent already has a configured model skips onboarding and opens
 the normal agent UI. The terminal flow also offers the full classic wizard for
 detailed setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding             |
-| -------------- | -------------------------------------- | -------------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                       |
-| **Interface**  | Inference setup, then Crestodian       | Inference setup, then Crestodian |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup        |
-| **Automation** | `--non-interactive` for scripts        | Manual only                      |
-| **Command**    | `openclaw onboard`                     | Launch the app                   |
+|                | CLI onboarding                         | macOS app onboarding           |
+| -------------- | -------------------------------------- | ------------------------------ |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                     |
+| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup      |
+| **Automation** | `--non-interactive` for scripts        | Manual only                    |
+| **Command**    | `openclaw onboard`                     | Launch the app                 |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -165095,7 +165691,7 @@ The guided inference phase establishes only:
 2. **Verified inference** — a real completion on the default agent's effective
    model
 
-After that completion passes, Crestodian can configure the workspace, Gateway,
+After that completion passes, OpenClaw can configure the workspace, Gateway,
 Gateway service, channels, agents, plugins, and other optional features.
 
 The classic CLI wizard can additionally configure:
@@ -165118,20 +165714,20 @@ and falls through on failure. If detection is exhausted, it shows OpenAI,
 Anthropic, xAI (Grok), Google, and OpenRouter first. **More…** contains the
 remaining providers in provider groups, with regions, plans, and supported
 browser, device, API-key, or token methods in a second menu. It saves the model
-and credential only after a passing completion, then starts Crestodian to
+and credential only after a passing completion, then starts OpenClaw to
 configure the workspace, Gateway, channels, agents, plugins, and other optional
-features. **Skip for now** exits without starting Crestodian. There is no
+features. **Skip for now** exits without starting OpenClaw. There is no
 in-flow classic handoff; exit and run `openclaw onboard --classic` when you want
 the classic wizard instead.
 
-After inference passes, Crestodian can hand channel setup to a masked terminal
-wizard. It does not open guided or classic provider setup; exit Crestodian and
+After inference passes, OpenClaw can hand channel setup to a masked terminal
+wizard. It does not open guided or classic provider setup; exit OpenClaw and
 run `openclaw onboard` to change the model provider or its authentication.
 
 Use `openclaw onboard --classic` for detailed model/auth, channel, skill,
 remote Gateway, or import setup. Adding `--install-daemon` also selects the
 classic flow and installs the background service in one step. Use `openclaw
-crestodian` for conversational non-inference setup and repair. `openclaw
+openclaw` for conversational non-inference setup and repair. `openclaw
 onboard --modern` is a compatibility alias that uses the same live-inference
 gate.
 
@@ -165142,13 +165738,13 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 Open the OpenClaw app. If its configured local or remote Gateway is reachable
 and the default agent already has a configured model, the app skips onboarding
-and Crestodian and opens the normal agent UI immediately.
+and OpenClaw and opens the normal agent UI immediately.
 
 For a fresh or incomplete Gateway, the first-run flow detects existing AI
 access (Claude Code, Codex, or API keys), live-tests the best
 option, and saves it only after a real reply — falling back automatically and
 offering a verified manual API-key step when nothing is found. Sensitive
-credentials use masked input. Once inference passes, Crestodian starts and
+credentials use masked input. Once inference passes, OpenClaw starts and
 helps configure the rest.
 
 Gemini CLI remains available for normal agents after setup, but it is not
@@ -165245,7 +165841,7 @@ Where does the **Gateway** run?
 </Step>
 <Step title="Connect your AI">
   A connected Gateway that already has a configured agent model skips this
-  page entirely and opens the normal agent UI. Crestodian and provider setup
+  page entirely and opens the normal agent UI. OpenClaw and provider setup
   only run for a fresh or incomplete Gateway.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
@@ -165268,9 +165864,9 @@ The manual key/token picker uses the same provider registry. In every route,
 the provider supplies its starter model and configuration; OpenClaw verifies
 the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
-start without working inference. After that live check passes, Crestodian becomes
+start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
-other optional features; it is also available later under Settings → Crestodian.
+other optional features; it is also available later under Settings → OpenClaw.
 </Step>
 <Step title="Permissions">
 
@@ -165282,10 +165878,10 @@ Onboarding requests TCC permissions for: Automation (AppleScript), Notifications
 
 </Step>
 <Step title="Finish">
-  After inference passes, Crestodian owns the remaining optional setup and can
+  After inference passes, OpenClaw owns the remaining optional setup and can
   hand you off to the normal agent chat. Finishing the permission walkthrough
   opens that same chat; the app does not create a workspace or launch a separate
-  agent setup conversation before Crestodian. See
+  agent setup conversation before OpenClaw. See
   [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
   during the agent's first real turn.
 </Step>
@@ -166908,7 +167504,7 @@ Clients (macOS app and Control UI) can render steps without re-implementing onbo
 # Section: start/wizard.md
 
 ---
-summary: "CLI onboarding: verify inference, then hand remaining setup to Crestodian"
+summary: "CLI onboarding: verify inference, then hand remaining setup to OpenClaw"
 read_when:
   - Running or configuring CLI onboarding
   - Setting up a new machine
@@ -166922,23 +167518,23 @@ openclaw onboard
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
 Windows (native or WSL2). By default it detects AI access already available on
-the machine, verifies it with a real completion, and starts Crestodian to
+the machine, verifies it with a real completion, and starts OpenClaw to
 configure the workspace, Gateway, and optional features. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
 Guided onboarding establishes inference first. It detects available AI access,
-requires a real completion, and only then starts [Crestodian](/cli/crestodian)
+requires a real completion, and only then starts [OpenClaw](/cli/openclaw)
 to configure the rest of OpenClaw. Choosing **Skip for now** exits onboarding
-without starting Crestodian.
+without starting OpenClaw.
 
 The classic wizard remains available for custom providers, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
-into it. After inference passes, Crestodian can use `open channel wizard for
+into it. After inference passes, OpenClaw can use `open channel wizard for
 <channel>` to hand channel setup that needs secrets to a masked terminal wizard.
-To change the model provider or its authentication, exit Crestodian and run
-`openclaw onboard`; Crestodian does not open guided or classic provider flows.
+To change the model provider or its authentication, exit OpenClaw and run
+`openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -166990,10 +167586,10 @@ Plain `openclaw onboard` follows this path:
    OpenRouter, or choose **More…** for the remaining providers. Each provider's
    regions, plans, and supported browser, device, API-key, or token methods
    appear in a second menu and are tested with the same real completion.
-   Choose **Skip for now** to exit without starting Crestodian.
+   Choose **Skip for now** to exit without starting OpenClaw.
 5. Persist only the verified model route and any credential/plugin state it
    requires. Workspace and Gateway settings remain untouched.
-6. Start Crestodian with the verified model so it can configure the workspace,
+6. Start OpenClaw with the verified model so it can configure the workspace,
    Gateway, channels, agents, plugins, and the remaining optional setup.
 
 Re-running the command on a configured installation tests the current default
@@ -167055,7 +167651,7 @@ Local mode (default) walks through these steps:
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to
    model/auth setup once or be ignored without blocking the rest of the
-   classic wizard. Ignoring it does not unlock Crestodian; conversational setup
+   classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
 2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
@@ -167087,8 +167683,8 @@ config is invalid or contains legacy keys, onboarding asks you to run
 `--flow import` runs a detected migration flow (for example Hermes) in the
 classic wizard instead of fresh setup; see [Migrate](/cli/migrate) and the migration guides under
 [Install](/install/migrating-hermes). `openclaw onboard --modern` is a
-compatibility alias for [Crestodian](/cli/crestodian). It uses the same
-inference gate as `openclaw crestodian`: verified inference starts the
+compatibility alias for [OpenClaw](/cli/openclaw). It uses the same
+inference gate as `openclaw setup`: verified inference starts the
 assistant, while an interactive failure returns to guided inference setup.
 
 ## Add another agent
@@ -177687,7 +178283,11 @@ bundled, official external, and source-only plugins, see
     ```
 
     Treat plugin installs like running code. Prefer pinned versions for
-    reproducible production installs.
+    reproducible production installs. ClawHub packages and OpenClaw's
+    bundled/official catalog are trusted sources. New arbitrary npm, git,
+    local path/archive, `npm-pack:`, or marketplace sources require
+    `--force` in noninteractive installs after you
+    review and trust the source.
 
   </Step>
 
@@ -178476,13 +179076,13 @@ model.
 
 ## Configuration
 
-| Setting                                    | Default     | Self-learning effect                                                                                                              |
-| ------------------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `skills.workshop.autonomous.enabled`       | `false`     | Enables direct correction capture and delayed experience review.                                                                  |
-| `skills.workshop.approvalPolicy`           | `"pending"` | Controls approval prompts for normal agent-initiated lifecycle actions; it does not expand the background reviewer's permissions. |
-| `skills.workshop.maxPending`               | `50`        | Caps pending and quarantined proposals per workspace.                                                                             |
-| `skills.workshop.maxSkillBytes`            | `40000`     | Caps proposal body size in bytes.                                                                                                 |
-| `skills.workshop.allowSymlinkTargetWrites` | `false`     | Affects apply behavior only; self-learning itself writes proposal state, not live skill targets.                                  |
+| Setting                                    | Default  | Self-learning effect                                                                                                              |
+| ------------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.enabled`       | `false`  | Enables direct correction capture and delayed experience review.                                                                  |
+| `skills.workshop.approvalPolicy`           | `"auto"` | Controls approval prompts for normal agent-initiated lifecycle actions; it does not expand the background reviewer's permissions. |
+| `skills.workshop.maxPending`               | `50`     | Caps pending and quarantined proposals per workspace.                                                                             |
+| `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                                 |
+| `skills.workshop.allowSymlinkTargetWrites` | `false`  | Affects apply behavior only; self-learning itself writes proposal state, not live skill targets.                                  |
 
 For the exhaustive schema, ranges, and related skill settings, see
 [Skills config](/tools/skills-config#workshop-skills-workshop).
@@ -178703,15 +179303,15 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
-default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
-trusted environments.
+Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
+approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
+to require operator approval before those actions.
 
-The prompt identifies the proposal id and target skill, and shows the proposal
-description, support-file count, and body size. Approval requests are bounded
-to finish before the agent tool watchdog. If no decision arrives before the
-prompt expires, the lifecycle action does not run: the proposal stays pending
-and unchanged. Decide later in the Skill Workshop UI or run
+When approval is required, the prompt identifies the proposal id and target
+skill, and shows the proposal description, support-file count, and body size.
+Approval requests are bounded to finish before the agent tool watchdog. If no
+decision arrives before the prompt expires, the lifecycle action does not run:
+the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
 `openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
@@ -178870,7 +179470,7 @@ the proposal threshold, and troubleshooting.
         enabled: false,
       },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -178878,13 +179478,13 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.      |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+| Setting                    | Default  | Effect                                                                                                                                                              |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`  | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.   |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
+| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
@@ -179034,7 +179634,7 @@ Most skills configuration lives under `skills` in
     workshop: {
       autonomous: { enabled: false },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -179355,9 +179955,9 @@ different visible skill set per agent.
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
 proposal-only permissions, and troubleshooting.
 
-<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"pending"'>
-  `pending` requires operator approval before agent-initiated apply, reject,
-  or quarantine. `auto` allows those actions without approval.
+<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
+  `auto` allows agent-initiated apply, reject, or quarantine without an
+  additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
 <ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
@@ -180310,8 +180910,11 @@ plugins.
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
-    | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
+    | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
+
+    Explicit `/export-session` paths replace existing files inside the
+    workspace. Omit the path to generate a collision-safe filename.
 
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
@@ -180369,7 +180972,7 @@ plugins.
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
-    | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
+    | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
@@ -180567,12 +181170,23 @@ chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install ./path/to/plugin
+/plugins install clawhub:<package>
+/plugins install npm:@openclaw/<official-package>
+/plugins install npm:<package> --force
+/plugins install git:<repository>@<ref> --force
 ```
 
 `/plugins enable|disable` updates plugin config and hot-reloads the Gateway
 plugin runtime for new agent turns. `/plugins install` restarts managed
-Gateways automatically because plugin source modules changed.
+Gateways automatically because plugin source modules changed. Trusted ClawHub
+and official-catalog installs do not need extra acknowledgement. Arbitrary npm,
+git, archive, `npm-pack:`, and local path sources show a provenance warning and
+require a trailing `--force` after you review the source. This flag acknowledges
+the source and permits replacement of an existing install; it does not bypass
+`security.installPolicy` or installer security checks. ClawHub releases with
+risk warnings still require the separate shell-only
+`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
+remain shell-only.
 
 ## `/trace`: plugin trace output
 
@@ -184867,7 +185481,7 @@ local-path sources, updates, and advanced plugin configuration.
 
 ## Sidebar navigation
 
-The sidebar pins navigation above a scrollable session list. In multi-agent setups every agent appears as a collapsible top-level section; expanding an agent browses its sessions without navigating away from the open chat, and collapsed agents show an unread indicator. Within an agent the list splits into **Pinned**, one built-in section per connected channel (Telegram, Slack, WhatsApp, ...), a built-in **Work** section for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), custom groups (the session `category`), and **Chats** for the rest. Channel and Work sections classify rows automatically; assigning a session to a custom group always wins. Opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a session onto a custom group or **Chats** to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while the collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Chats. The single **+** in the session-list header opens the New session page (see below). The sort control also has a Group by toggle: Grouped (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. **Usage**, **Automations**, and **Plugins** are pinned by default; the **More** row opens a menu with every other destination, including plugin-provided tabs. Select **Edit pinned items** in that menu, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set is stored in the current browser profile and survives reloads.
+The sidebar pins navigation above a scrollable session list. In multi-agent setups every agent appears as a collapsible top-level section; expanding an agent browses its sessions without navigating away from the open chat, and collapsed agents show an unread indicator. Within an agent the list splits into **Pinned**, one built-in section per connected channel (Telegram, Slack, WhatsApp, ...), a built-in **Work** section for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), custom groups (the session `category`), and **Chats** for the rest. Channel and Work sections classify rows automatically; assigning a session to a custom group always wins. Opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a session onto **Pinned** to pin it, or onto a custom group or **Chats** to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while the collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Chats. The single **+** in the session-list header opens the New session page (see below). The sort control also has a Group by toggle: Grouped (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. **Usage**, **Automations**, and **Plugins** are pinned by default; the **More** row opens a menu with every other destination, including plugin-provided tabs. Select **Edit pinned items** in that menu, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set is stored in the current browser profile and survives reloads.
 
 ## New session page
 
@@ -185013,9 +185627,13 @@ The terminal is an unconfined host shell and inherits the Gateway process enviro
 
 Use **Ctrl + backtick** to toggle the dock. The layout supports bottom and right docking, resizes with the browser viewport, and keeps multiple shell tabs. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
+Drag one or more files onto the active terminal, or use the paperclip button to choose files. OpenClaw stages each file on the machine that owns the PTY and pastes shell-quoted absolute paths at the cursor; it never presses Enter or executes the input. A compact batch indicator shows the current file and completed count. Cancel stops the remaining batch without pasting paths; a failed transfer stays visible so you can retry from that file without re-uploading completed files. Images, PDFs, archives, and other file types are accepted up to 16 MiB per file. Staged files use a private system-temporary directory on POSIX hosts (directory mode `0700`, file mode `0600`) or a directory under the user-profile ACL boundary on Windows, plus a 24-hour cleanup timer, so move or copy anything you need to keep.
+
+Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the Gateway inside WSL for a native WSL terminal and Linux upload paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
 Codex and Claude Code sessions discovered in the sessions sidebar can open in their native CLI inside the same terminal panel. In **Settings › Chat**, set **Open Codex/Claude sessions in** to **Terminal** to make a normal row click open `codex resume` or `claude --resume`; the default remains the read-only OpenClaw viewer. A row's right-click or kebab menu always offers both choices, and the viewer header includes **Open in terminal** when that session is eligible.
 
-Eligibility is per session and per host. Gateway-local sessions start the provider-owned resume command on the Gateway host. Paired-node sessions start an allowlisted provider command on the owning node and relay only that PTY's output, input, and resize events; this does not expose a general node shell or accept browser-supplied commands. Nodes that do not advertise the matching terminal-resume command, including embedded worker bridges without duplex streaming, keep the viewer available and show terminal opening as unavailable.
+Eligibility is per session and per host. Gateway-local sessions start the provider-owned resume command on the Gateway host. Paired-node sessions start an allowlisted provider command on the owning node and relay only that PTY's output, input, and resize events; this does not expose a general node shell or accept browser-supplied commands. File uploads use the separate, size-bounded `terminal.upload` node command and remain bound to the already-open terminal session. Approve the node pairing upgrade when that command first appears. Nodes that do not advertise the matching terminal-resume command, including embedded worker bridges without duplex streaming, keep the viewer available and show terminal opening as unavailable; older nodes can still run a terminal but cannot receive dragged files.
 
 Sessions survive disconnects: a page reload, laptop sleep, or network blip detaches the session on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). `terminal.list` shows attachable sessions, `terminal.attach` adopts one (tmux-style take-over), and `terminal.text` reads a session's recent output as plain text without attaching - an agent/tooling affordance.
 
@@ -185046,7 +185664,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Custom groups are collapsible and drag-reorderable, and sessions can be dropped onto a group or Chats; group names and order sync through the gateway while the collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Session search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Sessions page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch archive/delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
@@ -185081,7 +185699,8 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
   </Accordion>
   <Accordion title="Stop and abort">
     - Click **Stop** (calls `chat.abort`).
-    - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
+    - While a run is active, normal follow-ups steer into the running turn by default. Messages fall back to the queue when steering is unavailable; click **Steer** on a queued message to inject it into the running turn.
+    - **Settings → Appearance → Chat → Follow-ups while the agent is working** changes that default: `Steer into the active run` (default) sends follow-ups into the running turn immediately, while `Queue until the run ends` holds them until the run finishes. Either way, queued rows keep their per-message **Steer** and remove controls, and messages fall back to the queue when steering is unavailable.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
 
@@ -185858,9 +186477,9 @@ Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
 
-Crestodian:
+OpenClaw:
 
-- `/crestodian [request]` returns from the normal agent TUI to the [Crestodian](#crestodian-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
+- `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
 
@@ -185872,19 +186491,19 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - Local shell commands receive `OPENCLAW_SHELL=tui-local` in their environment.
 - A lone `!` is sent as a normal message; leading spaces do not trigger local exec.
 
-## Crestodian setup and repair helper
+## OpenClaw setup and repair helper
 
-Crestodian is the ring-zero setup/repair assistant, exposed as `openclaw crestodian` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to Crestodian's typed, approval-gated operations:
+OpenClaw is the ring-zero setup/repair assistant, exposed as `openclaw setup` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to OpenClaw's typed, approval-gated operations:
 
 ```bash
-openclaw crestodian                       # start interactively
-openclaw crestodian -m "status"           # run one request and exit
-openclaw crestodian -m "set default model openai/gpt-5.2" --yes   # apply a config write
+openclaw setup                       # start interactively
+openclaw setup -m "status"           # run one request and exit
+openclaw setup -m "set default model openai/gpt-5.2" --yes   # apply a config write
 ```
 
 - Persistent config writes need approval: either confirm interactively or pass `--yes`.
 - `--json` prints the startup overview as JSON instead of starting the chat.
-- From inside Crestodian, an `open-tui` request (for example, asking to talk to a normal agent) exits Crestodian and opens the regular agent TUI; use `/crestodian` there to come back.
+- From inside OpenClaw, an `open-tui` request (for example, asking to talk to a normal agent) exits OpenClaw and opens the regular agent TUI; use `/openclaw` there to come back.
 
 Use local mode when the current config already validates and you want the embedded agent to inspect it on the same machine, compare it against the docs, and help repair drift without depending on a running Gateway.
 
