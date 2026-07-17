@@ -352,7 +352,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 1. `runner-admission` waits only for canonical `main` pushes; a newer push cancels the run before Blacksmith registration.
 2. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
-4. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Generated locale drift stays visible while the standalone refresh workflow repairs it in the background.
+4. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Source PRs exclude generated locale snapshots; the standalone refresh workflow repairs and auto-merges an isolated generated PR in the background. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
 6. `openclaw/ci-gate` waits for every selected lane. Admission, preflight, and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
 
@@ -404,8 +404,12 @@ The slowest Node test families are split or balanced so each job stays small wit
 - Agentic gateway/server (control-plane) configs split across chat, auth, model, HTTP/plugin, runtime, and startup lanes instead of waiting on built artifacts.
 - Normal CI packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites. Heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU.
 - Pull requests on the canonical repository reuse the changed-test resolver against the synthetic merged-tree diff. Precise changes run one targeted Node job; each selected test file gets its own process so stateful suite isolation remains intact. The planner combines sibling tests with import-graph dependents and falls back to the existing 14-job compact full-suite plan for workspace package, package/lockfile, shared harness, split-config, renamed, or deleted changes, public extension-contract changes, tests with special shard setup, partially resolved or empty targets, oversized path or target plans, and planner errors. Targeted plans always retain the full built-artifact boundary gate because its repository scanners cannot be derived from imports. `main` pushes, manual dispatches, and release gates retain the full matrix because canceled superseded `main` runs make a single-push diff insufficient as integration proof.
-- The full Node matrix admits the consistently slow serial tooling and auto-reply command shards first. This keeps the 28-job cap while preventing short alphabetical groups from pushing critical-path work into a later wave.
+- The full Node matrix admits the consistently slow serial tooling, auto-reply command shards, and broad core-fast cache writer first. This keeps the 28-job cap while preventing critical-path work and the next run's transform seed from slipping into a later wave.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
+- Linux Node shard jobs persist Vitest's experimental filesystem module cache. Trusted Blacksmith jobs use PR-scoped writable overlays seeded from the protected snapshot only when their transform-input generations match; GitHub-hosted and fork jobs use an `actions/cache` fallback with coarse restore prefixes. The planner marks the broad `core-unit-fast` graph as the single writer without coupling cache ownership to matrix order, while every other job restores a private read-only clone. Concurrent Vitest workers retain separate live directories. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations inside stable sticky keys. Only the writer scans and prunes the cache to 75% after it exceeds 2 GiB. A non-cancelling daily or default-branch repository-dispatch warmer prevents rapid `main` pushes from starving the protected seed, and closed PR cache archives are deleted.
+- Node shard and build-artifact jobs also restore Node's portable on-disk compile cache. Independent `test` and `build` namespaces prevent their writers from replacing each other's snapshots: the scheduled test warmer owns the protected test seed, while `build-artifacts` publishes the protected build seed only from trusted `main` pushes. PR jobs read protected snapshots without publishing feature-branch bytecode; fallback archives remain PR-scoped. This reuses V8 bytecode for Node-loaded orchestration, build tooling, and external dependencies across different checkout paths, including when only part of the source graph changes. Vitest child processes disable an inherited compile cache because coverage can be enabled inside dynamic configs and V8 coverage can lose source-position precision when scripts are deserialized from bytecode.
+- The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs.
+- Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mjs`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
 - Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
@@ -438,7 +442,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 ## Manual dispatches
 
-Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Release prep runs the same locale sync before the Code SHA is frozen, then verifies the strict zero-fallback state. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 PR max-lines checks derive the baseline from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; the max-lines baseline is compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
@@ -548,7 +552,7 @@ Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target (including Android), dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, dispatches `OpenClaw Performance` against the target SHA, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, Telegram, and gated Discord, WhatsApp, and Slack lanes (advisory maturity scorecard rendering is opt-in via `run_maturity_scorecard`). Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target (including Android), dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, dispatches `OpenClaw Performance` against the target SHA, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, Telegram, and gated Discord, WhatsApp, and Slack lanes (advisory maturity scorecard rendering is opt-in via `run_maturity_scorecard`). Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs. Its live agent proof sends visible progress, continues through randomized workspace reads and an exact artifact write, then sends completion.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -805,7 +809,7 @@ Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUI
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
 - `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-anthropic | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight, then runs multiple same-session OpenClaw agent turns against OpenAI. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk Blacksmith runner whenever stable or full release-path coverage requests it, even when the reusable workflow routes supported jobs to GitHub-hosted runners. Keeping the external image pull separate prevents the large image from competing with the shared package and plugin images in `plugins-runtime-services`; legacy aggregate plugin/runtime chunks still include OpenWebUI for compatible manual reruns. Bundled-channel update lanes retry once for transient npm network failures.
 
@@ -1546,6 +1550,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: manual token
   - H3: Alternative: env-based token
   - H3: JSON5 reference
   - H3: Account config keys
@@ -2800,6 +2805,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Run the Gateway
   - H3: Options
   - H2: Restart the Gateway
+  - H3: External supervisors
   - H3: Gateway profiling
   - H2: Query a running Gateway
   - H3: gateway health
@@ -4155,6 +4161,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Available tools
   - H2: Listing and reading sessions
+  - H2: Sessions versus conversations
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
   - H2: Session state changes
@@ -5090,7 +5097,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
-  - H2: Custom bind mounts
+  - H2: Multiple folders for one agent
+  - H3: Other bind behavior
   - H2: Images and setup
   - H2: setupCommand (one-time container setup)
   - H2: Tool policy and escape hatches
@@ -5222,6 +5230,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Secret scanning
   - H2: Reporting security issues
 
+## gateway/security/rate-limiting.md
+
+- Route: /gateway/security/rate-limiting
+- Headings:
+  - H2: Authentication attempts (pre-auth)
+  - H3: Browser-origin connections
+  - H3: Webhooks
+  - H2: Control-plane writes (post-auth backstop)
+  - H2: ACP session creation
+  - H2: Restart cooldown
+  - H2: Operational notes
+
 ## gateway/security/secure-file-operations.md
 
 - Route: /gateway/security/secure-file-operations
@@ -5349,6 +5369,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Env var substitution in config
   - H2: Secret refs vs ${ENV} strings
   - H2: Path-related env vars
+  - H2: Agent helper tool downloads
   - H2: Logging
   - H3: OPENCLAWHOME
   - H2: nvm users: webfetch TLS failures
@@ -6612,6 +6633,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/webchat
 - Headings:
+  - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired
   - H2: Security surface
@@ -7063,9 +7085,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/llama-cpp
 - Headings:
-  - H2: Configuration
-  - H2: Native Runtime
-  - H2: Runtime diagnostics
+  - H2: Local text inference
+  - H3: Use another GGUF model
+  - H2: Memory embedding configuration
+  - H2: Native runtime
+  - H2: Memory runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
@@ -7334,6 +7358,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/azure-speech
 - Headings:
   - H1: Azure Speech plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/baseten.md
+
+- Route: /plugins/reference/baseten
+- Headings:
+  - H1: Baseten plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -7794,6 +7827,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Llama Cpp plugin
   - H2: Distribution
   - H2: Surface
+  - H2: Default text model
   - H2: Related docs
 
 ## plugins/reference/llm-task.md
@@ -8518,6 +8552,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
+  - H3: Terminal tool outcomes
   - H2: Current limitations
   - H2: Related
 
@@ -8628,6 +8663,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Capability registration
   - H3: Tools and commands
   - H3: Infrastructure
+  - H4: Post-ack webhook work
   - H4: Requester-scoped MCP connections
   - H3: Host hooks for workflow plugins
   - H3: Gateway discovery registration
@@ -8884,7 +8920,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install plugin
   - H2: Getting started
   - H2: Non-interactive setup
-  - H2: Built-in catalog
+  - H2: Direct Arcee catalog
+  - H2: OpenRouter catalog
   - H2: Supported features
   - H2: Related
 
@@ -8895,6 +8932,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Configuration options
   - H2: Notes
+  - H2: Related
+
+## providers/baseten.md
+
+- Route: /providers/baseten
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Inkling
+  - H2: Bundled fallback catalog
+  - H2: Manual config
   - H2: Related
 
 ## providers/bedrock-mantle.md
@@ -9452,18 +9500,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config example
   - H2: Related
 
-## providers/qwen-oauth.md
-
-- Route: /providers/qwen-oauth
-- Headings:
-  - H2: Setup
-  - H2: Defaults
-  - H2: How this differs from Qwen
-  - H2: Models
-  - H2: Migration
-  - H2: Troubleshooting
-  - H2: Related
-
 ## providers/qwen.md
 
 - Route: /providers/qwen
@@ -9553,7 +9589,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Privacy modes
   - H2: Getting started
   - H2: Model selection
-  - H2: Built-in catalog (38 models)
+  - H2: Built-in catalog (30 models)
   - H2: Model discovery
   - H2: DeepSeek V4 replay behavior
   - H2: Streaming and tool support
@@ -9953,6 +9989,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Env toggles (one-off debugging)
   - H3: What to inspect
   - H2: Quick troubleshooting
+  - H2: Related
+
+## reference/pull-request-review-flow.md
+
+- Route: /reference/pull-request-review-flow
+- Headings:
+  - H2: Barnacle
+  - H2: ClawSweeper
+  - H2: Improve a PR during review
+  - H2: When automation stays quiet
+  - H2: Troubleshooting
+  - H2: Forking the automation
   - H2: Related
 
 ## reference/release-performance-sweep.md
@@ -11088,6 +11136,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: JSON-only LLM steps (llm-task)
   - H3: Important limitation: embedded Lobster vs openclaw.invoke
   - H2: Workflow files (.lobster)
+  - H3: Injected environment variables
   - H2: Tool parameters
   - H3: run
   - H3: resume
@@ -11292,7 +11341,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/show-widget
 - Headings:
+  - H2: How widgets work
   - H2: Use the tool
+  - H2: Interactive widgets
   - H2: Security and storage
   - H2: Related
 
@@ -14925,6 +14976,8 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent: running tasks and subagents with a stop control, a finished section, and View transcript links into each task's child session. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
+Select a task in the rail to inspect its bounded input prompt and latest output or error summary. Running work stays separate from finished work, and finished rows show whether the task completed or failed. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task line:
@@ -16162,20 +16215,33 @@ Use this when you want an OpenClaw agent to appear as a ClickClack bot user. Cli
 ## Quick setup
 
 In ClickClack, open **Workspace settings → Integrations → OpenClaw**, create a
-bot, and copy its token. Then configure the channel:
+bot using **Setup code (recommended)**, and copy the generated command:
 
 ```bash
-openclaw channels add clickclack --base-url https://clickclack.example.com --token ccb_... --workspace default
+openclaw channels add clickclack --code 'https://clickclack.example.com/#XXXX-XXXX-XXXX'
 ```
 
-`workspace` accepts a workspace id (`wsp_...`), slug, or display name.
-`channels add` verifies the server, token, and workspace after saving, then
-reports whether the running gateway picked up the new account. If OpenClaw is
-already running, ClickClack connects automatically and no second command is
-needed. Otherwise, start it with:
+The setup code is single-use and expires after 10 minutes. OpenClaw claims it,
+receives the newly minted bot token and workspace settings, saves the account,
+verifies the connection, and reports whether the running gateway picked it up.
+The setup code itself is not stored in OpenClaw config.
+
+Setup-code claims use HTTPS for public servers. Plain HTTP is also supported for
+local installations on loopback or private networks, including `localhost`,
+private IP addresses, and internal hostnames that resolve only to private
+addresses.
+
+If OpenClaw is already running, ClickClack connects automatically and no second
+command is needed. Otherwise, start it with:
 
 ```bash
 openclaw gateway
+```
+
+You can also pass the code separately from the server URL:
+
+```bash
+openclaw channels add clickclack --code XXXX-XXXX-XXXX --base-url https://clickclack.example.com
 ```
 
 For guided setup, run:
@@ -16187,6 +16253,18 @@ openclaw onboard
 Select ClickClack, then enter the server URL, bot token, and workspace when
 prompted. Guided setup checks the server, token, and workspace after saving; a
 failed check does not discard the configuration.
+
+### Alternative: manual token
+
+Choose **Manual token** in ClickClack when configuring a non-OpenClaw client or
+when you explicitly need to manage the token yourself:
+
+```bash
+openclaw channels add clickclack --base-url https://clickclack.example.com --token ccb_... --workspace default
+```
+
+`workspace` accepts a workspace id (`wsp_...`), slug, or display name.
+`--code` cannot be combined with `--token`, `--token-file`, or `--use-env`.
 
 ### Alternative: env-based token
 
@@ -16465,7 +16543,7 @@ title: "Discord Activities"
 
 Discord Activities let an agent post an interactive, self-contained HTML widget to the current Discord channel. The message includes an **Open widget** button; clicking it launches the widget inside Discord.
 
-The feature is off by default. OpenClaw registers the Activity HTTP routes, `discord_widget` agent tool, and launch-button handler only when `channels.discord.activities` is present and a client secret resolves.
+The feature is off by default. OpenClaw registers the Activity HTTP routes, the `show_widget` agent tool, and the launch-button handler only when `channels.discord.activities` is present and a client secret resolves. The deprecated `discord_widget` alias remains available for one release.
 
 ## Prerequisites
 
@@ -16540,7 +16618,7 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
   </Step>
 
   <Step title="Restart and test">
-    Restart the gateway. In a Discord conversation, ask the agent to show an interactive widget. The agent can call `discord_widget`; click **Open widget** on the posted message.
+    Restart the gateway. In a Discord conversation, ask the agent to show an interactive widget. The agent calls `show_widget`; click **Open widget** on the posted message.
   </Step>
 </Steps>
 
@@ -16579,7 +16657,7 @@ Add the user's stable Discord ID to `allowFrom` or `dm.allowFrom` on the same Di
 
 ### “Widget unavailable”
 
-Launch the button from the channel where the agent posted it. If Discord does not carry the button's custom ID into the Activity, OpenClaw falls back only when that channel has exactly one live widget; multiple widgets fail closed as unavailable.
+Launch the button from the channel where the agent posted it. OpenClaw tracks launches server-side when clicked, so a fresh launch record can resolve the exact widget even when Discord omits or mangles the button's custom ID. When neither the custom ID nor a launch record resolves, OpenClaw opens the most recently posted live widget in that channel. Older widgets remain addressable through buttons that preserve their custom ID.
 
 ### “You cannot launch Activities in this channel”
 
@@ -17838,7 +17916,7 @@ Notes:
 - `voice.tts` overrides `messages.tts` for `stt-tts` voice playback only; realtime modes use `voice.realtime.speakerVoice` instead. For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.providers.openai.speakerVoice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
-- Voice transcript turns and `/vc` commands derive Discord owner status from Discord entries in `commands.ownerAllowFrom`. When no Discord command owner is configured, OpenClaw falls back to the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`). Agent tool visibility follows the configured tool policy for the routed session.
+- Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
@@ -21515,9 +21593,12 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The Gateway answers LINE's webhook verification (GET) and acknowledges signed
-inbound events (POST) immediately after signature and payload validation; agent
-processing continues asynchronously.
+The Gateway answers LINE's webhook verification (GET). For signed inbound events
+(POST), it writes each event to the durable ingress queue before returning `200`;
+agent processing continues asynchronously. Failed delivery is retried from the
+queue, including after a Gateway restart, and poison events become failed queue
+records after bounded retries. If durable persistence fails, the request returns
+`500` instead of acknowledging an event that could be lost.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
@@ -21826,7 +21907,7 @@ For most users, the upgrade is in place:
 - the plugin stays `@openclaw/matrix`
 - the channel stays `matrix`
 - your config stays under `channels.matrix`
-- cached credentials stay under `~/.openclaw/credentials/matrix/`
+- cached credentials move into the shared `state/openclaw.sqlite` plugin state
 - runtime state stays under `~/.openclaw/matrix/`
 
 You do not need to rename config keys or reinstall the plugin under a new name.
@@ -21838,11 +21919,11 @@ into the root OpenClaw package.
 
 ## What the migration does automatically
 
-Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor), and as a fallback when the Matrix client starts and still finds file-based sidecar state next to its SQLite store.
+Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). File-based sidecars next to the dedicated Matrix store retain their client-start fallback, but credential-file import is Doctor-only; runtime reads only canonical SQLite credential state.
 
-Automatic migration covers:
+Doctor migration covers:
 
-- reusing your cached Matrix credentials
+- importing and verifying retired `~/.openclaw/credentials/matrix/credentials*.json` files before archiving them
 - keeping the same account selection and `channels.matrix` config
 - importing file-based sidecar state (`bot-storage.json` sync cache, `recovery-key.json`, `legacy-crypto-migration.json`, IndexedDB snapshots) into Matrix SQLite state; migrated files are archived with a `.migrated` suffix
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, user, and device when the access token changes later
@@ -22359,7 +22440,7 @@ The wizard converts a friendly name into a normalized account ID (`Ops Bot` -> `
 
 ### Cached credentials
 
-Matrix caches credentials under `~/.openclaw/credentials/matrix/`: `credentials.json` for the default account, `credentials-<account>.json` for named accounts. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes.
+Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
 
 ### Environment variables
 
@@ -22827,7 +22908,7 @@ Matrix inherits global defaults from `session.threadBindings` and supports per-c
 - `threadBindings.idleHours`
 - `threadBindings.maxAgeHours`
 - `threadBindings.spawnSessions`: gates both subagent and ACP thread spawns.
-- `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions`: narrower overrides for subagent-only or ACP-only spawns.
+- Deprecated `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions` keys are migrated to `spawnSessions` by `openclaw doctor --fix`.
 - `threadBindings.defaultSpawnContext`
 
 Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
@@ -23358,6 +23439,7 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is still honored, but `chatmode` is preferred. Per-channel `groups.<channelId>.requireMention` settings win over both.
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
+- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
 ## Threading and sessions
 
@@ -26228,7 +26310,7 @@ Reef is a guarded, end-to-end-encrypted side channel between OpenClaw agents own
 openclaw channels add
 ```
 
-The wizard asks for the relay URL (default `https://reefwire.ai`), your email, the setup session, a unique unlisted handle, an inbound friend-request policy (`code-only` is recommended), a local state directory for your keys, and the guard model configuration.
+The wizard asks for the relay URL (default `https://reefwire.ai`), your email, the setup session, a unique unlisted handle, an inbound friend-request policy (`code-only` is recommended), and the guard model configuration.
 
 3. Restart the Gateway and confirm the channel connects:
 
@@ -26273,7 +26355,6 @@ Reef lives under `channels.reef`:
       handle: "myclaw",
       email: "you@example.com",
       requestPolicy: "code-only", // code-only | friends-of-friends | open
-      stateDir: "~/.openclaw/data/reef",
       guard: {
         provider: "openai", // or "anthropic"
         pinnedModel: "gpt-5.6-terra",
@@ -26288,8 +26369,8 @@ Reef lives under `channels.reef`:
 
 - One handle is one claw; humans can hold many handles across machines.
 - `relayUrl` is an HTTP(S) origin such as `https://reefwire.ai`; paths, queries, URL credentials, and fragments are rejected because Reef uses an origin-wide `/v1` API.
-- Private Ed25519/X25519 keys are generated into `stateDir` and never leave the machine.
-- Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the shared `state/openclaw.sqlite` plugin state. `channels.reef` has no friendship allowlist to edit.
+- Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state and never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
+- Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
 - `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
 - `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error denies the message.
@@ -26353,6 +26434,10 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 ```
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
+
+The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review; concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
+
+When a peer's inbound guard rejects a delivered message, Reef verifies the signed receipt against durable peer, message-ID, and body-hash state, then reserves the notice in SQLite before dispatching it through the sender's normal peer session. Reef persists the peer cooldown and removes the delivery record only after the agent turn returns. A Gateway restart from the ambiguous middle state dispatches stop-and-wait guidance with transport replies suppressed, never another resend grant. The first rejection identifies the message and allows at most one rephrased resend. Another rejection within 15 minutes dispatches stop-and-wait guidance while suppressing its channel reply; that cooldown survives Gateway restarts. Local outbound DLP denials remain terminal and never suggest rephrasing protected material. Notices never expose the private guard rationale. `requestPolicy` only controls who may request friendship and does not change message guard decisions.
 
 ## Troubleshooting
 
@@ -28102,7 +28187,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - explicit app mention (`<@botId>`)
     - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
+    - replies to the bot's own Slack message (`implicitMentions.replyToBot`)
+    - follow-ups in threads where the bot participated (`implicitMentions.threadParticipation`)
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
@@ -28137,7 +28223,9 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
-- `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
+- `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
+- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
+- Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
 
 Reply threading controls:
 
@@ -28697,7 +28785,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - mode/auth: `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
-- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
+- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
@@ -30263,7 +30351,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Webhook mode validates request guards, the Telegram secret token, and the JSON body, then commits the update to its durable ingress queue before returning an empty `200`. Successful durable adoption includes `x-openclaw-delivery-accepted: durable`; health, routing, authentication, validation, and storage-error responses omit this header. Reverse proxies and host controllers can require the header to distinguish OpenClaw adoption from a generic empty `200` without inferring acceptance from response timing.
 
-    OpenClaw then processes the update asynchronously through the same per-chat/per-topic bot lanes used by long polling, so slow agent turns do not hold Telegram's delivery ACK.
+    After the durable write, OpenClaw claims and processes updates through the core channel-ingress drain (per-chat/per-topic lanes, complete at turn adoption, pre-adoption stall timeout). Slow agent turns do not hold Telegram's delivery ACK.
 
   </Accordion>
 
@@ -30648,6 +30736,10 @@ baseline, and override per channel nest:
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
 
+Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
+for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
+does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+
 ## Owner and approval system
 
 ```json5
@@ -30796,6 +30888,7 @@ Full configuration: [Configuration](/gateway/configuration)
 | `channels.tlon.autoAcceptGroupInvites`                 | Auto-accept group invites from `groupInviteAllowlist`.         |
 | `channels.tlon.groupInviteAllowlist`                   | Ships whose group invites are auto-accepted.                   |
 | `channels.tlon.autoDiscoverChannels`                   | Auto-discover joined group channels (default: `false`).        |
+| `channels.tlon.implicitMentions.threadParticipation`   | Let participated-thread follow-ups bypass mention gating.      |
 | `channels.tlon.groupChannels`                          | Manually pinned channel nests.                                 |
 | `channels.tlon.defaultAuthorizedShips`                 | Ships authorized for all channels (used when no rule matches). |
 | `channels.tlon.authorization.channelRules`             | Per-channel-nest auth mode + allowlist.                        |
@@ -34381,6 +34474,8 @@ SQLite databases under the state directory are compacted with `VACUUM INTO` so d
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
+Installer-managed and rebuildable runtime roots under the state directory are also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, and `tools/`. These contain managed checkouts, package trees, and downloaded runtimes rather than authoritative user state; reinstall or update the corresponding runtime or plugin after restore. An explicitly configured config file, credentials directory, or workspace inside one of these roots remains included.
+
 ## Invalid config behavior
 
 `openclaw backup` bypasses the normal config preflight so it can still help during recovery. Workspace discovery depends on a valid config, so `openclaw backup create` fails fast when the config file exists but is invalid and workspace backup is still enabled.
@@ -34391,7 +34486,7 @@ For a partial backup in that situation, rerun with `--no-include-workspace`: it 
 
 ## Size and performance
 
-OpenClaw does not enforce a built-in maximum backup size or per-file size limit. Practical limits come from:
+OpenClaw does not enforce a built-in maximum backup size or per-file size limit. An archive write that produces no data for five minutes fails and removes its partial temporary file instead of hanging indefinitely. Practical limits otherwise come from:
 
 - Available space for the temporary archive write plus the final archive
 - Time to walk large workspace trees and compress them into a `.tar.gz`
@@ -36502,6 +36597,8 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
+When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret owners unavailable** warning with every owner and affected config path.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)
@@ -36863,6 +36960,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
+- If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` preserves the original as `openclaw.json.clobbered.<timestamp>`, leaves the current file unchanged, and exits with an error instead of writing a partial replacement.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` to replace the launcher.
@@ -37307,6 +37405,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
+  - Integrating an external Gateway process supervisor
 title: "Gateway"
 sidebarTitle: "Gateway"
 ---
@@ -37426,6 +37525,28 @@ openclaw gateway restart --wait 30s
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
+
+### External supervisors
+
+Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
+
+- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler.
+- Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
+- OpenClaw self-update is refused so the supervisor can stop the Gateway, replace and finalize the runtime, and restart it safely.
+- A fresh-process restart writes a bounded SQLite handoff before clean exit. If persistence fails, the Gateway falls back to an in-process restart instead of exiting without a consumable handoff.
+
+`OPENCLAW_SERVICE_REPAIR_POLICY=external` remains a separate Doctor repair policy. It does not declare runtime ownership; supervisors that need both behaviors should set both variables.
+
+External supervisors can negotiate and consume restart handoffs through the hidden machine contract:
+
+```bash
+openclaw gateway restart-handoff capabilities --json
+openclaw gateway restart-handoff consume --expected-pid <pid> --json
+```
+
+Protocol version `1` supports the `consume` operation. Consumption validates the expected PID and bounded handoff fields inside one immediate SQLite transaction. An accepted handoff is deleted before success is returned, so concurrent or replayed consumers cannot both accept it. A PID mismatch is retained for the matching owner; missing, expired, and invalid rows do not authorize a restart.
+
+Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should probe `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
 
 ### Gateway profiling
 
@@ -38670,7 +38791,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image-preview \
+    --model google/gemini-3.1-flash-image \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json
@@ -40419,6 +40540,9 @@ The bundled Hermes provider follows `$HERMES_HOME` and the active profile, then 
 - MCP server definitions from `mcp_servers` or `mcp.servers`. Exact OpenClaw mappings cover default Streamable HTTP routing, OAuth scope, boolean TLS verification, separate client certificate/key paths, and Hermes native/resource/prompt tool policy. Unsupported Hermes-only runtime or credential fields are reported for manual review.
 - `SOUL.md` and `AGENTS.md` into the OpenClaw agent workspace.
 - `memories/MEMORY.md` and `memories/USER.md` appended to workspace memory files.
+  Memory-only surfaces (the onboarding memory page and the Control UI Memory
+  import page) instead copy these files under `memory/imports/hermes/` for
+  indexed recall without touching existing workspace memory.
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file anywhere under `skills/`; nested skills are flattened into the workspace skill directory.
 - Per-skill config values from `skills.config`.
@@ -41108,6 +41232,16 @@ In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
 workspace through their normal setup flow.
+
+After inference passes, onboarding checks for memories from supported local AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When it finds any, one page offers to copy them into the agent workspace
+under `memory/imports/` for indexed recall. Nothing is imported without
+confirmation, previously imported files are skipped, and you can always import
+later from the Control UI [Memory import page](/web/control-ui), which offers
+the same memory-only scope. (A full [`openclaw migrate`](/cli/migrate) run is
+broader: it can also import config, skills, and credentials.) The classic
+wizard shows the same page after it prepares the workspace.
 
 After inference passes, guided onboarding immediately starts OpenClaw with
 the verified model. OpenClaw can then configure the workspace, Gateway,
@@ -44193,17 +44327,18 @@ openclaw reset --scope full --yes --non-interactive
 
 ## Scopes
 
-| Scope                   | Removes                                                                                               | Stops gateway first |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- | ------------------- |
-| `config`                | config file only                                                                                      | no                  |
-| `config+creds+sessions` | config file, OAuth/credentials dir, per-agent session directories                                     | yes                 |
-| `full`                  | state dir (including config/creds if nested inside it) plus workspace dirs and workspace attestations | yes                 |
+| Scope                   | Removes                                                                     | Stops gateway first |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------- |
+| `config`                | config file only                                                            | no                  |
+| `config+creds+sessions` | config file, OAuth/credentials dir, per-agent session directories           | yes                 |
+| `full`                  | state dir (including the shared SQLite database) plus workspace directories | yes                 |
 
 `config+creds+sessions` and `full` stop a running managed gateway service before deleting state.
 
 ## Notes
 
 - Run `openclaw backup create` first for a restorable snapshot before removing local state.
+- Workspace setup state and attestations are rows in the shared SQLite database, so `full` removes them with the state directory; there are no current attestation sidecar files to remove separately.
 - Without `--scope`, `openclaw reset` prompts interactively for the scope to remove.
 - `--non-interactive` is only valid when both `--scope` and `--yes` are set.
 - `config+creds+sessions` and `full` print `Next: openclaw onboard --install-daemon` when done.
@@ -44963,8 +45098,12 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass; the selected candidate must answer a real completion before its
-provider and model configuration is saved.
+automatic pass. Detected local runtimes are auto-tested after CLI and API-key
+candidates; when several local models are available, OpenClaw prefers the
+strongest tool-calling instruct family. The selected candidate must answer a
+real completion before its provider and model configuration is saved.
+Installed Gemini, Antigravity, Pi, and OpenCode CLIs are also reported when
+they cannot serve as the reusable inference route for guided setup.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -45285,6 +45424,7 @@ and `openclaw memory status --deep`.
 
 ## Secrets
 
+- When the running Gateway isolated a known SecretRef owner during cold startup, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, unavailable state, config paths, and redacted reason.
 - Read-only status surfaces (`status`, `status --json`, `status --all`)
   resolve supported SecretRefs for their targeted config paths when
   possible.
@@ -48361,6 +48501,7 @@ If a bootstrap file is missing, OpenClaw injects a "missing file" marker into th
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
+- `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
@@ -48369,6 +48510,12 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 - `~/.openclaw/skills/` (managed skills)
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
+
+Older OpenClaw releases wrote `openclaw-workspace-state.json`,
+`.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
+runtime uses only the shared SQLite database for that state. If Doctor reports
+one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
+state and deletes a source only after verifying the database rows.
 
 ## Git backup (recommended, private)
 
@@ -48539,7 +48686,16 @@ Blank files are skipped. Large files are trimmed and truncated with a marker so 
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
-After a workspace has been observed, OpenClaw also keeps a state-dir attestation marker for the workspace path. If a recently attested workspace disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`; restore the workspace or use a full onboard reset so the workspace and marker are cleared together.
+After a workspace has been observed, OpenClaw stores its setup state and
+attestation in the shared SQLite database at
+`~/.openclaw/state/openclaw.sqlite`. If a recently attested workspace
+disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`;
+restore the workspace or use a full onboard reset so the workspace and its
+database state are cleared together.
+
+Older releases used workspace JSON and `.attested` sidecar files. Runtime does
+not read those files. Run `openclaw doctor --fix` to validate them, import their
+state into SQLite, and remove each source after the imported rows are verified.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
@@ -50729,7 +50885,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite destination files or follow symlinked directories, and it preserves copied file modes.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -50758,7 +50914,7 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, and pins it at `refs/openclaw/snapshots/<id>`. Gitignored files are excluded from the repository object database; files selected by `.worktreeinclude` are copied again during restore. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
 
 OpenClaw applies these cleanup rules:
 
@@ -51994,6 +52150,17 @@ present.
   `5m`). Refreshes run through QMD subprocesses, not an in-process filesystem
   crawl. Semantic search modes also run `qmd embed`
   (`memory.qmd.update.embedInterval`, default `60m`).
+- QMD continues to own its `index.sqlite`, YAML collection config, and model
+  downloads under the per-agent QMD home; these are external-tool artifacts,
+  not OpenClaw state tables. OpenClaw-owned coordination lives only in SQLite:
+  one shared lease limits embedding work across agents, while one lease in each
+  agent database serializes that agent's collection, update, and embed writes.
+  Runtime no longer creates QMD file-lock sidecars. `openclaw doctor --fix`
+  removes retired sidecars only after proving their old process owner is stale.
+  Upgrades are a clean cutover: stop and restart every OpenClaw process that
+  shares the state directory before using the new version. Mixed old/new QMD
+  writers are unsupported; runtime intentionally does not dual-lock the retired
+  sidecars.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - QMD's own scanner ignores hidden paths and common dependency/build
@@ -53234,18 +53401,18 @@ OpenClaw handles failures in two stages:
   <Step title="Advance on failover-worthy errors">
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
   </Step>
-  <Step title="Persist fallback override">
-    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use. The persisted model override is marked `modelOverrideSource: "auto"`.
+  <Step title="Use fallback for the current turn">
+    Run the winning fallback candidate without changing the session's selected provider/model.
   </Step>
-  <Step title="Roll back narrowly on failure">
-    If the fallback candidate fails, roll back only the fallback-owned session override fields when they still match that failed candidate.
+  <Step title="Retry safe pure overload exhaustion">
+    If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
   </Step>
   <Step title="Throw FallbackSummaryError if exhausted">
     If every candidate fails, throw a `FallbackSummaryError` with per-attempt detail and the soonest cooldown expiry when one is known.
   </Step>
 </Steps>
 
-This is intentionally narrower than "save and restore the whole session." The reply runner only persists the model-selection fields it owns for fallback: `providerOverride`, `modelOverride`, `modelOverrideSource`, `authProfileOverride`, `authProfileOverrideSource`, `authProfileOverrideCompactionCount`. That prevents a failed fallback retry from overwriting newer unrelated session mutations, such as a manual `/model` change or a session rotation update that happened while the attempt was running.
+Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered; it does not persist the fallback as the next turn's model selection.
 
 ## Selection source policy
 
@@ -53253,12 +53420,12 @@ The selection source controls whether the fallback chain is allowed:
 
 - **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
 - **Agent primary**: `agents.list[].model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
-- **Auto fallback override**: a runtime fallback writes `providerOverride`, `modelOverride`, `modelOverrideSource: "auto"`, and the selected origin model before retrying. This override keeps walking the configured fallback chain without probing the primary on every message, but OpenClaw probes the configured origin every 5 minutes (not configurable) and clears the override once it recovers. `/new`, `/reset`, and `sessions.reset` also clear auto-sourced overrides. Heartbeat runs without an explicit `heartbeat.model` clear direct auto overrides when their origin no longer matches the current configured default.
+- **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes previously stored `modelOverrideSource: "auto"` entries, probes their configured origin every 5 minutes, and clears them once the origin recovers. `/new`, `/reset`, and `sessions.reset` also clear those entries.
 - **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` write `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
-OpenClaw remembers recent primary probes per session and primary model so a failing primary is not retried on every turn. It sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
+OpenClaw sends a visible notice when a turn moves onto fallback and another notice when a later turn succeeds on the selected primary. Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
 ## Auth failure skip cache
 
@@ -53288,7 +53455,7 @@ When a later probe succeeds and the session returns to the selected primary, Ope
 ↪️ Model Fallback cleared: <primary> (was <fallback>)
 ```
 
-These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but sticky fallback turns do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech and commitment extraction.
+These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech and commitment extraction.
 
 ## Auth storage (keys + OAuth)
 
@@ -53468,6 +53635,8 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits (see the defaults table above).
 
+If the entire candidate chain is exhausted only by overload failures, the reply runner retries the chain up to 10 times in the same turn. Full-turn retry is allowed only before tool execution or assistant output starts, avoiding duplicate mutations or messages if an overload arrives after observable work. Backoff starts at 2.5 seconds and doubles to a 30-second cap. Once the turn has been waiting for 30 seconds, OpenClaw sends one transient status notice: `The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.` The retry and any fallback winner remain turn-local; ordinary transient server errors retain their separate one-retry policy.
+
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
 ### Candidate chain rules
@@ -53525,42 +53694,21 @@ When every auth profile for a provider is already in cooldown, OpenClaw does not
 
 ## Session overrides and live model switching
 
-Session model changes are shared state. The active runner, `/model` command, compaction/session updates, and live-session reconciliation all read or write parts of the same session entry.
+Session model changes are shared state. The active runner, `/model` command, compaction/session updates, and live-session reconciliation all read or write parts of the same session entry. Fallback execution does not write model-selection fields, so it cannot replace a newer manual selection while retrying.
 
-That means fallback retries have to coordinate with live model switching:
+Live model switching follows these rules:
 
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
-- Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
-- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. OpenClaw periodically probes the configured origin again and clears the auto override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
-- User replies announce fallback transitions and fallback-cleared recovery once per state change. Sticky fallback turns do not repeat the notice.
+- Runtime fallback candidates remain turn-local. The next turn starts from the current selected model, including a manual selection that arrived during the previous run.
+- Previously stored auto fallback overrides remain supported: OpenClaw periodically probes their configured origin and clears the override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
+- User replies announce fallback transitions and fallback-cleared recovery once per state change. Repeated turns with the same selected/active pair do not repeat the notice.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
-- If the fallback attempt fails, the runner rolls back only the override fields it wrote, and only if they still match that failed candidate.
 
-This prevents the classic race:
-
-<Steps>
-  <Step title="Primary fails">
-    The selected primary model fails.
-  </Step>
-  <Step title="Fallback chosen in memory">
-    Fallback candidate is chosen in memory.
-  </Step>
-  <Step title="Session store still says old primary">
-    Session store still reflects the old primary.
-  </Step>
-  <Step title="Live reconciliation reads stale state">
-    Live-session reconciliation reads the stale session state.
-  </Step>
-  <Step title="Retry snapped back">
-    The retry gets snapped back to the old model before the fallback attempt starts.
-  </Step>
-</Steps>
-
-The persisted fallback override closes that window, and the narrow rollback keeps newer manual or runtime session changes intact.
+The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
 
 ## Observability and failure summaries
 
@@ -53901,37 +54049,36 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 ### Other bundled provider plugins
 
-| Provider                                | Id                               | Auth env                                             | Example model                                              |
-| --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| Arcee                                   | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`            | `arcee/trinity-large-thinking`                             |
-| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                            |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                   | `cerebras/zai-glm-4.7`                                     |
-| Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`             | `chutes/zai-org/GLM-4.7-TEE`                               |
-| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                                 | `clawrouter/anthropic/claude-sonnet-4-6`                   |
-| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-plus-05-2026`                            |
-| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                  | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
-| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                   | `deepseek/deepseek-v4-flash`                               |
-| Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                                | `featherless/Qwen/Qwen3-32B`                               |
-| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                          |
-| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                        | `gmi/google/gemini-3.1-flash-lite`                         |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                       | `groq/llama-3.3-70b-versatile`                             |
-| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                      |
-| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`            | `minimax/MiniMax-M3`                                       |
-| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                    | `mistral/mistral-large-latest`                             |
-| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                   | `moonshot/kimi-k2.6`                                       |
-| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                     | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
-| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                     | `novita/deepseek/deepseek-v3-0324`                         |
-| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                     | `ollama-cloud/kimi-k2.6`                                   |
-| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`             | `openrouter/auto`                                          |
-| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                    | `qianfan/deepseek-v3.2`                                    |
-| [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                       | `qwen-oauth/qwen3.5-plus`                                  |
-| Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                                   | `tencent-tokenhub/hy3-preview`                             |
-| Together                                | `together`                       | `TOGETHER_API_KEY`                                   | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
-| Venice                                  | `venice`                         | `VENICE_API_KEY`                                     | -                                                          |
-| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                 | `vercel-ai-gateway/anthropic/claude-opus-4.6`              |
-| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                             | `volcengine-plan/ark-code-latest`                          |
-| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | `xai/grok-4.3`                                             |
-| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`       | `xiaomi/mimo-v2-flash` / `xiaomi-token-plan/mimo-v2.5-pro` |
+| Provider                                | Id                               | Auth env                                             | Example model                                          |
+| --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| Arcee                                   | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`            | `arcee/trinity-large-thinking`                         |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                        |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                   | `cerebras/zai-glm-4.7`                                 |
+| Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`             | `chutes/zai-org/GLM-5-TEE`                             |
+| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                                 | `clawrouter/anthropic/claude-sonnet-4-6`               |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-plus-05-2026`                        |
+| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                  | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`              |
+| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                   | `deepseek/deepseek-v4-flash`                           |
+| Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                                | `featherless/Qwen/Qwen3-32B`                           |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                      |
+| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                        | `gmi/google/gemini-3.1-flash-lite`                     |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                       | `groq/llama-3.3-70b-versatile`                         |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                  |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`            | `minimax/MiniMax-M3`                                   |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                    | `mistral/mistral-large-latest`                         |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                   | `moonshot/kimi-k2.6`                                   |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                     | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`             |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                     | `novita/deepseek/deepseek-v3-0324`                     |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                     | `ollama-cloud/kimi-k2.6`                               |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`             | `openrouter/auto`                                      |
+| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                    | `qianfan/deepseek-v3.2`                                |
+| Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                                   | `tencent-tokenhub/hy3-preview`                         |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                                   | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`     |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                                     | -                                                      |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                 | `vercel-ai-gateway/anthropic/claude-opus-4.6`          |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                             | `volcengine-plan/ark-code-latest`                      |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | `xai/grok-4.3`                                         |
+| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`       | `xiaomi/mimo-v2.5` / `xiaomi-token-plan/mimo-v2.5-pro` |
 
 #### Quirks worth knowing
 
@@ -53940,13 +54087,13 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     Applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
   </Accordion>
   <Accordion title="Kilo Gateway">
-    Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
+    Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo-auto/balanced` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
   </Accordion>
   <Accordion title="MiniMax">
     API-key onboarding writes explicit M3 and M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
   </Accordion>
   <Accordion title="NVIDIA">
-    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
+    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
     Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config, and Grok `web_search` reuses the same auth profile before API-key fallback. Grok 4.5 is selectable for chat, coding, and agentic work where available; `grok-4.3` remains the regional-safe bundled default. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
@@ -53969,19 +54116,18 @@ Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.6`
+- Example model: `moonshot/kimi-k3`
 - CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
-Kimi K2 model IDs:
+Kimi model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
 - `moonshot/kimi-k2.6`
+- `moonshot/kimi-k3`
 - `moonshot/kimi-k2.7-code`
+- `moonshot/kimi-k2.7-code-highspeed`
 - `moonshot/kimi-k2.5`
-- `moonshot/kimi-k2-thinking`
-- `moonshot/kimi-k2-thinking-turbo`
-- `moonshot/kimi-k2-turbo`
 
 [//]: # "moonshot-kimi-k2-model-refs:end"
 
@@ -54012,7 +54158,9 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi/kimi-for-coding`
+- Kimi K3: `kimi/k3` (256K) or `kimi/k3[1m]` (1M plan)
+- Kimi Code: `kimi/kimi-for-coding`
+- Kimi Code HighSpeed: `kimi/kimi-for-coding-highspeed`
 
 ```json5
 {
@@ -54058,9 +54206,6 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
   <Tab title="Coding models (volcengine-plan)">
     - `volcengine-plan/ark-code-latest`
     - `volcengine-plan/doubao-seed-code`
-    - `volcengine-plan/kimi-k2.5`
-    - `volcengine-plan/kimi-k2-thinking`
-    - `volcengine-plan/glm-4.7`
 
   </Tab>
 </Tabs>
@@ -54095,9 +54240,7 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
   </Tab>
   <Tab title="Coding models (byteplus-plan)">
     - `byteplus-plan/ark-code-latest`
-    - `byteplus-plan/doubao-seed-code`
     - `byteplus-plan/kimi-k2.5`
-    - `byteplus-plan/kimi-k2-thinking`
     - `byteplus-plan/glm-4.7`
 
   </Tab>
@@ -54109,13 +54252,13 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
-- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.5`
+- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M3`
 - CLI: `openclaw onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" } },
+    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" } },
   },
   models: {
     mode: "merge",
@@ -54124,7 +54267,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
         baseUrl: "https://api.synthetic.new/anthropic",
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.5", name: "MiniMax M2.5" }],
+        models: [{ id: "hf:MiniMaxAI/MiniMax-M3", name: "MiniMax M3" }],
       },
     },
   },
@@ -58177,17 +58320,20 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 
 ## Available tools
 
-| Tool               | What it does                                                                |
-| ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, label, agent, archive, preview)  |
-| `sessions_history` | Read the transcript of a specific session                                   |
-| `sessions_send`    | Send a message to another session and optionally wait                       |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
-| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List spawned sub-agent status for this session                              |
-| `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
+| Tool                 | What it does                                                                |
+| -------------------- | --------------------------------------------------------------------------- |
+| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)  |
+| `sessions_history`   | Read the transcript of a specific session                                   |
+| `sessions_send`      | Run another session on the same Gateway and optionally wait                 |
+| `conversations_list` | List stable external conversation addresses                                 |
+| `conversations_send` | Send to one exact external conversation without running a local session     |
+| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply   |
+| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                     |
+| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results               |
+| `subagents`          | List spawned sub-agent status for this session                              |
+| `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
 
-These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set, including `sessions_spawn`, `sessions_yield`, and `subagents`. `tools.profile: "messaging"` includes cross-session messaging tools (`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but does not include sub-agent spawning. To keep a messaging profile and still allow native delegation, add:
+These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set, including `sessions_spawn`, `sessions_yield`, and `subagents`. `tools.profile: "messaging"` includes cross-session and external-conversation tools (`sessions_list`, `sessions_history`, `sessions_send`, `conversations_list`, `conversations_send`, `conversations_turn`, `session_status`) but does not include sub-agent spawning. To keep a messaging profile and still allow native delegation, add:
 
 ```json5
 {
@@ -58224,9 +58370,17 @@ Both tools accept either a **session key** (like `"main"`) or a **session ID** f
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
+## Sessions versus conversations
+
+A **session** is local model context. A **conversation** is an exact external address such as one peer, channel, or thread. The two are linked, but they are not interchangeable: direct messages can share one `main` session while retaining separate conversation addresses.
+
+`conversations_list` returns opaque `conversationRef` values for the active agent. Conversation discovery and delivery are owner-only because they use the Gateway's channel credentials. Use `conversations_send` for fire-and-forget delivery. Use `conversations_turn` when the remote reply belongs to the current model turn: the Gateway reserves one transport message ID, persists a delivery operation and queue intent before transport I/O, and returns the correlated reply from the tool instead of starting a second local agent turn. Delivery operations live outside model transcripts; a captured reply is retained only as a side artifact while the tool result owns model context. If the Gateway restarts after queueing, delivery can recover but a later reply follows ordinary inbound dispatch because the process-local waiter is gone. Unsolicited inbound messages always continue through the normal channel dispatch path.
+
+Use the shared `message` tool when you already have an explicit raw channel target or need a channel-specific action. Conversation references are scoped to the active agent and should be obtained through `conversations_list`, not constructed from session keys.
+
 ## Sending cross-session messages
 
-`sessions_send` delivers a message to another session and optionally waits for the response:
+`sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
@@ -60102,14 +60256,17 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 
 ## Known flags
 
-| Flag             | Enables                                                   |
-| ---------------- | --------------------------------------------------------- |
-| `telegram.http`  | Telegram Bot API HTTP error logging                       |
-| `brave.http`     | Brave Search request/response/cache logging               |
-| `profiler`       | Reply-stage profiler and Codex app-server profiler (both) |
-| `reply.profiler` | Reply-stage profiler only                                 |
-| `codex.profiler` | Codex app-server profiler only                            |
-| `timeline`       | Structured JSONL timeline artifact (see below)            |
+| Flag                  | Enables                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `telegram.http`       | Telegram Bot API HTTP error logging                       |
+| `brave.http`          | Brave Search request/response/cache logging               |
+| `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
+| `reply.profiler`      | Reply-stage profiler only                                 |
+| `codex.profiler`      | Codex app-server profiler only                            |
+| `health`              | Gateway health probe/account/binding debug details        |
+| `ingress.timing`      | Session load, model selection, and model catalog timings  |
+| `plugin.load-profile` | Synchronous plugin module-load timings                    |
+| `timeline`            | Structured JSONL timeline artifact (see below)            |
 
 ## Enable via config
 
@@ -62054,7 +62211,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       imageGenerationModel: {
         primary: "openai/gpt-image-2",
-        fallbacks: ["google/gemini-3.1-flash-image-preview"],
+        fallbacks: ["google/gemini-3.1-flash-image"],
       },
       videoGenerationModel: {
         primary: "qwen/wan2.6-t2v",
@@ -62091,7 +62248,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
-  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, `openai/gpt-image-2` for OpenAI Images, or `openai/gpt-image-1.5` for transparent-background OpenAI PNG/WebP output.
+  - Typical values: `google/gemini-3.1-flash-image` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, `openai/gpt-image-2` for OpenAI Images, or `openai/gpt-image-1.5` for transparent-background OpenAI PNG/WebP output.
   - If you select a provider/model directly, configure matching provider auth too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` or OpenAI Codex OAuth for `openai/gpt-image-2` / `openai/gpt-image-1.5`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
 - `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -63338,7 +63495,7 @@ DM-specific keys only match in direct-message conversations; they do not affect 
 
 ### Channel defaults and heartbeat
 
-Use `channels.defaults` for shared group-policy and heartbeat behavior across providers:
+Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers:
 
 ```json5
 {
@@ -63346,6 +63503,11 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
     defaults: {
       groupPolicy: "allowlist", // open | allowlist | disabled
       contextVisibility: "all", // all | allowlist | allowlist_quote
+      implicitMentions: {
+        replyToBot: true,
+        quotedBot: true,
+        threadParticipation: true,
+      },
       heartbeat: {
         showOk: false,
         showAlerts: true,
@@ -63358,6 +63520,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
 
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
+- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. These settings do not change outbound reply/thread modes or authorized command handling.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output (default `false`).
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output (default `true`).
@@ -65017,8 +65180,8 @@ Interactive custom-provider onboarding infers image input for known vision-model
       env: { SYNTHETIC_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-          models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+          models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
         },
       },
       models: {
@@ -65030,12 +65193,12 @@ Interactive custom-provider onboarding infers image input for known vision-model
             api: "anthropic-messages",
             models: [
               {
-                id: "hf:MiniMaxAI/MiniMax-M2.5",
-                name: "MiniMax M2.5",
+                id: "hf:MiniMaxAI/MiniMax-M3",
+                name: "MiniMax M3",
                 reasoning: true,
-                input: ["text"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 192000,
+                contextWindow: 262144,
                 maxTokens: 65536,
               },
             ],
@@ -68074,7 +68237,8 @@ subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
-rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+rate-limited to 30 requests per 60 seconds, per method, per
+`deviceId+clientIp`; see [Rate limiting](/gateway/security/rate-limiting). Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
 `update.status` is read-only but admin-scoped because the restart sentinel can
 include update step summaries and command output tails.
@@ -75067,6 +75231,8 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
 - Workspace access (`workspaceAccess`) is independent of bind modes.
 
+For a per-agent configuration with several host folders, access modes, and the external-source safety opt-in, see [Multiple folders for one agent](/gateway/sandboxing#multiple-folders-for-one-agent).
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
@@ -75350,11 +75516,70 @@ Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 </Note>
 
-## Custom bind mounts
+## Multiple folders for one agent
 
-`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container. Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
+Use Docker bind mounts when one sandboxed agent needs more than its primary workspace. Each entry maps a host folder to a container path with an explicit access mode:
 
-Global and per-agent binds are merged (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
+```text
+host-directory:container-directory:ro
+host-directory:container-directory:rw
+```
+
+- `ro` makes the mounted folder read-only inside the sandbox.
+- `rw` lets sandboxed tools and processes change the host folder.
+- The container path is the path the agent uses. Host paths are not exposed automatically.
+
+This example gives the `research` agent a writable primary workspace, read-only reference material at `/reference`, and a separate writable output folder at `/drafts`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        scope: "agent",
+      },
+    },
+    list: [
+      {
+        id: "research",
+        workspace: "/srv/openclaw/research-workspace",
+        sandbox: {
+          workspaceAccess: "rw",
+          docker: {
+            binds: ["/srv/shared/reference:/reference:ro", "/srv/shared/drafts:/drafts:rw"],
+            // Required because these sources are outside the agent workspace.
+            dangerouslyAllowExternalBindSources: true,
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+`workspaceAccess` and bind modes are independent:
+
+| Setting                          | Controls                                                                    |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `workspaceAccess: "none"`        | Uses an isolated sandbox workspace; does not expose the agent workspace.    |
+| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                           |
+| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                      |
+| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path. |
+
+Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
+
+Bind mounts are the supported multi-folder boundary because Docker constructs the container's filesystem view with mount isolation, and the `ro`/`rw` mode applies to every process in the sandbox. That boundary covers `exec`, filesystem tools, child processes, and libraries without duplicating path-authorization checks across each OpenClaw code path. A host-side path allowlist cannot provide the same complete boundary when an allowed shell or dependency can access files directly.
+
+The opt-in `dangerouslyAllowExternalBindSources` only permits sources outside the workspace roots. It does not disable OpenClaw's blocked system, credential, Docker socket, symlink-parent, or reserved-target checks. Prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:
+
+```bash
+openclaw sandbox recreate --agent research
+```
+
+### Other bind behavior
+
+`agents.defaults.sandbox.docker.binds` configures global mounts. The format is the same `host:container:mode` form (for example, `"/home/user/source:/source:rw"`).
 
 `agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only. When set (including `[]`), it replaces `docker.binds` for the browser container; when omitted, the browser container falls back to `docker.binds`.
 
@@ -75744,12 +75969,16 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
-- Startup fails fast when an effectively active SecretRef cannot be resolved.
+- Cold Gateway startup isolates unavailable SecretRefs to a known non-Gateway owner when that owner supports isolation. Today this covers model providers and the built-in TTS capability. The Gateway starts, records that owner as configured-unavailable, and emits a redacted `SECRETS_OWNER_UNAVAILABLE` warning. Gateway ingress auth, structurally invalid refs or resolved values, and refs whose runtime owner is not yet mapped still fail startup.
 - Reload is an atomic swap: full success, or keep the last-known-good snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 
 This keeps secret-provider outages off hot request paths.
+
+<Note>
+Target policy for the SecretRef ownership-isolation migration: failures isolate to the smallest known owner. Only unavailable Gateway ingress protection, structurally invalid config, or unknown ownership will block startup; other affected capabilities, accounts, or routes will become configured-unavailable with typed redacted diagnostics and no implicit credential fallback. Reload will retain last-known-good only for an unchanged ref and provider, while a changed unresolved ref will make that owner cold. Doctor and status will list every degraded owner. This migration is not fully implemented; the current activation rules on this page remain in effect.
+</Note>
 
 ## Egress-time injection (sentinels)
 
@@ -76317,6 +76546,8 @@ Activation contract:
 
 - Success swaps the snapshot atomically.
 - Startup failure aborts gateway startup.
+- During cold startup, a resolution failure for a mapped non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
+- Reload, restart-check, and write preflight remain strict. They keep the active last-known-good snapshot rather than publishing new degraded owners.
 - Runtime reload failure keeps the last-known-good snapshot.
 - Write-RPC preflight failure rejects the submitted config; both disk config and the active runtime snapshot stay unchanged.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
@@ -79500,6 +79731,179 @@ Found a vulnerability in OpenClaw? Report responsibly:
 
 
 
+# Section: gateway/security/rate-limiting.md
+
+---
+summary: "Reference for every Gateway rate limit: pre-auth lockouts, browser and webhook throttles, the control-plane write backstop, ACP session caps, and restart cooldown"
+read_when:
+  - A client sees `rate limit exceeded for <method>`, `AUTH_RATE_LIMITED`, or lockout errors
+  - You want to tune `gateway.auth.rateLimit`
+  - You are reasoning about brute-force protection on an exposed Gateway
+  - You need to know which Gateway surfaces are throttled, at what limits
+title: "Rate limiting"
+---
+
+The Gateway enforces several independent rate limits. They protect different
+boundaries, key on different identities, and fail with different error shapes.
+This page is the reference for all of them.
+
+At a glance:
+
+| Surface                             | Limit (default)                  | Keyed by                         | Configurable             |
+| ----------------------------------- | -------------------------------- | -------------------------------- | ------------------------ |
+| Failed auth (token/password/device) | 10 failures / 60s, 5 min lockout | IP + credential scope            | `gateway.auth.rateLimit` |
+| Browser-origin WS auth failures     | same, loopback **not** exempt    | IP, or page origin from loopback | `gateway.auth.rateLimit` |
+| Webhook (`/hooks`) auth failures    | 20 failures / 60s, 60s lockout   | IP                               | no                       |
+| Control-plane write RPCs            | 30 requests / 60s per method     | method + device + IP             | no                       |
+| ACP session creation                | 120 sessions / 10s               | translator instance              | internal                 |
+| Gateway restart cycles              | 30s cooldown between restarts    | process                          | no                       |
+
+## Authentication attempts (pre-auth)
+
+Failed authentication attempts are throttled per client IP, before any
+request handling. This is the brute-force guard for exposed Gateways.
+
+- Only _wrong_ credentials count. Missing credentials (a client that never
+  sent a token) and successful authentications do not consume budget; a
+  successful auth resets the counter for that IP.
+- Defaults: 10 failures per 60 seconds, then a 5 minute lockout for that IP.
+- Loopback (`127.0.0.1` / `::1`) is exempt by default so local CLI sessions
+  cannot be locked out.
+- Counters are scoped per credential class, so a flood against one surface
+  does not displace another. Scopes include the shared gateway
+  token/password, device tokens, node pairing, paired-node reapproval,
+  device bootstrap tokens, and watchOS challenge issuance.
+
+While locked out, connection attempts fail with:
+
+```json
+{
+  "code": "INVALID_REQUEST",
+  "message": "unauthorized: too many failed authentication attempts (retry later)",
+  "retryable": true,
+  "retryAfterMs": 297000,
+  "details": {
+    "code": "AUTH_RATE_LIMITED",
+    "authReason": "rate_limited",
+    "recommendedNextStep": "wait_then_retry"
+  }
+}
+```
+
+Attempts from other IPs (including loopback) are unaffected during a lockout.
+
+Tune it under `gateway.auth.rateLimit` in `openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "auth": {
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": true
+      }
+    }
+  }
+}
+```
+
+Repeated `AUTH_RATE_LIMITED` entries in the Gateway log mean someone is
+guessing credentials; see the [exposure runbook](/gateway/security/exposure-runbook).
+
+### Browser-origin connections
+
+WebSocket connections that carry a browser `Origin` header use the same
+limits but with the loopback exemption **always off** — a malicious page in
+a local browser is still an untrusted client, so localhost gets no free pass
+on that path. When such a connection arrives _from_ a loopback address, its
+failures are keyed by the normalized page origin (for example
+`browser-origin:https://evil.example`) rather than the shared loopback IP,
+so each origin gets its own bucket; from non-loopback addresses the key
+stays the client IP. This is not configurable.
+
+### Webhooks
+
+The HTTP `/hooks` ingress has its own failure limiter: 20 failed
+authentications per 60 seconds per client IP, then a 60 second lockout.
+Loopback is not exempt. Successful hook auth resets the counter. Throttled
+requests receive plain HTTP `429 Too Many Requests` with a `Retry-After`
+header (seconds). Limits are fixed; if a legitimate integration trips this,
+fix its credentials rather than retrying harder.
+
+## Control-plane writes (post-auth backstop)
+
+Write-side admin RPCs (`config.apply`, `config.patch`, `plugins.install`,
+`plugins.setEnabled`, `plugins.uninstall`, `update.run`, `worktrees.*`,
+`gateway.restart.request`, ...) are additionally rate-limited **after**
+authorization: 30 requests per 60 seconds, per method, per
+`deviceId+clientIp`.
+
+This is not a security boundary — callers already hold `operator.admin` — it
+is a backstop that bounds runaway client or agent loops hammering expensive
+operations. Interactive use never hits it; each method has its own bucket, so
+toggling a plugin does not consume the budget of config writes.
+
+When exceeded, the request fails with a retryable error:
+
+```json
+{
+  "code": "UNAVAILABLE",
+  "message": "rate limit exceeded for config.patch; retry after 35s",
+  "retryable": true,
+  "retryAfterMs": 34539,
+  "details": { "method": "config.patch", "limit": "30 per 60s" }
+}
+```
+
+Clients should honor `retryAfterMs`. The limit is fixed (not configurable);
+buckets expire on their own and are pruned by Gateway maintenance.
+
+## ACP session creation
+
+The ACP translator caps session creation at 120 new sessions per 10 second
+window per translator instance. Exceeding it fails the request with an error
+whose message carries the wait time (there is no structured `retryAfterMs`
+field on this path):
+
+```
+ACP session creation rate limit exceeded for <method>; retry after <n>s.
+```
+
+This bounds runaway clients that create sessions in a loop; normal IDE and
+agent use stays far below it.
+
+## Restart cooldown
+
+Gateway restart requests coalesce, then enforce a 30 second cooldown between
+restart cycles. A restart requested during the cooldown is scheduled after it
+expires rather than rejected. This is separate from the control-plane limiter
+above: `gateway.restart.request` consumes a control-plane budget slot _and_
+the resulting restart obeys the cooldown.
+
+## Operational notes
+
+- All limiters are in-memory and per-process, and multiple Gateways do not
+  share state. Replacing the Gateway process clears the Gateway-owned
+  counters (auth lockouts, webhook throttle, control-plane buckets). The
+  restart cooldown deliberately survives in-process restart cycles — that is
+  what it throttles — and resets only with the process. The ACP session cap
+  belongs to its translator instance and resets when that instance is
+  recreated, not on Gateway restart.
+- Bucket maps are bounded (hard entry caps plus periodic pruning), so
+  unique-key floods cannot grow memory without bound.
+- When a client is behind a reverse proxy, the effective IP is the resolved
+  client IP; see [trusted proxy auth](/gateway/trusted-proxy-auth) for how
+  proxy headers are validated before they can influence it.
+- Retry signaling varies by surface: Gateway RPC limiters return
+  `retryable: true` plus `retryAfterMs`, the webhook ingress uses HTTP 429
+  with a `Retry-After` header, and ACP embeds the wait in the error message.
+  In every case, back off for the indicated duration instead of retrying
+  immediately.
+
+
+
 # Section: gateway/security/secure-file-operations.md
 
 ---
@@ -79702,6 +80106,7 @@ Debugging helpers for streaming output, gateway iteration, and startup profiling
 ## Plugin lifecycle trace
 
 Set `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` for a phase-by-phase breakdown of plugin metadata, discovery, registry, runtime mirror, config mutation, and refresh work. Writes to stderr, so JSON command output stays parseable.
+Plugin load failures include their stack trace while this trace is enabled.
 
 ```bash
 OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
@@ -79714,6 +80119,12 @@ OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
 ```
 
 Use this before reaching for a CPU profiler. From a source checkout, measure the built runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...` also measures source-runner overhead.
+
+For synchronous module-load timings, use the shared diagnostics surface instead of a separate plugin-only environment switch:
+
+```bash
+OPENCLAW_DIAGNOSTICS=plugin.load-profile openclaw plugins list
+```
 
 ## CLI startup and command profiling
 
@@ -80109,6 +80520,13 @@ shorthand values.
 | `OPENCLAW_STATE_DIR`     | Override the state directory (default `~/.openclaw`).                                                                                                                                                                                   |
 | `OPENCLAW_CONFIG_PATH`   | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                                                                                    |
 | `OPENCLAW_INCLUDE_ROOTS` | Path-list of directories where `$include` directives may resolve files outside the config directory (default: none - `$include` is confined to the config dir). Tilde-expanded.                                                         |
+
+## Agent helper tool downloads
+
+Set `OPENCLAW_OFFLINE=1` to prevent OpenClaw from downloading its pinned `fd`
+and `ripgrep` helper binaries. Existing helpers under the OpenClaw tools
+directory and working system binaries remain eligible; a missing helper stays
+unavailable instead of triggering a network request.
 
 ## Logging
 
@@ -83697,7 +84115,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `google/gemini-3.1-pro-preview`               | Gemini API |
 | `google/gemini-3.5-flash`                     | Gemini API |
 | `cohere/command-a-plus-05-2026`               |            |
-| `moonshot/kimi-k2.7-code`                     |            |
+| `moonshot/kimi-k3`                            |            |
 | `anthropic/claude-opus-4-6`                   |            |
 | `deepseek/deepseek-v4-flash`                  |            |
 | `deepseek/deepseek-v4-pro`                    |            |
@@ -83820,7 +84238,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Optional narrowing:
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google,openrouter,xai"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="deepinfra"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview,openrouter/google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image,openrouter/google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,openrouter:generate,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
@@ -83832,7 +84250,7 @@ test passes:
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_INFER_CLI_TEST=1 pnpm test:live -- test/image-generation.infer-cli.live.test.ts
 openclaw infer image providers --json
 openclaw infer image generate \
-  --model google/gemini-3.1-flash-image-preview \
+  --model google/gemini-3.1-flash-image \
   --prompt "Minimal flat test image: one blue square on a white background, no text." \
   --output ./openclaw-infer-image-smoke.png \
   --json
@@ -84363,6 +84781,12 @@ When debugging real providers/models (requires real creds):
   - Installs the packaged OpenClaw tarball in Docker, runs OpenAI API-key
     onboarding, and verifies the Codex plugin plus `@openai/codex` dependency
     were downloaded into the managed npm project root on demand.
+- Codex npm-plugin live package smoke: `pnpm test:docker:live-codex-npm-plugin`
+  - Installs the candidate OpenClaw package and exact Codex plugin into Docker,
+    then uses a real OpenAI key for CLI preflight and same-session turns.
+  - Its zero-retry medium-thinking follow-through turn must send progress, keep
+    working through randomized workspace reads and an exact artifact write,
+    then send completion. A progress-only terminal turn fails the lane.
 - Live plugin tool dependency smoke: `pnpm test:docker:live-plugin-tool`
   - Packs a fixture plugin with a real `slugify` dependency, installs it
     through `npm-pack:`, verifies the dependency under the managed npm
@@ -90394,6 +90818,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Workspace files">
     - `SOUL.md` and `AGENTS.md` are copied into the OpenClaw agent workspace.
     - `memories/MEMORY.md` and `memories/USER.md` are **appended** to the matching OpenClaw memory files instead of overwriting them.
+    - Memory-only surfaces behave differently: the onboarding memory page and the Control UI Memory import page copy these two files under `memory/imports/hermes/` for indexed recall and leave existing workspace memory untouched.
 
   </Accordion>
   <Accordion title="Memory configuration">
@@ -96027,7 +96452,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/install/index), [Installer](/install/installer), [Node](/install/node), [Updating](/install/updating)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96041,7 +96466,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Onboard](/cli/onboard), [Configure](/cli/configure), [Onboarding Overview](/start/onboarding-overview)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96055,7 +96480,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Onboard](/cli/onboard), [Plugins](/cli/plugins), [Channels](/cli/channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96069,7 +96494,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Gateway](/cli/gateway), [Updating](/install/updating), [Troubleshooting](/gateway/troubleshooting)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96083,7 +96508,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Status](/cli/status), [Health](/cli/health), [Logs](/cli/logs), [Diagnostics](/gateway/diagnostics)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96097,7 +96522,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Doctor](/cli/doctor), [Doctor](/gateway/doctor), [Secrets](/gateway/secrets), [Troubleshooting](/gateway/troubleshooting)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96111,7 +96536,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Updating](/install/updating), [Update](/cli/update), [Troubleshooting](/gateway/troubleshooting)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96138,7 +96563,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Index](/gateway/security/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96152,7 +96577,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Openai Http Api](/gateway/openai-http-api), [Openresponses Http Api](/gateway/openresponses-http-api), [Tools Invoke Http Api](/gateway/tools-invoke-http-api), [Hooks](/automation/hooks), [Index](/web/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96166,7 +96591,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Canvas](/refactor/canvas)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96180,7 +96605,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Index](/gateway/index), [Architecture](/concepts/architecture)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96194,7 +96619,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Pairing](/gateway/pairing), [Index](/gateway/security/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96208,7 +96633,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Discovery](/gateway/discovery), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96222,7 +96647,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Architecture](/concepts/architecture), [Index](/nodes/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96236,7 +96661,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Diagnostics](/gateway/diagnostics), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96250,7 +96675,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Architecture](/concepts/architecture), [Typebox](/concepts/typebox), [Bridge Protocol](/gateway/bridge-protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96264,7 +96689,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Index](/gateway/security/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96278,7 +96703,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Architecture](/concepts/architecture)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96292,7 +96717,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/security/index), [Protocol](/gateway/protocol), [Discovery](/gateway/discovery)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96306,7 +96731,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Architecture](/concepts/architecture)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96333,7 +96758,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Agent Loop](/concepts/agent-loop), [Agent](/cli/agent), [Agent Runtimes](/concepts/agent-runtimes)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96347,7 +96772,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Agent Runtimes](/concepts/agent-runtimes), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96361,7 +96786,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Models](/concepts/models)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96375,7 +96800,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ollama](/providers/ollama), [Models](/concepts/models), [Agent](/cli/agent)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96389,7 +96814,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Models](/concepts/models), [Models](/cli/models), [Openai](/providers/openai), [Agent Runtimes](/concepts/agent-runtimes)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96403,7 +96828,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Models](/concepts/models), [Agent](/cli/agent), [Models](/cli/models), [Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96417,7 +96842,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Streaming](/concepts/streaming), [Agent Loop](/concepts/agent-loop)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96431,7 +96856,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Agent Loop](/concepts/agent-loop), [Ollama](/providers/ollama)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96445,7 +96870,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Agent Loop](/concepts/agent-loop), [Subagents](/tools/subagents)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96472,7 +96897,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Session](/concepts/session), [Session Management Compaction](/reference/session-management-compaction), [Sessions](/cli/sessions)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96486,7 +96911,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Compaction](/concepts/compaction), [Context](/concepts/context), [Session Management Compaction](/reference/session-management-compaction)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96500,7 +96925,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Context](/concepts/context), [Context Engine](/concepts/context-engine)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96514,7 +96939,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Webchat](/web/webchat), [Android](/platforms/android), [Channel Routing](/channels/channel-routing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96528,7 +96953,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Diagnostics](/gateway/diagnostics), [Session Management Compaction](/reference/session-management-compaction), [Flags](/diagnostics/flags)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96542,7 +96967,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Context](/concepts/context), [Transcript Hygiene](/reference/transcript-hygiene), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96556,7 +96981,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Memory Config](/reference/memory-config), [Memory Qmd](/concepts/memory-qmd), [Memory](/concepts/memory), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96570,7 +96995,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Session](/concepts/session), [Channel Routing](/channels/channel-routing), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96584,7 +97009,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Session Management Compaction](/reference/session-management-compaction), [Transcript Hygiene](/reference/transcript-hygiene)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96611,7 +97036,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Groups](/channels/groups), [Discord](/channels/discord), [Googlechat](/channels/googlechat), [Signal](/channels/signal), [Matrix](/channels/matrix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96625,7 +97050,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/channels/index), [Pairing](/channels/pairing), [Troubleshooting](/channels/troubleshooting), [Sdk Channel Plugins](/plugins/sdk-channel-plugins)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96639,7 +97064,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Groups](/channels/groups), [Group Messages](/channels/group-messages), [Ambient Room Events](/channels/ambient-room-events), [Broadcast Groups](/channels/broadcast-groups), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96653,7 +97078,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Access Groups](/channels/access-groups), [Groups](/channels/groups), [Discord](/channels/discord), [Line](/channels/line)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96667,7 +97092,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Line](/channels/line), [Signal](/channels/signal), [Googlechat](/channels/googlechat), [Matrix](/channels/matrix), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96681,7 +97106,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Groups](/channels/groups), [Ambient Room Events](/channels/ambient-room-events), [Discord](/channels/discord), [Matrix](/channels/matrix), [Config Channels](/gateway/config-channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96695,7 +97120,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Channel Routing](/channels/channel-routing), [Groups](/channels/groups), [Discord](/channels/discord), [Matrix](/channels/matrix), [Troubleshooting](/channels/troubleshooting), [Configuration Reference](/gateway/configuration-reference)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96709,7 +97134,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Health](/gateway/health), [Configuration Reference](/gateway/configuration-reference), [Troubleshooting](/channels/troubleshooting), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96736,7 +97161,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Health](/gateway/health), [Telegram](/channels/telegram), [Doctor](/cli/doctor), [Doctor](/gateway/doctor), [Sdk Subpaths](/plugins/sdk-subpaths), [Health](/cli/health), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96750,7 +97175,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Logging](/logging), [Logging](/gateway/logging), [Logs](/cli/logs)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96764,7 +97189,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Diagnostics](/gateway/diagnostics), [Health](/gateway/health), [Codex Harness](/plugins/codex-harness), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96778,7 +97203,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Hooks](/plugins/hooks), [Opentelemetry](/gateway/opentelemetry), [Logging](/logging), [Sdk Subpaths](/plugins/sdk-subpaths), [Diagnostics Otel](/plugins/reference/diagnostics-otel), [Prometheus](/gateway/prometheus), [Diagnostics Prometheus](/plugins/reference/diagnostics-prometheus)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96792,7 +97217,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Opentelemetry](/gateway/opentelemetry), [Prometheus](/gateway/prometheus), [Diagnostics](/gateway/diagnostics), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96819,7 +97244,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Protocol](/gateway/protocol), [Talk](/nodes/talk)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96833,7 +97258,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Dashboard](/web/dashboard), [Tailscale](/gateway/tailscale), [Remote](/gateway/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96847,7 +97272,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Configuration](/gateway/configuration)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96861,7 +97286,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Index](/web/index), [Dashboard](/web/dashboard), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96875,7 +97300,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Getting Started](/start/getting-started), [Channel Routing](/channels/channel-routing), [Secure File Operations](/gateway/security/secure-file-operations)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96889,7 +97314,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Health](/gateway/health), [Protocol](/gateway/protocol), [Dashboard](/web/dashboard)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -96916,7 +97341,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Building Plugins](/plugins/building-plugins), [Sdk Overview](/plugins/sdk-overview), [Sdk Entrypoints](/plugins/sdk-entrypoints), [Sdk Subpaths](/plugins/sdk-subpaths), [Manifest](/plugins/manifest), [Reference](/plugins/reference)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96930,7 +97355,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugin Inventory](/plugins/plugin-inventory), [Plugins](/cli/plugins), [Architecture Internals](/plugins/architecture-internals)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96944,7 +97369,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Canvas](/plugins/reference/canvas), [Canvas](/refactor/canvas), [Configuration Reference](/gateway/configuration-reference)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96958,7 +97383,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Architecture](/plugins/architecture), [Architecture Internals](/plugins/architecture-internals), [Plugins](/cli/plugins)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96972,7 +97397,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Sdk Channel Plugins](/plugins/sdk-channel-plugins), [Sdk Channel Inbound](/plugins/sdk-channel-inbound), [Sdk Channel Outbound](/plugins/sdk-channel-outbound)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -96986,7 +97411,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Sdk Provider Plugins](/plugins/sdk-provider-plugins), [Tool Plugins](/plugins/tool-plugins), [Adding Capabilities](/plugins/adding-capabilities)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97000,7 +97425,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugin Permission Requests](/plugins/plugin-permission-requests), [Exec Approvals](/tools/exec-approvals), [Sdk Channel Plugins](/plugins/sdk-channel-plugins)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97014,7 +97439,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugins](/cli/plugins), [Compatibility](/plugins/compatibility), [Publishing](/clawhub/publishing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97028,7 +97453,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Sdk Testing](/plugins/sdk-testing), [Sdk Setup](/plugins/sdk-setup), [Codex Harness](/plugins/codex-harness)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97055,7 +97480,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Exec Approvals](/tools/exec-approvals), [Approvals](/cli/approvals), [Plugin Permission Requests](/plugins/plugin-permission-requests), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97069,7 +97494,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/security/index), [Exposure Runbook](/gateway/security/exposure-runbook), [Trusted Proxy Auth](/gateway/trusted-proxy-auth), [Tailscale](/gateway/tailscale), [Remote](/gateway/remote), [Configuration Reference](/gateway/configuration-reference), [Gateway](/cli/gateway), [Doctor](/cli/doctor), [Control Ui](/web/control-ui), [Browser Control](/tools/browser-control), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97083,7 +97508,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Pairing](/channels/pairing), [Telegram](/channels/telegram), [Access Groups](/channels/access-groups), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97097,7 +97522,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Protocol](/gateway/protocol), [Devices](/cli/devices), [Pairing](/channels/pairing), [Pairing](/gateway/pairing), [Operator Scopes](/gateway/operator-scopes), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Approvals](/cli/approvals)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97111,7 +97536,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Manifest](/plugins/manifest), [Plugin Permission Requests](/plugins/plugin-permission-requests), [Manage Plugins](/plugins/manage-plugins), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97125,7 +97550,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Authentication](/gateway/authentication), [Models](/cli/models), [Openai](/providers/openai), [Oauth](/concepts/oauth), [Secrets](/gateway/secrets), [Secrets](/cli/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97152,7 +97577,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Cron Jobs](/automation/cron-jobs), [Cron](/cli/cron), [Protocol](/gateway/protocol), [Tasks](/automation/tasks), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97166,7 +97591,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Zalo](/channels/zalo), [Troubleshooting](/channels/troubleshooting), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Gmail Pubsub Integration](/automation/cron-jobs#gmail-pubsub-integration), [Gmail Pubsub](/automation/gmail-pubsub), [Webhooks](/cli/webhooks), [Webhooks](/automation/cron-jobs#webhooks), [Webhook](/automation/webhook)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97180,7 +97605,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Hooks](/automation/hooks), [Hooks](/cli/hooks), [Hooks](/plugins/hooks), [Plugin Permission Requests](/plugins/plugin-permission-requests), [Sdk Subpaths](/plugins/sdk-subpaths)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97194,7 +97619,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tasks](/automation/tasks), [Index](/automation/index), [Tasks](/cli/tasks), [Taskflow](/automation/taskflow), [Sdk Runtime](/plugins/sdk-runtime)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97208,7 +97633,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/automation/index), [Heartbeat](/gateway/heartbeat), [Commitments](/concepts/commitments)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97222,7 +97647,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Poll](/automation/poll), [Message](/cli/message), [Telegram](/channels/telegram), [Msteams](/channels/msteams), [Background Process](/gateway/background-process)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97249,7 +97674,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Media Overview](/tools/media-overview), [Media Understanding](/nodes/media-understanding), [Secure File Operations](/gateway/security/secure-file-operations), [Pdf](/tools/pdf), [Image Generation](/tools/image-generation), [Qr](/cli/qr), [Line](/channels/line), [Whatsapp](/channels/whatsapp)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97263,7 +97688,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Images](/nodes/images), [Media Overview](/tools/media-overview), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97277,7 +97702,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Media Overview](/tools/media-overview), [Image Generation](/tools/image-generation), [Manifest](/plugins/manifest), [Codex Harness](/plugins/codex-harness)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97291,7 +97716,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tts](/tools/tts), [Media Overview](/tools/media-overview), [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97305,7 +97730,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Audio](/nodes/audio), [Media Understanding](/nodes/media-understanding), [Media Overview](/tools/media-overview), [Whatsapp](/channels/whatsapp), [Images](/nodes/images), [Infer](/cli/infer), [Pdf](/tools/pdf)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97319,7 +97744,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Image Generation](/tools/image-generation), [Media Overview](/tools/media-overview), [Skills](/tools/skills), [Music Generation](/tools/music-generation), [Video Generation](/tools/video-generation)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97346,7 +97771,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Google](/providers/google), [Sdk Provider Plugins](/plugins/sdk-provider-plugins), [Talk](/nodes/talk), [Control Ui](/web/control-ui)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97360,7 +97785,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Talk](/nodes/talk), [Control Ui](/web/control-ui)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97374,7 +97799,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Talk](/nodes/talk), [Openai](/providers/openai), [Google](/providers/google)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97388,7 +97813,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Talk](/nodes/talk), [Voicewake](/platforms/mac/voicewake)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97402,7 +97827,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voicewake](/nodes/voicewake), [Voicewake](/platforms/mac/voicewake), [Voice Overlay](/platforms/mac/voice-overlay)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97416,7 +97841,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Control Ui](/web/control-ui), [Voice Overlay](/platforms/mac/voice-overlay), [Talk](/nodes/talk)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97443,7 +97868,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tui](/cli/tui), [Tui](/web/tui), [Index](/cli/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97457,7 +97882,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tui](/web/tui)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97471,7 +97896,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tui](/web/tui), [Sessions](/cli/sessions)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97485,7 +97910,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tui](/web/tui), [Tui](/cli/tui)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97499,7 +97924,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Tui](/web/tui), [Qr](/cli/qr), [Logs](/cli/logs), [Completion](/cli/completion)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97526,7 +97951,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Publishing](/clawhub/publishing), [Creating Skills](/tools/creating-skills), [Community](/plugins/community)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97540,7 +97965,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugin](/tools/plugin), [Plugins](/cli/plugins), [Skills](/cli/skills), [Skills](/tools/skills), [Community](/plugins/community)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97554,7 +97979,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugin](/tools/plugin), [Plugins](/cli/plugins), [Compatibility](/plugins/compatibility), [Plugin Inventory](/plugins/plugin-inventory), [Publishing](/clawhub/publishing), [Skills](/tools/skills), [Skills Config](/tools/skills-config)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97568,7 +97993,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Plugin](/tools/plugin), [Plugins](/cli/plugins), [Skills](/cli/skills), [Skills](/tools/skills), [Protocol](/gateway/protocol), [Bundles](/plugins/bundles), [Dependency Resolution](/plugins/dependency-resolution)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97595,7 +98020,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97609,7 +98034,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol), [Index](/gateway/security/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97623,7 +98048,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97637,7 +98062,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97651,7 +98076,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97665,7 +98090,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openclaw Sdk Api Design](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97697,7 +98122,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/install/index), [Updating](/install/updating), [Linux](/platforms/linux), [Index](/platforms/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97711,7 +98136,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Gateway](/cli/gateway), [Linux](/platforms/linux), [Vps](/vps)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97725,7 +98150,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Remote](/gateway/remote), [Tailscale](/gateway/tailscale), [Exposure Runbook](/gateway/security/exposure-runbook), [Authentication](/gateway/authentication), [Secrets](/gateway/secrets)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97739,7 +98164,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Status](/cli/status), [Logs](/cli/logs), [Doctor](/cli/doctor), [Diagnostics](/gateway/diagnostics), [Index](/gateway/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97753,7 +98178,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Vps](/vps), [Docker](/install/docker), [Hetzner](/install/hetzner), [Digitalocean](/install/digitalocean), [Kubernetes](/install/kubernetes), [Podman](/install/podman)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97780,7 +98205,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Macos](/platforms/macos), [Bundled Gateway](/platforms/mac/bundled-gateway), [Installer](/install/installer), [Node](/install/node)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97794,7 +98219,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Macos](/platforms/macos), [Bundled Gateway](/platforms/mac/bundled-gateway), [Remote](/platforms/mac/remote), [Index](/gateway/index), [Gateway](/cli/gateway), [Bonjour](/gateway/bonjour)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97808,7 +98233,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Remote](/platforms/mac/remote), [Remote](/gateway/remote), [Tailscale](/gateway/tailscale)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97822,7 +98247,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Macos](/platforms/macos), [Bundled Gateway](/platforms/mac/bundled-gateway), [Gateway](/cli/gateway), [Index](/gateway/index), [Update](/cli/update), [Updating](/install/updating), [Uninstall](/install/uninstall), [Troubleshooting](/gateway/troubleshooting)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97836,7 +98261,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Bundled Gateway](/platforms/mac/bundled-gateway), [Macos](/platforms/macos), [Gateway](/cli/gateway), [Doctor](/gateway/doctor), [Troubleshooting](/gateway/troubleshooting)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97850,7 +98275,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Macos](/platforms/macos), [Remote](/platforms/mac/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97864,7 +98289,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Multiple Gateways](/gateway/multiple-gateways), [Index](/gateway/index), [Gateway](/cli/gateway)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -97890,7 +98315,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android), [Camera](/nodes/camera)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97904,7 +98329,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97918,7 +98343,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android), [Bonjour](/gateway/bonjour), [Pairing](/gateway/pairing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97932,7 +98357,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97946,7 +98371,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97960,7 +98385,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android), [Talk](/nodes/talk)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -97974,7 +98399,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Android](/platforms/android), [Troubleshooting](/nodes/troubleshooting), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98000,7 +98425,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Camera](/nodes/camera)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98014,7 +98439,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Canvas](/plugins/reference/canvas)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98028,7 +98453,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Webchat](/web/webchat), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98042,7 +98467,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Pairing](/channels/pairing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98056,7 +98481,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98070,7 +98495,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98084,7 +98509,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Configuration](/gateway/configuration)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98098,7 +98523,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios), [Talk](/nodes/talk)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98125,7 +98550,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Docker](/install/docker), [Podman](/install/podman)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98139,7 +98564,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98153,7 +98578,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98167,7 +98592,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98194,7 +98619,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Getting Started](/start/getting-started)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98208,7 +98633,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Getting Started](/start/getting-started), [Updating](/install/updating), [Onboard](/cli/onboard), [Doctor](/cli/doctor), [Status](/cli/status), [Logs](/cli/logs)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98222,7 +98647,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/gateway/index), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98236,7 +98661,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Authentication](/gateway/authentication), [Secrets](/gateway/secrets), [Remote](/gateway/remote), [Exposure Runbook](/gateway/security/exposure-runbook), [Windows](/platforms/windows)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98250,7 +98675,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Status](/cli/status), [Logs](/cli/logs), [Doctor](/cli/doctor), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98264,7 +98689,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Browser Wsl2 Windows Remote Cdp Troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting), [Browser](/tools/browser), [Control Ui](/web/control-ui)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98291,7 +98716,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Raspberry Pi](/install/raspberry-pi), [Index](/install/index), [Faq First Run](/help/faq-first-run), [Faq](/help/faq), [Linux](/platforms/linux), [Installer](/install/installer)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98305,7 +98730,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Raspberry Pi](/install/raspberry-pi), [Authentication](/gateway/authentication), [Secrets](/gateway/secrets), [Pairing](/gateway/pairing), [Devices](/cli/devices), [Remote](/gateway/remote), [Tailscale](/gateway/tailscale)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98319,7 +98744,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/index), [Gateway](/cli/gateway), [Raspberry Pi](/install/raspberry-pi), [Linux](/platforms/linux), [Vps](/vps)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98333,7 +98758,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Raspberry Pi](/install/raspberry-pi), [Linux](/platforms/linux), [Health](/gateway/health), [Diagnostics](/gateway/diagnostics)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98360,7 +98785,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Canvas](/platforms/mac/canvas), [Macos](/platforms/macos), [Webchat](/web/webchat)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98374,7 +98799,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Bundled Gateway](/platforms/mac/bundled-gateway), [Macos](/platforms/macos), [Child Process](/platforms/mac/child-process), [Dev Setup](/platforms/mac/dev-setup)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98388,7 +98813,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Menu Bar](/platforms/mac/menu-bar), [Icon](/platforms/mac/icon), [Macos](/platforms/macos), [Health](/platforms/mac/health), [Logging](/platforms/mac/logging), [Remote](/platforms/mac/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98402,7 +98827,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Macos](/platforms/macos), [Xpc](/platforms/mac/xpc), [Permissions](/platforms/mac/permissions), [Signing](/platforms/mac/signing), [Peekaboo](/platforms/mac/peekaboo)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98416,7 +98841,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Remote](/platforms/mac/remote), [Macos](/platforms/macos), [Remote](/gateway/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98430,7 +98855,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voicewake](/platforms/mac/voicewake), [Voice Overlay](/platforms/mac/voice-overlay), [Talk](/nodes/talk), [Macos](/platforms/macos)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98444,7 +98869,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Webchat](/platforms/mac/webchat), [Macos](/platforms/macos), [Webchat](/web/webchat)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98458,7 +98883,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Webchat](/platforms/mac/webchat), [Remote](/gateway/remote), [Remote](/platforms/mac/remote)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98485,7 +98910,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/install/index), [Installer](/install/installer), [Windows](/platforms/windows), [Getting Started](/start/getting-started), [Onboard](/cli/onboard)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98499,7 +98924,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/gateway/index), [Gateway](/cli/gateway), [Doctor](/cli/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98513,7 +98938,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/gateway/index), [Gateway](/cli/gateway)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98527,7 +98952,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Updating](/install/updating), [Ci](/ci)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98554,7 +98979,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Kubernetes](/install/kubernetes), [Index](/install/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98568,7 +98993,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Kubernetes](/install/kubernetes), [Secrets](/gateway/secrets), [Environment](/help/environment)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98582,7 +99007,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Kubernetes](/install/kubernetes), [Authentication](/gateway/authentication), [Remote](/gateway/remote), [Exposure Runbook](/gateway/security/exposure-runbook)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98596,7 +99021,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Kubernetes](/install/kubernetes), [Index](/gateway/index)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98623,7 +99048,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Nix](/install/nix), [Index](/install/index), [Docs Directory](/start/docs-directory)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98637,7 +99062,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Manage Plugins](/plugins/manage-plugins), [Plugin](/tools/plugin), [Nix](/install/nix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98651,7 +99076,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Nix](/install/nix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98665,7 +99090,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Nix](/install/nix), [Setup](/cli/setup), [Environment](/help/environment)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98679,7 +99104,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Nix](/install/nix), [Setup](/cli/setup), [Doctor](/cli/doctor), [Update](/cli/update)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98706,7 +99131,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98720,7 +99145,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Exec Approvals](/tools/exec-approvals), [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98734,7 +99159,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98748,7 +99173,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98762,7 +99187,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ios](/platforms/ios)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98789,7 +99214,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Linux](/platforms/linux), [Index](/platforms/index), [Index](/install/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98803,7 +99228,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Linux](/platforms/linux), [Index](/gateway/index), [Pairing](/gateway/pairing), [Remote](/gateway/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98817,7 +99242,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Linux](/platforms/linux), [Protocol](/gateway/protocol), [Webchat](/web/webchat)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98831,7 +99256,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Linux](/platforms/linux), [Exec Approvals](/tools/exec-approvals), [Secrets](/gateway/secrets), [Index](/nodes/index), [Exec](/tools/exec), [Talk](/nodes/talk), [Camera](/nodes/camera)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98845,7 +99270,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Linux](/platforms/linux), [Openclaw](/start/openclaw), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98872,7 +99297,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/install/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98886,7 +99311,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/gateway/index), [Pairing](/gateway/pairing), [Remote](/gateway/remote)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98900,7 +99325,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98914,7 +99339,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Doctor](/gateway/doctor), [Index](/gateway/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98928,7 +99353,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Windows](/platforms/windows), [Index](/nodes/index), [Exec](/tools/exec), [Exec Approvals](/tools/exec-approvals), [Index](/gateway/security/index)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -98960,7 +99385,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord), [Discord](/plugins/reference/discord), [Fly](/install/fly), [Slash Commands](/tools/slash-commands), [Health](/gateway/health), [Channels](/cli/channels), [Config Channels](/gateway/config-channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98974,7 +99399,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups), [Groups](/channels/groups)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -98988,7 +99413,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord), [Channel Routing](/channels/channel-routing), [Groups](/channels/groups), [Access Groups](/channels/access-groups), [Acp Agents](/tools/acp-agents), [Subagents](/tools/subagents)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99002,7 +99427,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99016,7 +99441,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord), [Slash Commands](/tools/slash-commands)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99030,7 +99455,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Discord](/channels/discord), [Openai](/providers/openai), [Elevenlabs](/providers/elevenlabs), [Qa E2e Automation](/concepts/qa-e2e-automation), [Config Channels](/gateway/config-channels)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99057,7 +99482,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Config Channels](/gateway/config-channels), [Channels](/cli/channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99071,7 +99496,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups), [Groups](/channels/groups), [Multi Agent](/concepts/multi-agent)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99085,7 +99510,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Groups](/channels/groups), [Multi Agent](/concepts/multi-agent)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99099,7 +99524,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Location](/channels/location)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99113,7 +99538,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Telegram](/channels/telegram), [Exec Approvals](/tools/exec-approvals), [Reactions](/tools/reactions)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99140,7 +99565,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Slack](/channels/slack), [Slack](/plugins/reference/slack), [Secrets](/gateway/secrets), [Qa E2e Automation](/concepts/qa-e2e-automation), [Troubleshooting](/channels/troubleshooting)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99154,7 +99579,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Slack](/channels/slack), [Pairing](/channels/pairing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99168,7 +99593,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Slack](/channels/slack), [Bot Loop Protection](/channels/bot-loop-protection), [Pairing](/channels/pairing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99182,7 +99607,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Slack](/channels/slack), [Qa E2e Automation](/concepts/qa-e2e-automation)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99196,7 +99621,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Slack](/channels/slack), [Slash Commands](/tools/slash-commands), [Exec Approvals](/tools/exec-approvals)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99223,7 +99648,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Bluebubbles Imessage](/announcements/bluebubbles-imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels), [Imessage](/channels/imessage)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99237,7 +99662,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Imessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99251,7 +99676,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Imessage](/channels/imessage)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99265,7 +99690,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Imessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99279,7 +99704,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Imessage](/channels/imessage)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99306,7 +99731,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Whatsapp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [Whatsapp](/plugins/reference/whatsapp), [Qa E2e Automation](/concepts/qa-e2e-automation), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99320,7 +99745,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Whatsapp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [Qa E2e Automation](/concepts/qa-e2e-automation), [Pairing](/channels/pairing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99334,7 +99759,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Whatsapp](/channels/whatsapp), [Group Messages](/channels/group-messages)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99348,7 +99773,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Whatsapp](/channels/whatsapp)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99362,7 +99787,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Whatsapp](/channels/whatsapp)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99389,7 +99814,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix), [Matrix Migration](/channels/matrix-migration)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99403,7 +99828,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix), [Groups](/channels/groups), [Bot Loop Protection](/channels/bot-loop-protection)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99417,7 +99842,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99431,7 +99856,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99445,7 +99870,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99459,7 +99884,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Matrix](/channels/matrix), [Matrix Migration](/channels/matrix-migration)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99486,7 +99911,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Googlechat](/channels/googlechat), [Googlechat](/plugins/reference/googlechat), [Config Channels](/gateway/config-channels), [Wizard Cli Reference](/start/wizard-cli-reference), [Secrets](/gateway/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Health](/gateway/health), [Plugin Inventory](/plugins/plugin-inventory), [Index](/channels/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99500,7 +99925,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Googlechat](/channels/googlechat), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups), [Config Channels](/gateway/config-channels), [Bot Loop Protection](/channels/bot-loop-protection), [Channel Routing](/channels/channel-routing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99514,7 +99939,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Googlechat](/channels/googlechat), [Bot Loop Protection](/channels/bot-loop-protection), [Access Groups](/channels/access-groups), [Channel Routing](/channels/channel-routing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99528,7 +99953,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Googlechat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99542,7 +99967,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Googlechat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface), [Reactions](/tools/reactions), [Slash Commands](/tools/slash-commands), [Config Agents](/gateway/config-agents), [Message Lifecycle Refactor](/concepts/message-lifecycle-refactor)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99569,7 +99994,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Msteams](/channels/msteams), [Msteams](/plugins/reference/msteams), [Config Channels](/gateway/config-channels), [Health](/gateway/health)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99583,7 +100008,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Msteams](/channels/msteams), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99597,7 +100022,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Msteams](/channels/msteams), [Groups](/channels/groups), [Channel Routing](/channels/channel-routing)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99611,7 +100036,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Msteams](/channels/msteams)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99625,7 +100050,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Msteams](/channels/msteams), [Exec Approvals Advanced](/tools/exec-approvals-advanced)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99652,7 +100077,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Signal](/channels/signal), [Signal](/plugins/reference/signal)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99666,7 +100091,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Signal](/channels/signal)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99680,7 +100105,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Signal](/channels/signal)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99694,7 +100119,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Signal](/channels/signal)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99708,7 +100133,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Signal](/channels/signal)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99735,7 +100160,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/channels/index), [Pairing](/channels/pairing), [Feishu](/plugins/reference/feishu), [Architecture Internals](/plugins/architecture-internals)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99749,7 +100174,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99763,7 +100188,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99777,7 +100202,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99804,7 +100229,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99818,7 +100243,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99832,7 +100257,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99846,7 +100271,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     No linked docs
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99873,7 +100298,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voicecall](/cli/voicecall), [Voice Call](/plugins/voice-call), [Protocol](/gateway/protocol)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99887,7 +100312,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voice Call](/plugins/voice-call), [Voicecall](/cli/voicecall)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99901,7 +100326,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voice Call](/plugins/voice-call)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99915,7 +100340,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voice Call](/plugins/voice-call), [Plugin Inventory](/plugins/plugin-inventory)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99929,7 +100354,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Voice Call](/plugins/voice-call)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -99961,7 +100386,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Browser Control](/tools/browser-control), [Testing](/help/testing), [Browser](/tools/browser), [Index](/gateway/security/index), [Audit Checks](/gateway/security/audit-checks)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99975,7 +100400,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Exec](/tools/exec), [Background Process](/gateway/background-process), [Tools Invoke Http Api](/gateway/tools-invoke-http-api), [Operator Scopes](/gateway/operator-scopes), [Protocol](/gateway/protocol), [Exec Approvals](/tools/exec-approvals), [Exec Approvals Advanced](/tools/exec-approvals-advanced), [Elevated](/tools/elevated)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -99989,7 +100414,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Sandboxing](/gateway/sandboxing), [Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Multi Agent Sandbox Tools](/tools/multi-agent-sandbox-tools), [Codex Harness Reference](/plugins/codex-harness-reference), [Config Tools](/gateway/config-tools)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100016,7 +100441,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Codex Harness](/plugins/codex-harness), [Models](/concepts/models), [Oauth](/concepts/oauth), [Codex Harness Reference](/plugins/codex-harness-reference), [Auth Monitoring](/automation/auth-monitoring)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100030,7 +100455,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Openresponses Http Api](/gateway/openresponses-http-api), [Openai Http Api](/gateway/openai-http-api), [Codex Native Plugins](/plugins/codex-native-plugins)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100044,7 +100469,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Codex Harness](/plugins/codex-harness), [Codex Harness Runtime](/plugins/codex-harness-runtime), [Codex Harness Reference](/plugins/codex-harness-reference), [Codex Native Plugins](/plugins/codex-native-plugins)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100058,7 +100483,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Image Generation](/tools/image-generation), [Images](/nodes/images)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100072,7 +100497,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openai](/providers/openai), [Discord](/channels/discord), [Voice Call](/plugins/voice-call)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100099,7 +100524,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Web](/tools/web), [Brave Search](/tools/brave-search), [Tavily](/tools/tavily), [Exa Search](/tools/exa-search), [Firecrawl](/tools/firecrawl), [Perplexity Search](/tools/perplexity-search), [Duckduckgo Search](/tools/duckduckgo-search), [Searxng Search](/tools/searxng-search), [Gemini Search](/tools/gemini-search), [Grok Search](/tools/grok-search), [Kimi Search](/tools/kimi-search), [Minimax Search](/tools/minimax-search), [Ollama Search](/tools/ollama-search), [Sdk Subpaths](/plugins/sdk-subpaths), [Sdk Overview](/plugins/sdk-overview), [Manifest](/plugins/manifest)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100113,7 +100538,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Web](/tools/web), [Web Fetch](/tools/web-fetch), [Faq](/help/faq), [Api Usage Costs](/reference/api-usage-costs), [Brave Search](/tools/brave-search), [Perplexity Search](/tools/perplexity-search), [Tavily](/tools/tavily), [Firecrawl](/tools/firecrawl)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100127,7 +100552,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Web](/tools/web), [Web Fetch](/tools/web-fetch), [Firecrawl](/tools/firecrawl), [Searxng Search](/tools/searxng-search)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100141,7 +100566,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Config Tools](/gateway/config-tools), [Web Fetch](/tools/web-fetch), [Web](/tools/web), [Faq](/help/faq)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100168,7 +100593,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Anthropic](/providers/anthropic), [Doctor](/gateway/doctor), [Configuration Examples](/gateway/configuration-examples), [Troubleshooting](/gateway/troubleshooting), [Prompt Caching](/reference/prompt-caching)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100182,7 +100607,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Anthropic](/providers/anthropic), [Config Agents](/gateway/config-agents), [Models](/concepts/models), [Cli Backends](/gateway/cli-backends)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100196,7 +100621,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Anthropic](/providers/anthropic), [Prompt Caching](/reference/prompt-caching), [Troubleshooting](/gateway/troubleshooting), [Cli Backends](/gateway/cli-backends), [Model Providers](/concepts/model-providers)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100210,7 +100635,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Anthropic](/providers/anthropic), [Prompt Caching](/reference/prompt-caching), [Troubleshooting](/gateway/troubleshooting), [Heartbeat](/gateway/heartbeat)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100224,7 +100649,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Anthropic](/providers/anthropic), [Config Agents](/gateway/config-agents)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100251,7 +100676,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Google](/providers/google), [Model Providers](/concepts/model-providers)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100265,7 +100690,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Google](/providers/google), [Model Providers](/concepts/model-providers), [Google](/plugins/reference/google), [Gemini Search](/tools/gemini-search)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100279,7 +100704,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Google](/providers/google), [Model Providers](/concepts/model-providers), [Faq Models](/help/faq-models), [Testing Live](/help/testing-live)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100293,7 +100718,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Google](/plugins/reference/google), [Google](/providers/google)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100307,7 +100732,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Prompt Caching](/reference/prompt-caching), [Google](/providers/google), [Model Providers](/concepts/model-providers), [Token Use](/reference/token-use)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100334,7 +100759,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openrouter](/providers/openrouter), [Model Providers](/concepts/model-providers), [Configure](/cli/configure), [Authentication](/gateway/authentication), [Environment](/help/environment), [Models](/cli/models), [Models](/concepts/models)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100348,7 +100773,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openrouter](/providers/openrouter), [Model Providers](/concepts/model-providers), [Prompt Caching](/reference/prompt-caching)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100362,7 +100787,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Model Failover](/concepts/model-failover), [Openrouter](/providers/openrouter), [Models](/cli/models)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100376,7 +100801,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Openrouter](/providers/openrouter), [Image Generation](/tools/image-generation), [Music Generation](/tools/music-generation), [Media Overview](/tools/media-overview), [Video Generation](/tools/video-generation), [Tts](/tools/tts)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100403,7 +100828,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Config Agents](/gateway/config-agents), [Image Generation](/tools/image-generation), [Video Generation](/tools/video-generation), [Music Generation](/tools/music-generation)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100417,7 +100842,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Media Overview](/tools/media-overview), [Image Generation](/tools/image-generation), [Video Generation](/tools/video-generation), [Music Generation](/tools/music-generation)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100431,7 +100856,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Image Generation](/tools/image-generation), [Infer](/cli/infer), [Media Overview](/tools/media-overview)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100445,7 +100870,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Video Generation](/tools/video-generation), [Runway](/providers/runway), [Pixverse](/providers/pixverse), [Fal](/providers/fal), [Openrouter](/providers/openrouter)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100459,7 +100884,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Music Generation](/tools/music-generation)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100486,7 +100911,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Local Models](/gateway/local-models), [Lmstudio](/providers/lmstudio), [Ollama](/providers/ollama), [Vllm](/providers/vllm), [Local Model Services](/gateway/local-model-services), [Config Agents](/gateway/config-agents), [Troubleshooting](/gateway/troubleshooting), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100500,7 +100925,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Ollama](/providers/ollama), [Lmstudio](/providers/lmstudio)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100514,7 +100939,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Vllm](/providers/vllm), [Sglang](/providers/sglang), [Local Models](/gateway/local-models), [Lmstudio](/providers/lmstudio)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100528,7 +100953,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Memory](/concepts/memory), [Doctor](/gateway/doctor)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100542,7 +100967,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/gateway/security/index), [Config Tools](/gateway/config-tools), [Local Models](/gateway/local-models)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -100569,7 +100994,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/providers/index), [Model Providers](/concepts/model-providers), [Testing Live](/help/testing-live), [Onboard](/cli/onboard)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100583,7 +101008,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Manifest](/plugins/manifest), [Testing Live](/help/testing-live), [Index](/providers/index)
 
-        </div>
+    </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
@@ -100597,7 +101022,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     [Index](/providers/index), [Model Providers](/concepts/model-providers), [Manifest](/plugins/manifest), [Testing Live](/help/testing-live), [Models](/cli/models)
 
-        </div>
+    </div>
       </div>
     </div>
 
@@ -101519,6 +101944,11 @@ upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
 Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
+Within each host, rows group by project folder by default; a working directory
+under `.claude/worktrees/<name>` folds into its origin repository, and project
+groups collapse like other sidebar sections. Use the folder icon in the catalog
+header to flatten or restore the project groups. The same grouping applies to
+the Claude sessions catalog.
 By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
@@ -104822,11 +105252,15 @@ because it does not provide `node:sqlite`.
 
 The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing
+- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
 - opens the Gateway-served Control UI with its resolved authentication URL
+- opens the Control UI in onboarding mode after its first-run install, which
+  offers to import detected Claude Code, Codex, or Hermes memories into the
+  agent workspace (the same import stays available later under
+  Settings → Import Memory)
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
@@ -105040,6 +105474,8 @@ The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
 permission prompts, notifications, WebChat, voice input, Canvas, and
 Mac-hosted node tools such as `system.run`.
 
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
+
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
 ## Download
@@ -105127,7 +105563,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
-- Menu bar status, notifications, health, and WebChat.
+- Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
 - One Mac node that combines native Canvas, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
@@ -106176,6 +106612,7 @@ title: "Menu bar"
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
 - A "Nodes" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
+- **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
 
 ## State model
 
@@ -106757,7 +107194,13 @@ The full chat window is a native split view:
 - **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu (new session, refresh, copy session key, export transcript, compact, clear history).
 - **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it.
 
-The anchored quick-chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+The anchored compact chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+
+## Quick Chat bar
+
+Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
+
+Quick Chat shows the main session's agent, sends directly to the main session, and leaves replies in the full chat window. Press Return to send, Command-Return to send and open full chat, Shift-Return for a newline, or Escape to dismiss. Clicking outside the bar also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.
@@ -107934,6 +108377,8 @@ Notes:
   - `trusted-proxy` callers without an explicit `x-openclaw-scopes` header also keep the legacy `operator.write`-only surface
   - `trusted-proxy` callers that do send `x-openclaw-scopes` get the declared scopes instead
   - a route can opt into `gatewayRuntimeScopeSurface: "trusted-operator"` to always honor `x-openclaw-scopes` for identity-bearing auth modes (falling back to the full CLI default scope set when the header is absent)
+- Sandboxed external Control UI tabs backed by `auth: "gateway"` routes use a short-lived signed cookie grant minted only by authenticated bootstrap; plugin-auth tabs keep their direct iframe path. Before mounting, the parent runs a route-owned probe inside the same opaque sandbox and fails closed when browser privacy policy blocks the cookie. The grant is bound to the owning plugin, matched route root, and current auth generation; its process-random cookie name prevents trusted same-host Gateways from overwriting one another, but cookies never isolate TCP ports. The Gateway hostname is therefore one credential boundary: do not cohost mutually untrusted services on that hostname, including other ports. Route dispatch rejects reuse against a nested route owned by another plugin. Because sandbox descendants are cross-site for cookie purposes, the grant accepts only `GET` and `HEAD` with `operator.read`; mutations and WebSocket upgrades stay on explicit Gateway-authenticated surfaces. The cookie intentionally cannot use CHIPS: current browsers include a cross-site-ancestor bit in the partition key, so nested opaque sandbox frames would lose access to same-route assets. The cookie requires a secure context and browser permission for cross-site cookies, so gateway-auth external tabs are unavailable on plain-HTTP LAN origins or under full third-party-cookie blocking; use HTTPS/Tailscale Serve or browser-trusted loopback with a compatible cookie policy.
+- The grant prevents Gateway bearer-token disclosure and accidental route/scope reuse; it does not create a security boundary between native plugins. Native plugin code and the UI content it serves remain part of the same trusted in-process plugin boundary.
 - Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, opt into `trusted-operator` scope surface, require an identity-bearing auth mode, and document the explicit `x-openclaw-scopes` header contract.
 - After route matching and authentication, ordinary handlers participate in Gateway root-work admission. A prepared or restarting Gateway returns `503` before invoking the handler. The narrow exception is a manifest-entitled `auth: "gateway"` route that also opts into the route-specific `trusted-operator` surface; it remains reachable so suspension control dispatch cannot be stranded, while ordinary sibling routes from the same plugin remain behind the admission boundary. WebSocket `handleUpgrade` ownership uses the same atomic admission boundary; once the handler accepts a socket, the socket's later lifetime is plugin-owned and is not tracked by this boundary.
 
@@ -109937,6 +110382,7 @@ only for behavior that really belongs to the backend.
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
@@ -110693,6 +111139,7 @@ For an already-running app-server, use WebSocket transport:
 | `loopDetectionPreToolUseRelay`                | `true`                                                 | Install the Codex `PreToolUse` subprocess used only for OpenClaw loop detection and its explicit no-policy marker. Set `false` to reduce per-tool process fan-out. Before-tool plugin hooks and trusted-tool policy still install their required relay.                                                                                                                                         |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
+| `turnAssistantCompletionIdleTimeoutMs`        | `10000`                                                | Quiet window after a final/non-commentary assistant item or pre-tool raw assistant completion arms the assistant-output release while OpenClaw still waits for `turn/completed`. Raising it gives Codex more time to emit `turn/completed` before OpenClaw interrupts and releases the session lane.                                                                                            |
 | `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
 | `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                 |
 | `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                            |
@@ -111301,10 +111748,10 @@ every later turn remains on that connection with native auth and provider
 configuration. Disabled supervision or binding/connection drift fails closed
 rather than switching to the ordinary agent-home harness.
 
-The original CLI or VS Code source remains eligible for both catalogs. The
-canonical branch is a native Codex thread, but its source kind is `appServer`;
-native clients may filter that source kind, so its appearance in Codex Desktop
-is not guaranteed.
+The original CLI, VS Code, Atlas, or ChatGPT source remains eligible for both
+catalogs. The canonical branch is a native Codex thread, but its source kind is
+`appServer`; native clients may filter that source kind, so its appearance in
+Codex Desktop is not guaranteed.
 
 Active sources cannot start a new branch or be archived; an existing supervised
 Chat can still be opened. `notLoaded` means activity is unknown, not idle;
@@ -111444,9 +111891,12 @@ cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
 flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` prompts are sent back to the originating chat, and the
-next queued follow-up message answers that native server request instead of
-being steered as extra context. Other MCP elicitation requests fail closed.
+`request_user_input` prompts are sent back to the originating chat. A single
+non-secret choice uses typed channel buttons when the channel supports them,
+and the Control UI shows non-secret questions as a structured card. The next
+queued follow-up message answers that native server request instead of being
+steered as extra context. Secret questions stay on the warned text-reply path.
+Other MCP elicitation requests fail closed.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).
@@ -111848,6 +112298,7 @@ Keep provider refs and runtime policy separate:
 | Attach the current chat                                    | `/codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]`                    |
 | Resume an existing Codex thread                            | `/codex resume <thread-id>`                                                                           |
 | List or filter Codex threads                               | `/codex threads [filter]`                                                                             |
+| Read or update the bound thread's native goal              | `/codex goal [status\|set <objective>\|pause\|resume\|block\|complete\|clear]`                        |
 | List native Codex plugins                                  | `/codex plugins list`                                                                                 |
 | Enable or disable a configured native Codex plugin         | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Resume a stored Codex CLI session as a paired-node turn    | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
@@ -112050,7 +112501,8 @@ Native execution and control require an owner or an `operator.admin`
 Gateway client: binding or resuming threads, sending or stopping turns,
 changing model, fast-mode, or permission state, compacting or reviewing, and
 detaching a binding. Other authorized senders keep read-only status, help,
-account, model, thread, MCP server, skill, and binding inspection commands.
+account, model, thread, native goal, MCP server, skill, and binding inspection
+commands.
 
 Common forms:
 
@@ -112058,6 +112510,7 @@ Common forms:
   limits, MCP servers, and skills.
 - `/codex models` lists live Codex app-server models.
 - `/codex threads [filter]` lists recent Codex app-server threads.
+- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled; OpenClaw does not own autonomous follow-on turns yet.
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an
   existing Codex thread.
 - `/codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]`
@@ -112184,7 +112637,9 @@ normal user-home state.
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, `update_plan`,
-`tool_call`, `tool_describe`, `tool_search`, and `tool_search_code`. Most
+`get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
+`tool_search`, and `tool_search_code`. Goal operations stay native to Codex,
+so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, and `heartbeat_respond`, are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
@@ -112253,6 +112708,7 @@ Supported `appServer` fields:
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
+| `turnAssistantCompletionIdleTimeoutMs`        | `10000`                                                | Quiet window after a final/non-commentary assistant item or pre-tool raw assistant completion arms the assistant-output release while OpenClaw still waits for `turn/completed`. Raising it gives Codex more time to emit `turn/completed` before OpenClaw interrupts and releases the session lane.                                                                                            |
 | `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
 | `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                                                                                                           |
 | `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                                                                                                            |
@@ -112987,8 +113443,9 @@ read_when:
 ---
 
 Codex supervision is an opt-in capability of the official `codex` plugin. It
-shows non-archived Codex Desktop and CLI source sessions from the Gateway
-computer and opted-in paired computers in the normal sessions sidebar and Chat pane.
+shows non-archived Codex CLI, VS Code, Atlas, and ChatGPT source sessions from
+the Gateway computer and opted-in paired computers in the normal sessions
+sidebar and Chat pane.
 
 The initial release deliberately keeps ownership narrow:
 
@@ -113242,11 +113699,11 @@ the source thread or displaying the pending Chat. Starting a distinct canonical
 harness thread on the first turn lets another Codex process keep owning the
 source without creating competing rollout writers.
 
-The original CLI or VS Code source remains visible to native clients and the
-OpenClaw catalog. The canonical branch is stored as a native Codex thread, but
-its source kind is `appServer`; Codex Desktop or another native client may filter
-that source kind, so the branch itself is not guaranteed to appear in every
-native history view.
+The original CLI, VS Code, Atlas, or ChatGPT source remains visible to native
+clients and the OpenClaw catalog. The canonical branch is stored as a native
+Codex thread, but its source kind is `appServer`; Codex Desktop or another
+native client may filter that source kind, so the branch itself is not guaranteed
+to appear in every native history view.
 
 An active row reported by OpenClaw's App Server cannot start a new branch. Wait
 for the current turn to finish and refresh the catalog. Codex App Server
@@ -116449,8 +116906,9 @@ source and whether the key was present.
 # Section: plugins/llama-cpp.md
 
 ---
-summary: "Install the official llama.cpp provider for local GGUF memory embeddings"
+summary: "Run local GGUF text inference and memory embeddings in OpenClaw with llama.cpp"
 read_when:
+  - You want local text inference without an API key or model server
   - You want memory search embeddings from a local GGUF model
   - You are configuring memorySearch.provider = "local"
   - You need the OpenClaw plugin that owns the node-llama-cpp runtime
@@ -116458,11 +116916,11 @@ title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
 ---
 
-`llama-cpp` is the official external provider plugin for local GGUF
-embeddings. It registers embedding provider id `local` and owns the
-`node-llama-cpp` runtime dependency used by `memorySearch.provider: "local"`.
+`llama-cpp` is the official external provider plugin for in-process local GGUF
+text inference and embeddings. It registers text provider `llama-cpp`,
+embedding provider `local`, and owns the `node-llama-cpp` native runtime.
 
-Install it before using local memory embeddings:
+Install it before using either local inference or local memory embeddings:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -116472,7 +116930,77 @@ The main `openclaw` npm package does not include `node-llama-cpp`. Keeping the
 native dependency in this plugin prevents normal OpenClaw npm updates from
 deleting a manually installed runtime inside the OpenClaw package directory.
 
-## Configuration
+## Local text inference
+
+Choose **Local model (llama.cpp)** during interactive onboarding. OpenClaw asks
+before downloading the default model:
+
+`hf:bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf`
+
+The Qwen3 4B Instruct 2507 Q4_K_M file is about 2.5 GB. Budget roughly 3 GB of
+RAM for model weights, plus context and OpenClaw runtime overhead. The default
+context is automatically sized with an 8,192-token cap so it remains practical
+on 8 GB machines. Configure a larger context only when the machine has enough
+memory.
+
+The onboarding discovery check is read-only. It offers llama.cpp automatically
+only when the default or configured GGUF file is already in the model cache; it
+never downloads during discovery. Ollama and LM Studio remain separate local
+service choices and keep their own discovery flows. Manually choosing llama.cpp
+is the path that prompts for the default model download.
+
+The provider uses the GGUF model's embedded chat template and native
+node-llama-cpp function calling. Text streams token by token. Tool calls return
+to OpenClaw for execution rather than running inside node-llama-cpp.
+
+### Use another GGUF model
+
+Add a model to `models.providers.llama-cpp`. Put a local path or full `hf:` file
+URI in `params.modelPath`:
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      "llama-cpp": {
+        baseUrl: "local://llama-cpp",
+        api: "openai-completions",
+        params: {
+          modelCacheDir: "~/.node-llama-cpp/models",
+        },
+        models: [
+          {
+            id: "my-local-model",
+            name: "My local GGUF",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192,
+            maxTokens: 2048,
+            params: {
+              modelPath: "~/Models/my-model.Q4_K_M.gguf",
+              contextSize: 8192,
+            },
+            compat: { supportsTools: true },
+          },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "llama-cpp/my-local-model" },
+    },
+  },
+}
+```
+
+Inference never downloads a missing model implicitly. For a custom `hf:` URI,
+download the GGUF into `modelCacheDir` first. Discovery uses node-llama-cpp's
+own read-only cache resolver, including repository, branch, and split-file naming.
+
+## Memory embedding configuration
 
 Set `memorySearch.provider` to `local`:
 
@@ -116502,7 +117030,7 @@ to node-llama-cpp's automatic GPU-layer placement. This lets node-llama-cpp fit
 the model and embedding context together while retaining its memory-safety
 checks. With `"auto"`, node-llama-cpp keeps its normal automatic placement.
 
-## Native Runtime
+## Native runtime
 
 Use Node 24 for the smoothest native install path. Source checkouts using
 pnpm may need to approve and rebuild the native dependency:
@@ -116512,7 +117040,7 @@ pnpm approve-builds
 pnpm rebuild node-llama-cpp
 ```
 
-## Runtime diagnostics
+## Memory runtime diagnostics
 
 Run `openclaw memory status --deep` after the provider has loaded to inspect
 the selected backend and build, device names, GPU offloaded layers, requested
@@ -116533,7 +117061,8 @@ with:
 2. Use Node 24 for native installs/updates.
 3. From a pnpm source checkout: `pnpm approve-builds`, then `pnpm rebuild node-llama-cpp`.
 
-For lower-friction local embeddings without the native build step, set
+For local inference without an in-process native dependency, use the Ollama or
+LM Studio provider instead. For lower-friction local embeddings, set
 `memorySearch.provider` to a remote embedding provider such as `lmstudio`,
 `ollama`, `openai`, or `voyage` instead.
 
@@ -117464,6 +117993,8 @@ Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenCl
 | `choiceId`            | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                   |
 | `choiceLabel`         | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                         |
 | `choiceHint`          | No       | `string`                                                              | Short helper text for the picker.                                                                         |
+| `icon`                | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                         |
+| `website`             | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                             |
 | `assistantPriority`   | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                        |
 | `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                         |
 | `deprecatedChoiceIds` | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                  |
@@ -117783,8 +118314,9 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
       "bundledDefaultEnabled": false,
       "paths": [
         {
-          "path": "apiKey",
-          "expected": "string"
+          "path": "routes.*.secret",
+          "expected": "string",
+          "ownerKind": "route"
         }
       ]
     }
@@ -117797,7 +118329,7 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
 | `compatibilityMigrationPaths` | No       | `string[]` | Root-relative config paths that indicate this plugin's setup-time compatibility migrations might apply. Lets generic runtime config reads skip every plugin setup surface when the config never references the plugin.                 |
 | `compatibilityRuntimePaths`   | No       | `string[]` | Root-relative compatibility paths this plugin can service during runtime before plugin code fully activates. Use this for legacy surfaces that should narrow bundled candidate sets without importing every compatible plugin runtime. |
 | `dangerousFlags`              | No       | `object[]` | Config literals that `openclaw doctor` should flag as insecure or dangerous when enabled. See below.                                                                                                                                   |
-| `secretInputs`                | No       | `object`   | Config paths under `plugins.entries.<id>.config` that the SecretRef migration/audit target registry should treat as secret-shaped strings. See below.                                                                                  |
+| `secretInputs`                | No       | `object`   | Config paths under `plugins.entries.<id>.config` for SecretRef migration, audit, startup materialization, and optional runtime owner isolation. See below.                                                                             |
 
 Each `dangerousFlags` entry supports:
 
@@ -117808,10 +118340,10 @@ Each `dangerousFlags` entry supports:
 
 `secretInputs` supports:
 
-| Field                   | Required | Type       | What it means                                                                                                                                                                                                   |
-| ----------------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config. |
-| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards) and optional `expected` (currently only `"string"`).                            |
+| Field                   | Required | Type       | What it means                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
+| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
 ## mediaUnderstandingProviderMetadata reference
 
@@ -118330,7 +118862,7 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 
 Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth probe before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
 
-`openclaw.channel.configuredState` follows the same shape for cheap env-only configured checks:
+`openclaw.channel.configuredState` supports cheap configured checks. Prefer declarative env metadata when environment variables are sufficient:
 
 ```json
 {
@@ -118338,15 +118870,16 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
     "channel": {
       "id": "telegram",
       "configuredState": {
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        "env": {
+          "allOf": ["TELEGRAM_BOT_TOKEN"]
+        }
       }
     }
   }
 }
 ```
 
-Use it when a channel can answer configured-state from env or other tiny non-runtime inputs. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 
@@ -118639,28 +119172,36 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Every memory is owned by one agent. Recall, duplicate detection, capture,
+listing, raw queries, and deletion all enforce that owner before returning or
+mutating rows. An agent with `memorySearch.enabled: false` (in `agents.list[]`
+or via `agents.defaults`) also gets none of the `memory_recall`, `memory_store`,
+or `memory_forget` tools and does not participate in automatic recall or
+capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
 (not only when it owns the active memory slot):
 
 ```bash
-openclaw ltm list [--limit <n>] [--order-by-created-at]
-openclaw ltm search <query> [--limit <n>]
-openclaw ltm stats
+openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
+openclaw ltm search <query> [--agent <id>] [--limit <n>]
+openclaw ltm stats [--agent <id>]
 ```
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 
 ```bash
-openclaw ltm query --cols id,text,createdAt --limit 20
+openclaw ltm query --agent research --cols id,text,createdAt --limit 20
 openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 ```
 
 | Flag                              | Default                                 | Notes                                                                                                                                     |
 | --------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--agent <id>`                    | configured default agent                | Selects the private agent namespace. Available on `list`, `search`, `query`, and `stats`.                                                 |
 | `--cols <columns>`                | `id,text,importance,category,createdAt` | Comma-separated column allowlist.                                                                                                         |
-| `--filter <condition>`            | none                                    | SQL-style WHERE clause. Max 200 chars; only alphanumerics, `_-`, whitespace, and `='"<>!.,()%*` are allowed.                              |
+| `--filter <condition>`            | none                                    | One comparison over an output column, such as `category = 'preference'` or `importance >= 0.8`. String values must be quoted.             |
 | `--limit <n>`                     | `10`                                    | Positive integer.                                                                                                                         |
 | `--order-by <column>:<asc\|desc>` | none                                    | Sorted in memory after the filter runs; the sort column is auto-added to the projection and stripped from output if it was not requested. |
 
@@ -118694,6 +119235,19 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
   },
 }
 ```
+
+The plugin keeps one LanceDB table and stores a normalized agent owner on each
+row. This is a storage boundary, not a post-search filter: agent ownership is
+applied before vector ranking and is included in list, query, count, and delete
+predicates. `ltm query --filter` accepts one validated comparison over the
+public output columns. The store builds that comparison separately from the
+mandatory owner predicate, so a filter cannot widen the query to another
+agent.
+
+Databases created before per-agent ownership have no reliable row provenance.
+On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
+configured default agent. Runtime access fails closed until that migration has
+completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends
 (e.g. S3-compatible object storage) and supports `${ENV_VAR}` expansion:
@@ -119410,7 +119964,16 @@ type MessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | { type: "url"; url: string }
-  | { type: "web-app"; url: string };
+  | {
+      type: "web-app";
+      url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
+    };
 
 type MessagePresentationButton = {
   label: string;
@@ -119460,7 +120023,11 @@ Button semantics:
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
 - `action.type: "url"` opens a normal link.
-- `action.type: "web-app"` launches a channel-native web app.
+- `action.type: "web-app"` launches a channel-native web app. Set `url` for a
+  URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
+  mechanics are owned by the channel; at least one is required. When both are
+  present, a channel can prefer its native hosted-widget launch and use the URL
+  where that mechanism is unavailable.
 - `value` is the legacy opaque callback value. New controls should use `action`
   so channel plugins can map commands and callbacks without guessing from text.
 - `url`, `webApp`, and `web_app` remain accepted as deprecated boundary inputs.
@@ -119833,9 +120400,10 @@ keeping opaque callback data private:
 - **`approval`-typed actions** render label-only. Approval IDs and decisions are
   transport data and are not exposed through generic scalar helpers or fallback
   text.
-- **`url` / `web-app` actions** and deprecated **`url` / `webApp` / `web_app`**
-  inputs render the URL text alongside the button label, since the URL is
-  user-facing.
+- **`url` actions**, URL-backed **`web-app` actions**, and deprecated **`url` /
+  `webApp` / `web_app`** inputs render the URL text alongside the button label,
+  since the URL is user-facing. Hosted-widget-only actions render label-only on
+  channels without a native widget launch.
 - **Select options** render as label-only. The underlying option value is not
   exposed in fallback text.
 
@@ -120240,6 +120808,10 @@ variables or resolve OpenClaw config secrets.
   value.
 - The plugin invokes `op` once per cache miss. It does not retry rate limits or
   other failures.
+- Each `op` call runs with a minimal environment that disables 1Password
+  desktop-app integration (`OP_LOAD_DESKTOP_APP_SETTINGS=false`,
+  `OP_BIOMETRIC_UNLOCK_ENABLED=false`), so a 1Password app installed on the
+  Gateway host never triggers biometric or macOS permission dialogs.
 
 Give the service account read access only to the vaults and items registered in
 the plugin config.
@@ -120637,7 +121209,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-71 plugins
+72 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -120649,6 +121221,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[arcee](/plugins/reference/arcee)** (`@openclaw/arcee-provider`) - npm; ClawHub: `clawhub:@openclaw/arcee-provider`. Adds Arcee model provider support to OpenClaw.
 
+- **[baseten](/plugins/reference/baseten)** (`@openclaw/baseten-provider`) - npm; ClawHub: `clawhub:@openclaw/baseten-provider`. OpenClaw Baseten provider plugin.
+
 - **[brave](/plugins/reference/brave)** (`@openclaw/brave-plugin`) - npm; ClawHub. OpenClaw Brave Search provider plugin for web search.
 
 - **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - npm; ClawHub: `clawhub:@openclaw/cerebras-provider`. Adds Cerebras model provider support to OpenClaw.
@@ -120659,7 +121233,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
-- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness, model provider, and native session catalog.
+- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness and native session catalog.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
@@ -120707,7 +121281,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
 
-- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Local GGUF embeddings through node-llama-cpp.
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Local GGUF text inference and embeddings through node-llama-cpp.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
@@ -120741,7 +121315,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[qqbot](/plugins/reference/qqbot)** (`@openclaw/qqbot`) - npm; ClawHub. OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
-- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
+- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 
@@ -121014,7 +121588,7 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 140
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 141
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -121458,6 +122032,39 @@ yourself.
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
 
+### Terminal tool outcomes
+
+`AgentHarnessAttemptParams.observeToolTerminal` is the host-owned terminal
+outcome accumulator. A harness that executes OpenClaw dynamic tools or native
+tools must call it when each tool reaches one terminal outcome, before the
+attempt result is finalized. Harnesses that do not execute tools do not need to
+call it.
+
+Report facts from the execution boundary:
+
+- Pass the protocol call id when one exists, the canonical tool name, and the
+  arguments that actually reached the tool after preparation or hook rewrites.
+- Set `executionStarted: false` when validation, approval, or another guard
+  stopped the call before the tool implementation began. Once dispatch may
+  have happened, report `true` conservatively.
+- Report `outcome: "success"` or `outcome: "failure"`. Include the structured
+  failure fields available from the runtime instead of inferring failure from
+  display text.
+- Use `nativeMutation` only for native tools that do not use an OpenClaw tool
+  definition. Supply protocol-owned mutation and replay facts there; do not
+  copy OpenClaw's mutation classifier into the harness.
+
+The callback returns the canonical resolution for that call. Carry its
+`lastToolError` into `AgentHarnessAttemptResult` and use its execution,
+arguments, and side-effect facts in the harness projection instead of deriving
+parallel state. The host keeps an unresolved mutating failure across unrelated
+successful tools and clears it only after the matching action succeeds.
+
+The callback remains optional for source compatibility with older experimental
+harnesses. Optional does not mean ignorable for a harness that executes tools:
+without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
+across later tool calls, including quiet heartbeat completion.
+
 ## Current limitations
 
 - The public import path is generic, but some attempt/result type aliases
@@ -121680,8 +122287,10 @@ Most channels should leave activation after sender and command gates. Public
 chat surfaces that must quiet non-mentioned traffic before sender allowlist
 noise can opt into `activation.order: "before-sender"` when text-command
 bypass is disabled. Channels with implicit activation, such as replies in bot
-threads, can pass `activation.allowedImplicitMentionKinds`; the projected
-`activationAccess.shouldBypassMention` then reports when command or implicit
+threads, resolve `channels.defaults.implicitMentions` plus channel and account
+overrides with `resolveChannelImplicitMentions(...)`, then pass the result as
+`activation.implicitMentions`. The projected
+`activationAccess.shouldBypassMention` reports when command or implicit
 activation bypassed an explicit mention.
 
 ## Redaction
@@ -121739,10 +122348,14 @@ Channel plugins expose outbound message behavior from
 `openclaw/plugin-sdk/channel-inbound` for receive/context/dispatch
 orchestration.
 
-Core owns queueing, durability, generic retry policy, hooks, receipts, and
-the shared `message` tool. The plugin owns native send/edit/delete calls,
-target normalization, platform threading, selected quotes, notification
-flags, account state, and platform-specific side effects.
+Core owns queueing, durability, the durable **ingress drain**
+(`createChannelIngressDrain` / `openChannelIngressDrain`), generic retry
+policy, turn-adoption lifecycle (`turnAdoptionLifecycle` /
+`bindIngressLifecycleToReplyOptions`), hooks, receipts, and the shared
+`message` tool. The plugin owns native send/edit/delete calls, target
+normalization, platform threading, selected quotes, notification flags,
+account state, accept-side enqueue, lane keys, non-retryable predicates,
+optional supersede authorization, and platform-specific side effects.
 
 ## Adapter
 
@@ -122372,6 +122985,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
 const wasMentioned = matchesMentionWithExplicit({
   text,
@@ -122393,12 +123007,18 @@ const facts = {
   ],
 };
 
+const implicitMentions = resolveChannelImplicitMentions({
+  cfg,
+  channel: channelId,
+  accountId,
+});
+
 const decision = resolveInboundMentionDecision({
   facts,
   policy: {
     isGroup,
     requireMention,
-    allowedImplicitMentionKinds: requireExplicitMention ? [] : ["reply_to_bot", "quoted_bot"],
+    implicitMentions,
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,
@@ -123598,27 +124218,23 @@ SDK.
 
   <Step title="Migrate channel route helpers">
     New channel route code uses `openclaw/plugin-sdk/channel-route`. The older
-    route-key and comparable-target names remain as compatibility aliases:
+    route-key names remain as compatibility aliases:
 
     | Old helper | Modern helper |
     | --- | --- |
     | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
     | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
-    | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
-    | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
-    | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
 
     The modern route helpers normalize `{ channel, to, accountId, threadId }`
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget`, the
-    parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`,
-    `resolveRouteTargetForLoadedChannel`), or
-    `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route` -
-    those are deprecated and remain only for older plugins. New channel
-    plugins should use `messaging.targetResolver.resolveTarget(...)` for
-    target-id normalization and directory-miss fallback,
+    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
+    `resolveChannelRouteTargetWithParser(...)` from
+    `plugin-sdk/channel-route` - those are deprecated and remain only for older
+    plugins. New channel plugins should use
+    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native
     session and thread identity.
@@ -123765,8 +124381,9 @@ SDK.
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
+  | `plugin-sdk/speech-settings` | Speech settings | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, the transport-independent session harness, audio-energy/speech-onset gates, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
@@ -124554,6 +125171,27 @@ advertised node command.
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
 
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
+
 #### Requester-scoped MCP connections
 
 Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
@@ -124671,6 +125309,30 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+For a gateway-protected external tab, register the descriptor `path` under a
+same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
+short-lived, HttpOnly grant scoped to that plugin and route root so the
+sandboxed frame can load without copying the Gateway bearer token into its URL
+or JavaScript. The authenticated parent renews the grant while the external tab
+is active and before mounting it after navigation or browser resume. It also
+probes the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie fail closed with an unavailable panel.
+The frame grant accepts only `GET` and `HEAD` and always carries
+`operator.read`; `requiredScopes` controls tab visibility but never widens the
+cookie grant. Mutations remain on explicit Gateway-authenticated parent or
+bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+browser-trusted loopback origin; plain HTTP on a LAN host shows the
+secure-context error instead of mounting a panel that cannot authenticate.
+Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
+As with all native plugin surfaces, the frame remains inside the installed
+plugin trust boundary; OpenClaw does not treat installed plugins as mutually
+isolated browser security principals.
+Cookie grants use the browser's hostname boundary, not its port boundary. Do
+not cohost mutually untrusted services on the Gateway hostname, even on other
+ports.
+Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
+request or require this Gateway grant.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
@@ -125551,7 +126213,7 @@ catalog, API-key auth, and dynamic model resolution.
     | Family | What it wires in | Bundled examples |
     | --- | --- | --- |
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path | `google`, `google-gemini-cli` |
-    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo-auto/balanced` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level | `moonshot` |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path | `minimax`, `minimax-portal` |
     | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management | `openai` |
@@ -126308,6 +126970,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `runEmbeddedPiAgent(...)` remains as a deprecated compatibility alias for existing plugins. New code should use `runEmbeddedAgent(...)`.
 
+    `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
+
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
@@ -126388,6 +127052,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       purpose: "my-plugin.summary",
       maxTokens: 512,
       temperature: 0.2,
+      reasoning: "high",
     });
     ```
 
@@ -126429,6 +127094,12 @@ two-party event loops that do not go through the shared inbound reply runner.
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    Set `reasoning` to request a reasoning effort for the selected model. The
+    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
+    provider and model before dispatching the completion. `adaptive` becomes
+    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
@@ -126871,16 +127542,50 @@ two-party event loops that do not go through the shared inbound reply runner.
     await store.deleteIf?.("key-1", (current) => current.value === "hello");
     await store.consume("key-1");
     await store.clear();
+
+    const blobs = api.runtime.state.openBlobStore<MyBlobMetadata>({
+      namespace: "rendered-artifacts",
+      maxEntries: 100,
+      maxBytesPerEntry: 4 * 1024 * 1024,
+      maxBytesPerNamespace: 64 * 1024 * 1024,
+      defaultTtlMs: 15 * 60_000,
+    });
+    await blobs.register(
+      "artifact-1",
+      new TextEncoder().encode("binary or text payload"),
+      { contentType: "text/plain" },
+    );
+    const blob = await blobs.lookup("artifact-1");
+
+    await api.runtime.state.withLease(
+      {
+        namespace: "my-feature",
+        key: "writer",
+        database: { scope: "agent", agentId },
+        leaseMs: 5 * 60_000,
+        waitMs: 30_000,
+      },
+      async ({ signal, assertOwned }) => {
+        await runExternalWriter({ signal });
+        assertOwned();
+      },
+    );
     ```
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
     `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 
+    `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
+
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
+    `withLease(...)` serializes cooperative plugin work across OpenClaw processes. Choose `database: { scope: "shared" }` for one global owner or `{ scope: "agent", agentId }` for independent per-agent ownership. Forward the callback's `AbortSignal` into every fallible operation. `assertOwned()` is a point-in-time checkpoint before starting another important step; the host also verifies ownership after the callback. Lease loss or caller cancellation aborts the signal. Acquisition waits and heartbeats happen outside short synchronous SQLite transactions; plugins never receive database paths or handles. This is cooperative cancellation, not a fencing token or authorization for unfenced external writes.
+
+    `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
+
     <Warning>
-    `openKeyedStore`, `openSyncKeyedStore`, and `openChannelIngressQueue` are available only to bundled plugins and trusted official plugin installations in this release.
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `withLease`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release.
     </Warning>
 
   </Accordion>
@@ -127668,7 +128373,8 @@ longer package exports: `agent-runtime-test-contracts`,
 `plugin-state-test-runtime`, `plugin-test-api`, `plugin-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
 `reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
-`test-node-mocks`, and `testing`. The private bundled helper surfaces
+`test-live`, `test-live-auth`, `test-media-generation`,
+`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surfaces
 `ssrf-runtime-internal` and `codex-native-task-runtime` are also repo-local
 only.
 
@@ -127716,7 +128422,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/telegram-command-config` | Deprecated Telegram command-name/description normalization and duplicate/conflict checks; use plugin-local command config handling in new plugin code |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
+    | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver, implicit-mention policy resolver, and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
     | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus reply pipeline options, receipts, live preview/streaming, lifecycle helpers, outbound identity, payload planning, durable sends, and message-send context helpers. See [Channel outbound API](/plugins/sdk-channel-outbound). |
     | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
@@ -127782,7 +128488,7 @@ and pairing-path families.
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
-    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `selectPreferredLocalModelId`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
     | `plugin-sdk/provider-catalog-live-runtime` | Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
@@ -127844,7 +128550,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
-    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
@@ -127886,7 +128592,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma and WAL maintenance setup for plugin-owned databases |
+    | `plugin-sdk/plugin-state-runtime` | Plugin-scoped keyed-state, BLOB, and cooperative SQLite lease contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Lease callbacks receive an abort signal and typed errors distinguish timeout, cancellation, lost ownership, invalid input, and storage failure |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -127905,7 +128611,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
-    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
+    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
@@ -127946,6 +128652,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/html-entity-runtime` | Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
     | `plugin-sdk/text-utility-runtime` | Low-level text and path helpers, including five-entity HTML escaping |
+    | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |
@@ -127964,9 +128671,10 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, quote-aware HTML tag tokenization, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
+    | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-bootstrap-context` | Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
-    | `plugin-sdk/realtime-voice` | Realtime voice provider types, registry helpers, and shared realtime voice behavior helpers, including output activity tracking |
+    | `plugin-sdk/realtime-voice` | Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness and output activity tracking |
     | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Music generation provider/request/result types |
@@ -128085,6 +128793,8 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { withEnv, withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-understanding";
 import {
   bundledPluginRoot,
   createCliRuntimeCapture,
@@ -128149,7 +128859,10 @@ imports of that alias.
 | `createTestRegistry`                                 | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`               |
 | `createEmptyPluginRegistry`                          | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                |
 | `setActivePluginRegistry`                            | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`   |
-| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                                                     |
+| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-media-understanding`                                     |
+| `isLiveTestEnabled`                                  | Gate opt-in live provider tests. Import from `plugin-sdk/test-live`                                                                      |
+| `collectProviderApiKeys`                             | Discover credentials for live provider tests. Import from `plugin-sdk/test-live-auth`                                                    |
+| `parseProviderModelMap`                              | Parse music/video live-test model overrides. Import from `plugin-sdk/test-media-generation`                                              |
 | `withServer`                                         | Run tests against a disposable local HTTP server. Import from `plugin-sdk/test-env`                                                      |
 | `createMockIncomingRequest`                          | Build a minimal incoming HTTP request object. Import from `plugin-sdk/test-env`                                                          |
 | `withFetchPreconnect`                                | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                       |
@@ -129348,24 +130061,24 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
 
 Top-level keys under `plugins.entries.voice-call.config` not shown above:
 
-| Key                             | Default      | Notes                                                                                  |
-| ------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
-| `enabled`                       | `false`      | Master on/off switch.                                                                  |
-| `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](#inbound-calls). |
-| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                      |
-| `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                     |
-| `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](#stale-call-reaper). `0` disables it.                          |
-| `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                   |
-| `transcriptTimeoutMs`           | `180000`     | Max wait for a caller transcript before giving up on a turn.                           |
-| `ringTimeoutMs`                 | `30000`      | Ring timeout for outbound calls.                                                       |
-| `maxConcurrentCalls`            | `1`          | Outbound calls beyond this limit are rejected.                                         |
-| `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                           |
-| `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                        |
-| `store`                         | unset        | Overrides the default `~/.openclaw/voice-calls` call-log path.                         |
-| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                |
-| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                      |
-| `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                            |
-| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                          |
+| Key                             | Default      | Notes                                                                                              |
+| ------------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
+| `enabled`                       | `false`      | Master on/off switch.                                                                              |
+| `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](#inbound-calls).             |
+| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                  |
+| `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                 |
+| `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](#stale-call-reaper). `0` disables it.                                      |
+| `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                               |
+| `transcriptTimeoutMs`           | `180000`     | Max wait for a caller transcript before giving up on a turn.                                       |
+| `ringTimeoutMs`                 | `30000`      | Ring timeout for outbound calls.                                                                   |
+| `maxConcurrentCalls`            | `1`          | Outbound calls beyond this limit are rejected.                                                     |
+| `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                                       |
+| `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                    |
+| `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`). |
+| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                            |
+| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                  |
+| `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                        |
+| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                      |
 
 Twilio defaults to its US1 REST endpoint. To process calls in a supported
 non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
@@ -130229,12 +130942,12 @@ Route fields:
 
 `secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec", provider: "default", id: "..." }`.
 
-Every configured route registers at startup regardless of whether its secret
-currently resolves. An unresolvable secret does not disable or skip the
-route - requests to it fail authentication (`401`) until the secret can be
-resolved. SecretRef values are re-resolved on every request, so rotating the
-underlying secret (env var, file, or exec output) takes effect without a
-Gateway restart.
+SecretRefs resolve into the Gateway's startup config snapshot. When one route's
+secret cannot resolve, the Gateway keeps running and that exact route stays
+registered but cold: requests receive a generic authentication failure (`401`).
+Other routes remain available. Fix the SecretRef source, then reload or restart
+the Gateway to activate the new snapshot. SecretRef values are never resolved
+on the public request path.
 
 ## Security model
 
@@ -131177,6 +131890,34 @@ contracts: `speechProviders`
 
 
 
+# Section: plugins/reference/baseten.md
+
+---
+summary: "OpenClaw Baseten provider plugin."
+read_when:
+  - You are installing, configuring, or auditing the baseten plugin
+title: "Baseten plugin"
+---
+
+# Baseten plugin
+
+OpenClaw Baseten provider plugin.
+
+## Distribution
+
+- Package: `@openclaw/baseten-provider`
+- Install route: npm; ClawHub: `clawhub:@openclaw/baseten-provider`
+
+## Surface
+
+providers: `baseten`
+
+## Related docs
+
+- [baseten](/providers/baseten)
+
+
+
 # Section: plugins/reference/bonjour.md
 
 ---
@@ -131448,7 +132189,7 @@ providers: `cloudflare-ai-gateway`
 # Section: plugins/reference/codex.md
 
 ---
-summary: "Codex app-server harness, model provider, and native session catalog."
+summary: "Codex app-server harness and native session catalog."
 read_when:
   - You are installing, configuring, or auditing the codex plugin
 title: "Codex plugin"
@@ -131456,7 +132197,7 @@ title: "Codex plugin"
 
 # Codex plugin
 
-Codex app-server harness, model provider, and native session catalog.
+Codex app-server harness and native session catalog.
 
 ## Distribution
 
@@ -131465,7 +132206,7 @@ Codex app-server harness, model provider, and native session catalog.
 
 ## Surface
 
-providers: `codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
+contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 
@@ -131825,7 +132566,7 @@ OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: `discord`; contracts: `transcriptSourceProviders`; skills
+channels: `discord`; contracts: `tools`, `transcriptSourceProviders`; skills
 
 ## Related docs
 
@@ -132580,7 +133321,7 @@ providers: `litellm`; contracts: `imageGenerationProviders`
 # Section: plugins/reference/llama-cpp.md
 
 ---
-summary: "Local GGUF embeddings through node-llama-cpp."
+summary: "Local GGUF text inference and embeddings through node-llama-cpp."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
 title: "Llama Cpp plugin"
@@ -132588,7 +133329,7 @@ title: "Llama Cpp plugin"
 
 # Llama Cpp plugin
 
-Local GGUF embeddings through node-llama-cpp.
+Local GGUF text inference and embeddings through node-llama-cpp.
 
 ## Distribution
 
@@ -132597,7 +133338,22 @@ Local GGUF embeddings through node-llama-cpp.
 
 ## Surface
 
-contracts: `embeddingProviders`
+providers: `llama-cpp`; contracts: `embeddingProviders`
+
+<!-- openclaw-plugin-reference:manual-start -->
+
+## Default text model
+
+During interactive setup, OpenClaw offers Gemma 4 E4B IT Q4_K_M as an
+approximately 5.0 GB bundled download. The offer requires at least 16 GiB of
+total RAM. Existing cached models are still detected on smaller machines.
+
+To use another model, set `params.modelPath` to any custom GGUF. Custom models
+are not subject to the bundled-download RAM requirement. On machines below the
+requirement, you can also run a smaller model through Ollama or LM Studio, or
+choose a cloud provider.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 
@@ -133851,7 +134607,7 @@ channels: `qqbot`; contracts: `tools`; skills
 # Section: plugins/reference/qwen.md
 
 ---
-summary: "Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw."
+summary: "Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the qwen plugin
 title: "Qwen plugin"
@@ -133859,7 +134615,7 @@ title: "Qwen plugin"
 
 # Qwen plugin
 
-Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
+Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
 
 ## Distribution
 
@@ -133868,12 +134624,11 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CL
 
 ## Surface
 
-providers: `qwen`, `qwencloud`, `modelstudio`, `dashscope`, `qwen-oauth`, `qwen-portal`, `qwen-cli`, `qwen-token-plan`, `bailian-token-plan`; contracts: `mediaUnderstandingProviders`, `videoGenerationProviders`
+providers: `qwen`, `qwencloud`, `modelstudio`, `dashscope`, `qwen-token-plan`, `bailian-token-plan`; contracts: `mediaUnderstandingProviders`, `videoGenerationProviders`
 
 ## Related docs
 
 - [qwen](/providers/qwen)
-- [qwen-oauth](/providers/qwen-oauth)
 
 
 
@@ -135791,7 +136546,7 @@ openclaw gateway restart
   </Tab>
 </Tabs>
 
-## Built-in catalog
+## Direct Arcee catalog
 
 | Model ref                      | Name                   | Input | Context | Max output | Cost (in/out per 1M) | Tools | Notes                                     |
 | ------------------------------ | ---------------------- | ----- | ------- | ---------- | -------------------- | ----- | ----------------------------------------- |
@@ -135802,6 +136557,10 @@ openclaw gateway restart
 <Tip>
 The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 </Tip>
+
+## OpenRouter catalog
+
+OpenRouter onboarding exposes `arcee/trinity-large-preview` and `arcee/trinity-large-thinking`. OpenClaw keeps those provider-qualified model refs in config and sends OpenRouter's canonical `arcee-ai/*` runtime ids. Trinity Mini is no longer served by OpenRouter; use the direct Arcee API for that model.
 
 ## Supported features
 
@@ -135820,8 +136579,9 @@ The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
   </Accordion>
 
   <Accordion title="OpenRouter routing">
-    When using Arcee models via OpenRouter, the same `arcee/*` model refs apply.
-    OpenClaw routes transparently based on your auth choice. See the
+    OpenRouter uses the same `arcee/trinity-large-thinking` OpenClaw model ref.
+    OpenClaw routes it with the canonical `arcee-ai/trinity-large-thinking`
+    OpenRouter runtime id. See the
     [OpenRouter provider docs](/providers/openrouter) for OpenRouter-specific
     configuration details.
   </Accordion>
@@ -135970,6 +136730,187 @@ or explicit config for endpoint routing.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     Common issues and debugging steps.
+  </Card>
+</CardGroup>
+
+
+
+# Section: providers/baseten.md
+
+---
+summary: "Baseten setup for Inkling and hosted Model APIs"
+title: "Baseten"
+read_when:
+  - You want to run Thinking Machines Lab's Inkling in OpenClaw
+  - You want one OpenAI-compatible API for Baseten's hosted models
+---
+
+[Baseten Model APIs](https://docs.baseten.co/inference/model-apis/overview) provide hosted, OpenAI-compatible access to frontier models. The official external plugin uses authenticated discovery, so OpenClaw follows the complete model set enabled for your Baseten account. Its offline fallback contains every Model API available when this OpenClaw release was built.
+
+| Property        | Value                                                    |
+| --------------- | -------------------------------------------------------- |
+| Provider id     | `baseten`                                                |
+| Plugin          | official external package (`@openclaw/baseten-provider`) |
+| Auth env var    | `BASETEN_API_KEY`                                        |
+| Onboarding flag | `--auth-choice baseten-api-key`                          |
+| Direct CLI flag | `--baseten-api-key <key>`                                |
+| API             | OpenAI-compatible (`openai-completions`)                 |
+| Base URL        | `https://inference.baseten.co/v1`                        |
+| Default model   | `baseten/thinkingmachines/inkling`                       |
+
+## Install plugin
+
+```bash
+openclaw plugins install @openclaw/baseten-provider
+openclaw gateway restart
+```
+
+## Getting started
+
+<Steps>
+  <Step title="Create a Baseten account and API key">
+    Baseten's Basic plan has no monthly platform fee; Model API calls are usage-priced. Create a key in [Baseten API key settings](https://app.baseten.co/settings/api_keys) and check current rates on the [pricing page](https://www.baseten.co/pricing).
+  </Step>
+  <Step title="Run onboarding">
+    <CodeGroup>
+
+```bash Onboarding
+openclaw onboard --auth-choice baseten-api-key
+```
+
+```bash Direct flag
+openclaw onboard --non-interactive \
+  --auth-choice baseten-api-key \
+  --baseten-api-key "$BASETEN_API_KEY"
+```
+
+```bash Env only
+export BASETEN_API_KEY=...
+```
+
+    </CodeGroup>
+
+  </Step>
+  <Step title="Verify the live catalog">
+    ```bash
+    openclaw models list --provider baseten
+    ```
+
+    With usable auth, the plugin requests `GET /v1/models` and lists every model returned for the account. Without auth, it stays offline and uses the bundled fallback.
+
+  </Step>
+</Steps>
+
+## Inkling
+
+[Thinking Machines Lab's Inkling](https://thinkingmachines.ai/news/introducing-inkling/) is the default model. In OpenClaw it supports text and image input, tool calling, structured tool schemas, configurable reasoning effort, a 1.048M-token context window, and up to 32k output tokens:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "baseten/thinkingmachines/inkling" },
+    },
+  },
+}
+```
+
+Use `/model baseten/thinkingmachines/inkling` to switch an existing chat.
+
+## Bundled fallback catalog
+
+The authenticated live catalog is authoritative. These rows keep setup and model selection useful before discovery succeeds:
+
+| Model ref                                          | Input       | Context | Max output |
+| -------------------------------------------------- | ----------- | ------: | ---------: |
+| `baseten/deepseek-ai/DeepSeek-V4-Pro`              | text        |    262k |       262k |
+| `baseten/zai-org/GLM-4.7`                          | text        |    200k |       200k |
+| `baseten/zai-org/GLM-5`                            | text        |    202k |       202k |
+| `baseten/zai-org/GLM-5.1`                          | text        |    202k |       202k |
+| `baseten/zai-org/GLM-5.2`                          | text        |    202k |       202k |
+| `baseten/thinkingmachines/inkling`                 | text, image |  1.048M |        32k |
+| `baseten/moonshotai/Kimi-K2.5`                     | text, image |    262k |       262k |
+| `baseten/moonshotai/Kimi-K2.6`                     | text, image |    262k |       262k |
+| `baseten/moonshotai/Kimi-K2.7-Code`                | text, image |    262k |       262k |
+| `baseten/nvidia/Nemotron-120B-A12B`                | text        |    202k |       202k |
+| `baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B` | text        |    202k |       202k |
+| `baseten/openai/gpt-oss-120b`                      | text        |    128k |       128k |
+
+All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`. Baseten's opt-in GLM, Kimi, and Nemotron models default to thinking off; most expose a binary off/on control, while GLM 5.2 exposes off, high, and max. OpenClaw sends these choices through Baseten's `chat_template_args.enable_thinking` control and, for GLM 5.2, the validated top-level `reasoning_effort` parameter.
+
+<Note>
+Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API while retaining model-specific OpenClaw transport policy.
+</Note>
+
+## Manual config
+
+Most setups only need the API key. To pin the provider explicitly:
+
+```json5
+{
+  env: { BASETEN_API_KEY: "..." },
+  agents: {
+    defaults: {
+      model: { primary: "baseten/thinkingmachines/inkling" },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      baseten: {
+        baseUrl: "https://inference.baseten.co/v1",
+        apiKey: "${BASETEN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "thinkingmachines/inkling",
+            name: "Inkling",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1048000,
+            maxTokens: 32000,
+            compat: {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsUsageInStreaming: true,
+              supportsStrictMode: true,
+              supportsTools: true,
+              supportsReasoningEffort: true,
+              supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+              reasoningEffortMap: {
+                off: "none",
+                none: "none",
+                adaptive: "xhigh",
+                max: "xhigh",
+              },
+              maxTokensField: "max_tokens",
+            },
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+<Note>
+If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process. A key exported only in an interactive shell is not visible to an already-running managed service.
+</Note>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Thinking modes" href="/tools/thinking" icon="brain">
+    Select OpenClaw reasoning effort levels.
+  </Card>
+  <Card title="Models CLI" href="/cli/models" icon="terminal">
+    List, inspect, and select discovered models.
+  </Card>
+  <Card title="Models FAQ" href="/help/faq-models" icon="circle-question">
+    Auth profiles and model-selection troubleshooting.
   </Card>
 </CardGroup>
 
@@ -136261,7 +137202,7 @@ Choose your preferred auth method and follow the setup steps.
                 auth: "aws-sdk",
                 models: [
                   {
-                    id: "us.anthropic.claude-opus-4-6-v1:0",
+                    id: "us.anthropic.claude-opus-4-6-v1",
                     name: "Claude Opus 4.6 (Bedrock)",
                     reasoning: true,
                     input: ["text", "image"],
@@ -136275,7 +137216,7 @@ Choose your preferred auth method and follow the setup steps.
           },
           agents: {
             defaults: {
-              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0" },
+              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
             },
           },
         }
@@ -136472,8 +137413,8 @@ openclaw models list
     first in `openclaw models list` since they generally offer better capacity
     and automatic failover.
 
-    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1:0` (regional)
-    or `anthropic.claude-opus-4-6-v1:0` (global). If the backing model is already
+    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1` (regional)
+    or `anthropic.claude-opus-4-6-v1` (global). If the backing model is already
     in the discovery results, the profile inherits its full capability set;
     otherwise safe defaults apply.
 
@@ -136703,7 +137644,7 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static four-model catalog (no live discovery).
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static two-model catalog (no live discovery).
 
 | Property        | Value                                                     |
 | --------------- | --------------------------------------------------------- |
@@ -136754,7 +137695,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    Lists all four static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    Lists both static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -136770,18 +137711,12 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-All four models share a 128k context window and 8,192 max output tokens.
+Both models share a 128k context window and 8,192 max output tokens.
 
-| Model ref                                 | Name                 | Reasoning | Notes                                  |
-| ----------------------------------------- | -------------------- | --------- | -------------------------------------- |
-| `cerebras/zai-glm-4.7`                    | Z.ai GLM 4.7         | yes       | Default model; preview reasoning model |
-| `cerebras/gpt-oss-120b`                   | GPT OSS 120B         | yes       | Production reasoning model             |
-| `cerebras/qwen-3-235b-a22b-instruct-2507` | Qwen 3 235B Instruct | no        | Preview non-reasoning model            |
-| `cerebras/llama3.1-8b`                    | Llama 3.1 8B         | no        | Production speed-focused model         |
-
-<Warning>
-Cerebras marks `zai-glm-4.7` and `qwen-3-235b-a22b-instruct-2507` as preview models, and `llama3.1-8b` plus `qwen-3-235b-a22b-instruct-2507` are documented for deprecation on May 27, 2026. Check Cerebras' [supported-models page](https://inference-docs.cerebras.ai/models/overview) before relying on them for production workloads.
-</Warning>
+| Model ref               | Name         | Reasoning | Notes                                  |
+| ----------------------- | ------------ | --------- | -------------------------------------- |
+| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Default model; preview reasoning model |
+| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model             |
 
 ## Manual config
 
@@ -136870,7 +137805,7 @@ openclaw gateway restart
 
 ## Getting started
 
-Both paths set the default model to `chutes/zai-org/GLM-4.7-TEE` and register
+Both paths set the default model to `chutes/zai-org/GLM-5-TEE` and register
 the Chutes catalog.
 
 <Tabs>
@@ -136913,28 +137848,24 @@ static catalog is used automatically.
 
 ## Default aliases
 
-OpenClaw registers three convenience aliases for the Chutes catalog:
+OpenClaw registers two convenience aliases for the Chutes catalog:
 
-| Alias           | Target model                                          |
-| --------------- | ----------------------------------------------------- |
-| `chutes-fast`   | `chutes/zai-org/GLM-4.7-FP8`                          |
-| `chutes-pro`    | `chutes/deepseek-ai/DeepSeek-V3.2-TEE`                |
-| `chutes-vision` | `chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506` |
+| Alias           | Target model                           |
+| --------------- | -------------------------------------- |
+| `chutes-pro`    | `chutes/deepseek-ai/DeepSeek-V3.2-TEE` |
+| `chutes-vision` | `chutes/moonshotai/Kimi-K2.5-TEE`      |
 
 ## Built-in starter catalog
 
-The bundled fallback catalog has 47 models. A representative sample of current refs:
+The bundled fallback catalog contains these five currently served models:
 
-| Model ref                                             |
-| ----------------------------------------------------- |
-| `chutes/zai-org/GLM-4.7-TEE`                          |
-| `chutes/zai-org/GLM-5-TEE`                            |
-| `chutes/deepseek-ai/DeepSeek-V3.2-TEE`                |
-| `chutes/deepseek-ai/DeepSeek-R1-0528-TEE`             |
-| `chutes/moonshotai/Kimi-K2.5-TEE`                     |
-| `chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506` |
-| `chutes/Qwen/Qwen3-Coder-Next-TEE`                    |
-| `chutes/openai/gpt-oss-120b-TEE`                      |
+| Model ref                              |
+| -------------------------------------- |
+| `chutes/zai-org/GLM-5-TEE`             |
+| `chutes/deepseek-ai/DeepSeek-V3.2-TEE` |
+| `chutes/moonshotai/Kimi-K2.5-TEE`      |
+| `chutes/MiniMaxAI/MiniMax-M2.5-TEE`    |
+| `chutes/Qwen/Qwen3.5-397B-A17B-TEE`    |
 
 Run `openclaw models list --all --provider chutes` for the full list.
 
@@ -136944,9 +137875,9 @@ Run `openclaw models list --all --provider chutes` for the full list.
 {
   agents: {
     defaults: {
-      model: { primary: "chutes/zai-org/GLM-4.7-TEE" },
+      model: { primary: "chutes/zai-org/GLM-5-TEE" },
       models: {
-        "chutes/zai-org/GLM-4.7-TEE": { alias: "Chutes GLM 4.7" },
+        "chutes/zai-org/GLM-5-TEE": { alias: "Chutes GLM 5" },
         "chutes/deepseek-ai/DeepSeek-V3.2-TEE": { alias: "Chutes DeepSeek V3.2" },
       },
     },
@@ -137422,8 +138353,11 @@ transport to use, so you never install every upstream company's auth plugin.
 | `llm.stream` + streaming `google.generate_content` route | `google-generative-ai` |
 
 The plugin also applies the matching replay and tool-schema policies for those
-families (OpenAI/DeepSeek/Gemini tool-schema compat; native Anthropic and
-Google Gemini replay policies). A catalog provider exposing only an
+families (OpenAI/DeepSeek/Gemini/Perplexity tool-schema compat; native
+Anthropic and Google Gemini replay policies). Perplexity models get a strict
+schema rewrite: `patternProperties` and `additionalProperties` are removed and
+every object schema declares `properties`, because Perplexity rejects tool
+schemas without them. A catalog provider exposing only an
 unsupported request format is intentionally not advertised as an OpenClaw
 text model. Normalize those providers to one of the supported contracts in
 ClawRouter rather than sending an incompatible payload.
@@ -139430,8 +140364,8 @@ read_when:
 | Direct CLI flag | `--fireworks-api-key <key>`                            |
 | API             | OpenAI-compatible (`openai-completions`)               |
 | Base URL        | `https://api.fireworks.ai/inference/v1`                |
-| Default model   | `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo` |
-| Default alias   | `Kimi K2.5 Turbo`                                      |
+| Default model   | `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` |
+| Default alias   | `Kimi K2.6 Turbo`                                      |
 
 ## Getting started
 
@@ -139460,7 +140394,7 @@ export FIREWORKS_API_KEY=fw-...
 
     </CodeGroup>
 
-    Onboarding stores the key against the `fireworks` provider in your auth profiles and sets the **Fire Pass** Kimi K2.5 Turbo router as the default model.
+    Onboarding stores the key against the `fireworks` provider in your auth profiles and sets the **Fire Pass** Kimi K2.6 Turbo router as the default model.
 
   </Step>
   <Step title="Verify the model is available">
@@ -139468,7 +140402,7 @@ export FIREWORKS_API_KEY=fw-...
     openclaw models list --provider fireworks
     ```
 
-    The list should include `Kimi K2.6` and `Kimi K2.5 Turbo (Fire Pass)`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list should include `Kimi K2.6` and `Kimi K2.6 Turbo (Fire Pass)`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -139491,7 +140425,7 @@ openclaw onboard --non-interactive \
 | Model ref                                              | Name                        | Input        | Context | Max output | Thinking             |
 | ------------------------------------------------------ | --------------------------- | ------------ | ------- | ---------- | -------------------- |
 | `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6                   | text + image | 262,144 | 262,144    | Forced off           |
-| `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo` | Kimi K2.5 Turbo (Fire Pass) | text + image | 256,000 | 256,000    | Forced off (default) |
+| `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Turbo (Fire Pass) | text + image | 256,000 | 256,000    | Forced off (default) |
 
 <Note>
   OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
@@ -139517,7 +140451,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   <Accordion title="How model id prefixing works">
     Every Fireworks model ref in OpenClaw starts with `fireworks/` followed by the exact id or router path from the Fireworks platform. For example:
 
-    - Router model: `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo`
+    - Router model: `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo`
     - Direct model: `fireworks/accounts/fireworks/models/<model-name>`
 
     OpenClaw strips the `fireworks/` prefix when constructing the API request and sends the remaining path to the Fireworks endpoint as the OpenAI-compatible `model` field.
@@ -140212,9 +141146,9 @@ instead of sending it.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image-preview`.
+`google/gemini-3.1-flash-image`.
 
-- Also supports `google/gemini-3-pro-image-preview`
+- Also supports `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
@@ -140226,7 +141160,7 @@ To use Google as the default image provider:
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
       },
     },
   },
@@ -140884,15 +141818,14 @@ Sets `huggingface/deepseek-ai/DeepSeek-R1` as the default model.
 
 Model refs use the form `huggingface/<org>/<model>` (Hub-style IDs). OpenClaw's built-in catalog:
 
-| Model                        | Ref (prefix with `huggingface/`)          |
-| ---------------------------- | ----------------------------------------- |
-| DeepSeek R1                  | `deepseek-ai/DeepSeek-R1`                 |
-| DeepSeek V3.1                | `deepseek-ai/DeepSeek-V3.1`               |
-| GPT-OSS 120B                 | `openai/gpt-oss-120b`                     |
-| Llama 3.3 70B Instruct Turbo | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+| Model         | Ref (prefix with `huggingface/`) |
+| ------------- | -------------------------------- |
+| DeepSeek R1   | `deepseek-ai/DeepSeek-R1`        |
+| DeepSeek V3.1 | `deepseek-ai/DeepSeek-V3.1`      |
+| GPT-OSS 120B  | `openai/gpt-oss-120b`            |
 
 <Tip>
-When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the four models above. You can append `:fastest` or `:cheapest` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
+When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the three models above. You can append `:fastest` or `:cheapest` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
 </Tip>
 
 ## Advanced configuration
@@ -140985,21 +141918,17 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
     ```
   </Accordion>
 
-  <Accordion title="Config: DeepSeek + Llama + GPT-OSS with aliases">
+  <Accordion title="Config: DeepSeek + GPT-OSS with aliases">
     ```json5
     {
       agents: {
         defaults: {
           model: {
             primary: "huggingface/deepseek-ai/DeepSeek-V3.1",
-            fallbacks: [
-              "huggingface/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-              "huggingface/openai/gpt-oss-120b",
-            ],
+            fallbacks: ["huggingface/openai/gpt-oss-120b"],
           },
           models: {
             "huggingface/deepseek-ai/DeepSeek-V3.1": { alias: "DeepSeek V3.1" },
-            "huggingface/meta-llama/Llama-3.3-70B-Instruct-Turbo": { alias: "Llama 3.3 70B Turbo" },
             "huggingface/openai/gpt-oss-120b": { alias: "GPT-OSS 120B" },
           },
         },
@@ -141062,6 +141991,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Arcee AI (Trinity models)](/providers/arcee)
 - [Azure Speech](/providers/azure-speech)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
@@ -141100,7 +142030,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
-- [Qwen OAuth / Portal](/providers/qwen-oauth)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
@@ -141550,12 +142479,14 @@ openclaw gateway restart
 
 ## Default model and catalog
 
-The default model is `kilocode/kilo/auto`, a provider-owned smart-routing model. OpenClaw does not
-publish a task-to-upstream-model mapping for it; routing behind `kilo/auto` is owned by Kilo Gateway.
+The default model is `kilocode/kilo-auto/balanced`, Kilo Gateway's balanced smart-routing tier.
+OpenClaw does not publish a task-to-upstream-model mapping for it; routing behind
+`kilo-auto/balanced` is owned by Kilo Gateway.
 
 At startup OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges discovered models
-ahead of a static fallback catalog. The static fallback contains only `kilocode/kilo/auto` (`Kilo Auto`,
-`input: ["text", "image"]`, `reasoning: true`, `contextWindow: 1000000`, `maxTokens: 128000`).
+ahead of a static fallback catalog. The static fallback contains only
+`kilocode/kilo-auto/balanced` (`Auto Balanced`, `input: ["text", "image"]`, `reasoning: true`,
+`contextWindow: 1000000`, `maxTokens: 65536`).
 
 Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
 `kilocode/anthropic/claude-sonnet-4`, `kilocode/openai/gpt-5.5`). Run `/models kilocode` or
@@ -141568,7 +142499,7 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
   env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "kilocode/kilo/auto" },
+      model: { primary: "kilocode/kilo-auto/balanced" },
     },
   },
 }
@@ -141593,14 +142524,14 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
     models that support it.
 
     <Warning>
-    `kilocode/kilo/auto` and `x-ai/*` refs skip reasoning-effort injection. Use a concrete model
-    ref such as `kilocode/anthropic/claude-sonnet-4` if you need reasoning support.
+    `kilocode/kilo-auto/balanced` and `x-ai/*` refs skip reasoning-effort injection. Use a concrete
+    model ref such as `kilocode/anthropic/claude-sonnet-4` if you need reasoning support.
     </Warning>
 
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo/auto`.
+    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo-auto/balanced`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
     - When Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
@@ -142563,7 +143494,7 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `
 
 - Default TTS model: `speech-2.8-hd`
 - Default voice: `English_expressive_narrator`
-- Bundled model ids: `speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo`, `speech-01-240228`
+- Bundled model ids: `speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo`
 - Auth resolution order: `messages.tts.providers.minimax.apiKey`, then `minimax-portal` OAuth/token auth profiles, then Token Plan environment keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`
 - If no TTS host is configured, OpenClaw reuses the configured `minimax-portal` OAuth host and strips Anthropic-compatible path suffixes such as `/anthropic`
 - Normal audio attachments stay MP3. Voice-note targets (Feishu, Telegram, and other channels that request a voice-note-compatible attachment) are transcoded from MiniMax MP3 to 48kHz Opus with `ffmpeg`, because e.g. the Feishu/Lark file API only accepts `file_type: "opus"` for native audio messages
@@ -143038,6 +143969,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
@@ -143084,17 +144016,17 @@ For the full provider catalog and advanced configuration, see
 # Section: providers/moonshot.md
 
 ---
-summary: "Configure Moonshot K2 vs Kimi Coding (separate providers + keys)"
+summary: "Configure Moonshot Kimi models vs Kimi Coding (separate providers + keys)"
 read_when:
-  - You want Moonshot K2 (Moonshot Open Platform) vs Kimi Coding setup
+  - You want Moonshot Kimi K3/K2 (Moonshot Open Platform) vs Kimi Coding setup
   - You need to understand separate endpoints, keys, and model refs
   - You want copy/paste config for either provider
 title: "Moonshot AI"
 ---
 
-Moonshot provides the Kimi API with OpenAI-compatible endpoints. Set the
-default model to `moonshot/kimi-k2.6` for the Moonshot Open Platform, or
-`kimi/kimi-for-coding` for Kimi Coding.
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Select
+`moonshot/kimi-k3` for Kimi K3, keep the onboarding default
+`moonshot/kimi-k2.6`, or use `kimi/kimi-for-coding` for Kimi Coding.
 
 <Warning>
 Moonshot and Kimi Coding are **separate providers**, each shipped as a separate external plugin. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
@@ -143104,29 +144036,31 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 [//]: # "moonshot-kimi-k2-ids:start"
 
-| Model ref                         | Name                   | Reasoning | Input       | Context | Max output |
-| --------------------------------- | ---------------------- | --------- | ----------- | ------- | ---------- |
-| `moonshot/kimi-k2.6`              | Kimi K2.6              | No        | text, image | 262,144 | 262,144    |
-| `moonshot/kimi-k2.7-code`         | Kimi K2.7 Code         | Always on | text, image | 262,144 | 262,144    |
-| `moonshot/kimi-k2.5`              | Kimi K2.5              | No        | text, image | 262,144 | 262,144    |
-| `moonshot/kimi-k2-thinking`       | Kimi K2 Thinking       | Yes       | text        | 262,144 | 262,144    |
-| `moonshot/kimi-k2-thinking-turbo` | Kimi K2 Thinking Turbo | Yes       | text        | 262,144 | 262,144    |
-| `moonshot/kimi-k2-turbo`          | Kimi K2 Turbo          | No        | text        | 256,000 | 16,384     |
+| Model ref                           | Name                     | Reasoning  | Input       | Context   | Max output |
+| ----------------------------------- | ------------------------ | ---------- | ----------- | --------- | ---------- |
+| `moonshot/kimi-k2.6`                | Kimi K2.6                | No         | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k3`                  | Kimi K3                  | Always max | text, image | 1,048,576 | 1,048,576  |
+| `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on  | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on  | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k2.5`                | Kimi K2.5                | No         | text, image | 262,144   | 262,144    |
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
-Catalog cost estimates use Moonshot's published pay-as-you-go rates: Kimi
-K2.7 Code is $0.19/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi
-K2.6 is $0.16/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi K2.5
-is $0.10/MTok cache hit, $0.60/MTok input, $3.00/MTok output. Other catalog
-entries keep zero-cost placeholders unless you override them in config.
+Catalog cost estimates use Moonshot's published pay-as-you-go rates. Check the
+live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3),
+[Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code),
+[Kimi K2.6](https://platform.kimi.ai/docs/pricing/chat-k26), and
+[Kimi K2.5](https://platform.kimi.ai/docs/pricing/chat-k25) before making cost
+decisions.
 
-Kimi K2.7 Code always uses native thinking. OpenClaw exposes only the `on`
-thinking state for this model and omits outbound `thinking` and
-`reasoning_effort` fields, as required by Moonshot. It also omits sampling
-overrides (`temperature`, `top_p`, `n`, `presence_penalty`,
-`frequency_penalty`), which K2.7 fixes to provider defaults. Kimi K2.6 remains
-the onboarding default.
+Kimi K3 always reasons at `reasoning_effort: "max"`. OpenClaw exposes only
+`/think max`, omits the K2-only `thinking` field, and removes sampling
+overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
+`frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
+always uses native thinking but requires both `thinking` and
+`reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
+Kimi K2.6 remains the onboarding default.
+See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
 ## Getting started
 
@@ -143135,7 +144069,7 @@ onboarding.
 
 <Tabs>
   <Tab title="Moonshot API">
-    **Best for:** Kimi K2 models via the Moonshot Open Platform.
+    **Best for:** Kimi K3 and K2 models via the Moonshot Open Platform.
 
     <Steps>
       <Step title="Install the plugin">
@@ -143161,15 +144095,12 @@ onboarding.
         openclaw onboard --auth-choice moonshot-api-key-cn
         ```
       </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          agents: {
-            defaults: {
-              model: { primary: "moonshot/kimi-k2.6" },
-            },
-          },
-        }
+      <Step title="Set Kimi K3 as the default model">
+        Onboarding keeps Kimi K2.6 as the initial default. Switch explicitly
+        when you want Kimi K3:
+
+        ```bash
+        openclaw models set moonshot/kimi-k3
         ```
       </Step>
       <Step title="Verify models are available">
@@ -143187,12 +144118,12 @@ onboarding.
         openclaw agent --local \
           --session-id live-kimi-cost \
           --message 'Reply exactly: KIMI_LIVE_OK' \
-          --thinking off \
+          --thinking max \
           --json
         ```
 
         The JSON response should report `provider: "moonshot"` and
-        `model: "kimi-k2.6"`. The assistant transcript entry stores normalized
+        `model: "kimi-k3"`. The assistant transcript entry stores normalized
         token usage plus estimated cost under `usage.cost` when Moonshot returns
         usage metadata.
       </Step>
@@ -143209,11 +144140,10 @@ onboarding.
           models: {
             // moonshot-kimi-k2-aliases:start
             "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
+            "moonshot/kimi-k3": { alias: "Kimi K3" },
             "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
+            "moonshot/kimi-k2.7-code-highspeed": { alias: "Kimi K2.7 Code HighSpeed" },
             "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
-            "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
-            "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
-            "moonshot/kimi-k2-turbo": { alias: "Kimi K2 Turbo" },
             // moonshot-kimi-k2-aliases:end
           },
         },
@@ -143237,11 +144167,42 @@ onboarding.
                 maxTokens: 262144,
               },
               {
+                id: "kimi-k3",
+                name: "Kimi K3",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: null,
+                  minimal: null,
+                  low: null,
+                  medium: null,
+                  high: null,
+                  xhigh: "max",
+                  max: "max",
+                },
+                input: ["text", "image"],
+                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+                contextWindow: 1048576,
+                maxTokens: 1048576,
+                compat: {
+                  supportsReasoningEffort: true,
+                  supportedReasoningEfforts: ["max"],
+                },
+              },
+              {
                 id: "kimi-k2.7-code",
                 name: "Kimi K2.7 Code",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
+                id: "kimi-k2.7-code-highspeed",
+                name: "Kimi K2.7 Code HighSpeed",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -143253,33 +144214,6 @@ onboarding.
                 cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-thinking",
-                name: "Kimi K2 Thinking",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-thinking-turbo",
-                name: "Kimi K2 Thinking Turbo",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-turbo",
-                name: "Kimi K2 Turbo",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 16384,
               },
               // moonshot-kimi-k2-models:end
             ],
@@ -143295,8 +144229,15 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). The stable model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that model id.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for a 256K context, `kimi/k3[1m]` for the 1M tier, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to `kimi/kimi-for-coding`.
     </Note>
+
+    The coding service accepts both OpenAI-compatible
+    `https://api.kimi.com/coding/v1` and Anthropic-compatible
+    `https://api.kimi.com/coding/` clients. This plugin uses Anthropic Messages.
+    Create membership keys in the
+    [Kimi Code Console](https://www.kimi.com/code/console); current membership
+    pricing lives on [Kimi's pricing page](https://www.kimi.com/membership/pricing).
 
     <Steps>
       <Step title="Install the plugin">
@@ -143327,6 +144268,14 @@ onboarding.
         ```
       </Step>
     </Steps>
+
+    Kimi Code K3 defaults to deep thinking at `max`. `/think off` sends
+    `thinking.type: "disabled"`; `/think max` sends K3's adaptive-thinking
+    request with max effort. Stale lower thinking levels resolve to the
+    supported `max` level. The 1M model requires an Allegretto or higher Kimi
+    membership; use `kimi/k3` on Moderato.
+
+    See the official [Kimi Code model table](https://www.kimi.com/code/docs/en/kimi-code/models.html) for current plan availability.
 
     ### Config example
 
@@ -143403,6 +144352,19 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">
+    Moonshot API Kimi K3 always reasons at maximum effort. OpenClaw exposes only
+    `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
+    `off` settings.
+
+    Kimi Code K3 exposes `/think off|max`. Its Anthropic-compatible endpoint
+    receives `thinking.type: "disabled"` for off, or adaptive thinking with
+    `output_config.effort: "max"` for max. This applies to both `kimi/k3` and
+    `kimi/k3[1m]`.
+    Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
+    so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
+    OpenClaw preserves the assistant reasoning content required by Moonshot's
+    replay contract.
+
     Kimi K2.7 Code always uses native thinking. Moonshot requires clients to
     omit the `thinking` field for this model, so OpenClaw exposes only `on` and
     ignores stale `off` settings. K2.7 also fixes `temperature`, `top_p`, `n`,
@@ -143440,7 +144402,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | Any non-off level    | `thinking.type=enabled`    |
 
     <Warning>
-    When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. A pinned tool choice (`type: "tool"` or `type: "function"`) forces thinking back to `disabled` instead, so the requested tool still runs; `tool_choice: "required"` is normalized to `auto` instead. This applies to every Moonshot model except Kimi K2.7 Code, whose thinking mode cannot be disabled - its `tool_choice` is normalized to `auto` when incompatible.
+    When Moonshot K2 thinking is enabled, `tool_choice` must be `auto` or `none`. A pinned tool choice (`type: "tool"` or `type: "function"`) forces thinking back to `disabled` instead, so the requested tool still runs; `tool_choice: "required"` is normalized to `auto` instead. Kimi K2.7 Code cannot disable thinking, so its incompatible `tool_choice` is normalized to `auto`. Kimi K3 uses its separate reasoning-effort contract and preserves supported tool choices.
     </Warning>
 
     Kimi K2.6 also accepts an optional `thinking.keep` field that controls
@@ -147839,139 +148801,6 @@ Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v3.2`).
 
 
 
-# Section: providers/qwen-oauth.md
-
----
-summary: "Use the Qwen Portal provider id with OpenClaw"
-read_when:
-  - You want to configure the qwen-oauth provider id
-  - You previously used Qwen Portal OAuth credentials
-  - You need the Qwen Portal endpoint or migration guidance
-title: "Qwen OAuth / Portal"
----
-
-`qwen-oauth` is the Qwen Portal provider id, registered by the Qwen plugin
-(`@openclaw/qwen-provider`). It targets the Qwen Portal endpoint at
-`https://portal.qwen.ai/v1` and keeps older Qwen OAuth / portal setups
-addressable through a distinct provider id, separate from the canonical `qwen`
-provider.
-
-Choose `qwen-oauth` if you already have a working Qwen Portal token, are
-migrating a legacy Qwen OAuth or Qwen CLI workflow, or need to test the Qwen
-Portal endpoint specifically. For new setups, prefer
-[Qwen](/providers/qwen) with the Standard ModelStudio endpoint: it covers new
-API-key setups, broader endpoint choices, Standard pay-as-you-go, Coding Plan,
-and the full Qwen plugin catalog.
-
-## Setup
-
-Install the Qwen plugin if you have not already:
-
-```bash
-openclaw plugins install @openclaw/qwen-provider
-openclaw gateway restart
-```
-
-Provide your portal token through onboarding:
-
-```bash
-openclaw onboard --auth-choice qwen-oauth
-```
-
-Non-interactive runs read the token from `--qwen-oauth-token <token>`, or set:
-
-```bash
-export QWEN_API_KEY="<your-qwen-portal-token>" # pragma: allowlist secret
-```
-
-Onboarding stores the token under a `qwen-oauth` auth profile, seeds the portal
-model catalog, and sets `qwen-oauth/qwen3.5-plus` as the default model when
-none is configured.
-
-## Defaults
-
-- Provider: `qwen-oauth`
-- Aliases: `qwen-portal`, `qwen-cli`
-- Base URL: `https://portal.qwen.ai/v1`
-- Env var: `QWEN_API_KEY`
-- API style: OpenAI-compatible
-- Default model: `qwen-oauth/qwen3.5-plus`
-
-## How this differs from Qwen
-
-OpenClaw has two Qwen-facing provider ids:
-
-| Provider     | Endpoint family                                          | Best for                                                                               |
-| ------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `qwen`       | Qwen Cloud / Alibaba DashScope and Coding Plan endpoints | New API-key setups, Standard pay-as-you-go, Coding Plan, multimodal DashScope features |
-| `qwen-oauth` | Qwen Portal endpoint at `portal.qwen.ai/v1`              | Existing Qwen Portal tokens and legacy Qwen OAuth / CLI setups                         |
-
-Both providers use OpenAI-compatible request shapes, but they are separate auth
-surfaces. A token stored for `qwen-oauth` should not be treated as a DashScope
-or ModelStudio key, and a new DashScope key should use the canonical `qwen`
-provider instead.
-
-## Models
-
-The Qwen plugin seeds this static catalog for the Qwen Portal endpoint. All
-entries use a 65,536-token max output; availability depends on the current Qwen
-Portal account and token.
-
-| Model ref                         | Input       | Context   | Notes         |
-| --------------------------------- | ----------- | --------- | ------------- |
-| `qwen-oauth/qwen3.5-plus`         | text, image | 1,000,000 | Default model |
-| `qwen-oauth/qwen3.6-plus`         | text, image | 1,000,000 |               |
-| `qwen-oauth/qwen3-max-2026-01-23` | text        | 262,144   |               |
-| `qwen-oauth/qwen3-coder-next`     | text        | 262,144   |               |
-| `qwen-oauth/qwen3-coder-plus`     | text        | 1,000,000 |               |
-| `qwen-oauth/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning     |
-| `qwen-oauth/glm-5`                | text        | 202,752   |               |
-| `qwen-oauth/glm-4.7`              | text        | 202,752   |               |
-| `qwen-oauth/kimi-k2.5`            | text, image | 262,144   |               |
-
-If your account uses ModelStudio / DashScope API keys instead, configure the
-canonical `qwen` provider:
-
-```bash
-openclaw onboard --auth-choice qwen-standard-api-key
-openclaw models set qwen/qwen3-coder-plus
-```
-
-## Migration
-
-Legacy Qwen Portal OAuth profiles are not refreshable; `openclaw doctor` flags
-them. If a portal profile stops working, re-run onboarding with a current token
-or switch to the Standard Qwen provider:
-
-```bash
-openclaw onboard --auth-choice qwen-standard-api-key
-```
-
-Standard global ModelStudio uses:
-
-```text
-https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-```
-
-## Troubleshooting
-
-- Portal OAuth refresh failures: legacy Qwen Portal OAuth profiles are not
-  refreshable. Re-run onboarding with a current token.
-- Wrong endpoint errors: confirm the model ref starts with `qwen-oauth/` when
-  using a portal token. Use `qwen/` refs only for the canonical Qwen provider.
-- `QWEN_API_KEY` confusion: both Qwen pages mention this env var, but onboarding
-  stores credentials under the selected provider id. Prefer onboarding when you
-  keep both `qwen` and `qwen-oauth` available on the same machine.
-
-## Related
-
-- [Qwen](/providers/qwen)
-- [Alibaba Model Studio](/providers/alibaba)
-- [Model providers](/concepts/model-providers)
-- [All providers](/providers/index)
-
-
-
 # Section: providers/qwen.md
 
 ---
@@ -147979,17 +148808,15 @@ summary: "Use Qwen Cloud through its OpenClaw plugin"
 read_when:
   - You want to use Qwen with OpenClaw
   - You have an Alibaba Cloud Token Plan subscription
-  - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
-Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, independently owns Alibaba's documented `bailian-token-plan` custom-provider id, and exposes the Qwen Portal token flow as [`qwen-oauth`](/providers/qwen-oauth).
+Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
 
 | Property               | Value                                      |
 | ---------------------- | ------------------------------------------ |
 | Provider               | `qwen`                                     |
 | Token Plan provider    | `qwen-token-plan`                          |
-| Portal provider        | [`qwen-oauth`](/providers/qwen-oauth)      |
 | Preferred env var      | `QWEN_API_KEY`                             |
 | Token Plan env var     | `QWEN_TOKEN_PLAN_API_KEY`                  |
 | Also accepted (compat) | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -148156,43 +148983,6 @@ Choose your plan type and follow the setup steps.
 
   </Tab>
 
-  <Tab title="Qwen OAuth / Portal">
-    **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
-
-    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
-    page and migration notes.
-
-    <Steps>
-      <Step title="Provide your portal token">
-        ```bash
-        openclaw onboard --auth-choice qwen-oauth
-        ```
-      </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          agents: {
-            defaults: {
-              model: { primary: "qwen-oauth/qwen3.5-plus" },
-            },
-          },
-        }
-        ```
-      </Step>
-      <Step title="Verify the model is available">
-        ```bash
-        openclaw models list --provider qwen-oauth
-        ```
-      </Step>
-    </Steps>
-
-    <Note>
-    `qwen-oauth` uses the same `QWEN_API_KEY` env var name as the Qwen Cloud
-    provider, but stores auth under the `qwen-oauth` provider id when configured
-    through OpenClaw onboarding.
-    </Note>
-
-  </Tab>
 </Tabs>
 
 ## Plan types and endpoints
@@ -148201,7 +148991,6 @@ Choose your plan type and follow the setup steps.
 | -------------------------- | ------ | -------------------------- | ---------------------------------------------------------------- |
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`                               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`                          |
-| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                                              |
 | Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`                      |
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1`                 |
 | Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
@@ -148235,7 +149024,6 @@ Plan configs omit models that only work on the Standard endpoint.
 | `qwen/glm-5`                | text        | 202,752   | GLM                     |
 | `qwen/glm-4.7`              | text        | 202,752   | GLM                     |
 | `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba |
-| `qwen-oauth/qwen3.5-plus`   | text, image | 1,000,000 | Qwen Portal default     |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
@@ -148287,7 +149075,7 @@ requested on/off state.
 The `qwen` plugin exposes multimodal capabilities on the **Standard** DashScope
 endpoints only, not the Coding Plan endpoints:
 
-- **Image and video understanding** via `qwen-vl-max-latest`
+- **Image and video understanding** via `qwen3.6-plus`
 - **Wan video generation** via `wan2.6-t2v` (default), `wan2.6-i2v`, `wan2.6-r2v`, `wan2.6-r2v-flash`, `wan2.7-r2v`
 
 Media understanding is auto-resolved from the configured Qwen auth; no extra
@@ -149080,7 +149868,7 @@ Messages API.
   <Step title="Verify the default model">
     Onboarding sets the default model to:
     ```text
-    synthetic/hf:MiniMaxAI/MiniMax-M2.5
+    synthetic/hf:MiniMaxAI/MiniMax-M3
     ```
   </Step>
 </Steps>
@@ -149098,8 +149886,8 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
   env: { SYNTHETIC_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+      models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
     },
   },
   models: {
@@ -149111,12 +149899,12 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
         api: "anthropic-messages",
         models: [
           {
-            id: "hf:MiniMaxAI/MiniMax-M2.5",
-            name: "MiniMax M2.5",
-            reasoning: false,
-            input: ["text"],
+            id: "hf:MiniMaxAI/MiniMax-M3",
+            name: "MiniMax M3",
+            reasoning: true,
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 192000,
+            contextWindow: 262144,
             maxTokens: 65536,
           },
         ],
@@ -149128,31 +149916,18 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## Built-in catalog
 
-All Synthetic models use cost `0` (input/output/cache).
+All Synthetic models use cost `0` (input/output/cache). See Synthetic's
+[current model list](https://dev.synthetic.new/docs/api/models) for service availability.
 
-| Model ID                                               | Context window | Max tokens | Reasoning | Input        |
-| ------------------------------------------------------ | -------------- | ---------- | --------- | ------------ |
-| `hf:MiniMaxAI/MiniMax-M2.5`                            | 192,000        | 65,536     | no        | text         |
-| `hf:moonshotai/Kimi-K2-Thinking`                       | 256,000        | 8,192      | yes       | text         |
-| `hf:zai-org/GLM-4.7`                                   | 198,000        | 128,000    | no        | text         |
-| `hf:deepseek-ai/DeepSeek-R1-0528`                      | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3-0324`                      | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1`                         | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1-Terminus`                | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.2`                         | 159,000        | 8,192      | no        | text         |
-| `hf:meta-llama/Llama-3.3-70B-Instruct`                 | 128,000        | 8,192      | no        | text         |
-| `hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | 524,000        | 8,192      | no        | text         |
-| `hf:moonshotai/Kimi-K2-Instruct-0905`                  | 256,000        | 8,192      | no        | text         |
-| `hf:moonshotai/Kimi-K2.5`                              | 256,000        | 8,192      | yes       | text + image |
-| `hf:openai/gpt-oss-120b`                               | 128,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Instruct-2507`                | 256,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-Coder-480B-A35B-Instruct`               | 256,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-VL-235B-A22B-Instruct`                  | 250,000        | 8,192      | no        | text + image |
-| `hf:zai-org/GLM-4.5`                                   | 128,000        | 128,000    | no        | text         |
-| `hf:zai-org/GLM-4.6`                                   | 198,000        | 128,000    | no        | text         |
-| `hf:zai-org/GLM-5`                                     | 256,000        | 128,000    | yes       | text + image |
-| `hf:deepseek-ai/DeepSeek-V3`                           | 128,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Thinking-2507`                | 256,000        | 8,192      | yes       | text         |
+| Model ID                                            | Context window | Max tokens | Reasoning | Input        |
+| --------------------------------------------------- | -------------- | ---------- | --------- | ------------ |
+| `hf:MiniMaxAI/MiniMax-M3`                           | 262,144        | 65,536     | yes       | text + image |
+| `hf:moonshotai/Kimi-K2.7-Code`                      | 262,144        | 8,192      | yes       | text + image |
+| `hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4` | 262,144        | 8,192      | yes       | text         |
+| `hf:openai/gpt-oss-120b`                            | 131,072        | 8,192      | yes       | text         |
+| `hf:Qwen/Qwen3.6-27B`                               | 262,144        | 81,920     | yes       | text + image |
+| `hf:zai-org/GLM-4.7-Flash`                          | 196,608        | 131,072    | yes       | text         |
+| `hf:zai-org/GLM-5.2`                                | 524,288        | 131,072    | yes       | text         |
 
 <Tip>
 Model refs use the form `synthetic/<modelId>`. Use
@@ -149437,7 +150212,7 @@ shared `video_generate` tool.
 | Property             | Value                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
-| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/Hailuo-02`, `Kwai/Kling-2.1-Master`                    |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
 | Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
 | Duration             | 1-10 seconds                                                                              |
 | Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
@@ -149585,38 +150360,33 @@ openclaw models list --all --provider venice
 You can also run `openclaw configure` and pick **Model/auth provider > Venice AI**.
 
 <Tip>
-| Use case                 | Model                             | Why                                       |
-| ------------------------- | ---------------------------------- | ------------------------------------------ |
-| General chat (default)    | `kimi-k2-5`                        | Strong private reasoning plus vision       |
-| Best overall quality      | `claude-opus-4-6`                  | Strongest anonymized Venice option         |
-| Privacy + coding          | `qwen3-coder-480b-a35b-instruct`   | Private coding model with large context    |
-| Fast + cheap              | `qwen3-4b`                         | Lightweight reasoning model                |
-| Complex private tasks     | `deepseek-v3.2`                    | Strong reasoning; tool calling disabled    |
-| Uncensored                | `venice-uncensored`                | No content restrictions                    |
+| Use case              | Model                                        | Why                                    |
+| --------------------- | -------------------------------------------- | -------------------------------------- |
+| General chat (default) | `kimi-k2-5`                                  | Strong private reasoning plus vision   |
+| Best overall quality   | `claude-opus-4-6`                            | Strongest anonymized Venice option     |
+| Privacy + coding       | `qwen3-coder-480b-a35b-instruct-turbo`       | Private coding model with large context |
+| Fast + cheap           | `llama-3.2-3b`                               | Compact private model                  |
+| Complex private tasks  | `deepseek-v3.2`                              | Strong reasoning; tool calling disabled |
+| Uncensored             | `venice-uncensored-1-2`                      | Current uncensored Venice model        |
 </Tip>
 
-## Built-in catalog (38 models)
+## Built-in catalog (30 models)
 
 <AccordionGroup>
-  <Accordion title="Private models (26) — fully private, no logging">
+  <Accordion title="Private models (20) — fully private, no logging">
     | Model ID                               | Name                                 | Context | Notes                      |
     | -------------------------------------- | ------------------------------------- | ------- | --------------------------- |
     | `kimi-k2-5`                            | Kimi K2.5                             | 256k    | Default, reasoning, vision  |
-    | `kimi-k2-thinking`                     | Kimi K2 Thinking                      | 256k    | Reasoning                   |
     | `llama-3.3-70b`                        | Llama 3.3 70B                         | 128k    | General                     |
     | `llama-3.2-3b`                         | Llama 3.2 3B                          | 128k    | General                     |
     | `hermes-3-llama-3.1-405b`              | Hermes 3 Llama 3.1 405B               | 128k    | General, tools disabled     |
     | `qwen3-235b-a22b-thinking-2507`        | Qwen3 235B Thinking                   | 128k    | Reasoning                   |
     | `qwen3-235b-a22b-instruct-2507`        | Qwen3 235B Instruct                   | 128k    | General                     |
-    | `qwen3-coder-480b-a35b-instruct`       | Qwen3 Coder 480B                      | 256k    | Coding                      |
     | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo                | 256k    | Coding                      |
     | `qwen3-5-35b-a3b`                      | Qwen3.5 35B A3B                       | 256k    | Reasoning, vision           |
     | `qwen3-next-80b`                       | Qwen3 Next 80B                        | 256k    | General                     |
     | `qwen3-vl-235b-a22b`                   | Qwen3 VL 235B (Vision)                | 256k    | Vision                      |
-    | `qwen3-4b`                             | Venice Small (Qwen3 4B)               | 32k     | Fast, reasoning              |
     | `deepseek-v3.2`                        | DeepSeek V3.2                         | 160k    | Reasoning, tools disabled    |
-    | `venice-uncensored`                    | Venice Uncensored (Dolphin-Mistral)   | 32k     | Uncensored, tools disabled   |
-    | `mistral-31-24b`                       | Venice Medium (Mistral)               | 128k    | Vision                       |
     | `google-gemma-3-27b-it`                | Google Gemma 3 27B Instruct           | 198k    | Vision                       |
     | `openai-gpt-oss-120b`                  | OpenAI GPT OSS 120B                   | 128k    | General                      |
     | `nvidia-nemotron-3-nano-30b-a3b`       | NVIDIA Nemotron 3 Nano 30B            | 128k    | General                      |
@@ -149625,11 +150395,10 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | `zai-org-glm-4.7`                      | GLM 4.7                               | 198k    | Reasoning                    |
     | `zai-org-glm-4.7-flash`                | GLM 4.7 Flash                         | 128k    | Reasoning                    |
     | `zai-org-glm-5`                        | GLM 5                                 | 198k    | Reasoning                    |
-    | `minimax-m21`                          | MiniMax M2.1                          | 198k    | Reasoning                    |
     | `minimax-m25`                          | MiniMax M2.5                          | 198k    | Reasoning                    |
   </Accordion>
 
-  <Accordion title="Anonymized models (12) — via Venice proxy">
+  <Accordion title="Anonymized models (10) — via Venice proxy">
     | Model ID                        | Name                           | Context | Notes                      |
     | -------------------------------- | -------------------------------- | ------- | ---------------------------- |
     | `claude-opus-4-6`               | Claude Opus 4.6 (via Venice)    | 1M      | Reasoning, vision            |
@@ -149641,13 +150410,11 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | `openai-gpt-4o-2024-11-20`      | GPT-4o (via Venice)             | 128k    | Vision                        |
     | `openai-gpt-4o-mini-2024-07-18` | GPT-4o Mini (via Venice)        | 128k    | Vision                        |
     | `gemini-3-1-pro-preview`        | Gemini 3.1 Pro (via Venice)     | 1M      | Reasoning, vision             |
-    | `gemini-3-pro-preview`          | Gemini 3 Pro (via Venice)       | 198k    | Reasoning, vision             |
     | `gemini-3-flash-preview`        | Gemini 3 Flash (via Venice)     | 256k    | Reasoning, vision             |
-    | `grok-41-fast`                  | Grok 4.1 Fast (via Venice)      | 1M      | Reasoning, vision             |
   </Accordion>
 </AccordionGroup>
 
-Grok-backed Venice models (`grok-41-fast` and similar) get the same tool-schema
+Grok-backed Venice models (`grok-4-3` and similar) get the same tool-schema
 compat patch as the native xAI provider, since they share the same upstream
 tool-call format.
 
@@ -149657,6 +150424,9 @@ The bundled catalog above is a manifest-backed seed list. At runtime OpenClaw
 refreshes it from the Venice `/models` API and falls back to the seed list if
 the API is unreachable. The `/models` endpoint is public (no auth needed for
 listing), but inference requires a valid API key.
+
+Venice may continue accepting retired model IDs as provider-owned aliases. The
+OpenClaw catalog advertises only the canonical model IDs returned by `/models`.
 
 ## DeepSeek V4 replay behavior
 
@@ -149692,13 +150462,13 @@ openclaw agent --model venice/kimi-k2-5 --message "Quick health check"
 openclaw agent --model venice/claude-opus-4-6 --message "Summarize this task"
 
 # Uncensored model
-openclaw agent --model venice/venice-uncensored --message "Draft options"
+openclaw agent --model venice/venice-uncensored-1-2 --message "Draft options"
 
 # Vision model with image
 openclaw agent --model venice/qwen3-vl-235b-a22b --message "Review attached image"
 
 # Coding model
-openclaw agent --model venice/qwen3-coder-480b-a35b-instruct --message "Refactor this function"
+openclaw agent --model venice/qwen3-coder-480b-a35b-instruct-turbo --message "Refactor this function"
 ```
 
 ## Troubleshooting
@@ -150368,10 +151138,6 @@ Both providers are configured from a single API key. Setup registers both automa
     | ------------------------------------------------- | ------------------------ | ----- | ------- |
     | `volcengine-plan/ark-code-latest`                 | Ark Coding Plan          | text  | 256,000 |
     | `volcengine-plan/doubao-seed-code`                | Doubao Seed Code         | text  | 256,000 |
-    | `volcengine-plan/doubao-seed-code-preview-251028` | Doubao Seed Code Preview | text  | 256,000 |
-    | `volcengine-plan/glm-4.7`                         | GLM 4.7 Coding           | text  | 200,000 |
-    | `volcengine-plan/kimi-k2-thinking`                | Kimi K2 Thinking         | text  | 256,000 |
-    | `volcengine-plan/kimi-k2.5`                       | Kimi K2.5 Coding         | text  | 256,000 |
   </Tab>
 </Tabs>
 
@@ -150773,6 +151539,14 @@ Use `grok-4.5` for general chat, coding, and agentic work where it is available.
 Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and both
 dated Grok 4.20 variants remain selectable.
 </Tip>
+
+Catalog context and token-cost metadata follows xAI's live
+[model pages](https://docs.x.ai/developers/models) and
+[pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
+when a request crosses its documented long-context threshold; OpenClaw's flat
+catalog cost fields record the short-context rates. Grok Build, xAI's separate
+coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli) and currently
+uses Grok 4.5.
 
 ## Feature coverage
 
@@ -151351,7 +152125,7 @@ providers plus a speech (TTS) provider:
 | API              | OpenAI-compatible chat completions (`openai-completions`)                                                                                          |
 | Speech contract  | `speechProviders: ["xiaomi"]`                                                                                                                      |
 | Base URLs        | Pay-as-you-go: `https://api.xiaomimimo.com/v1`; Token Plan: `token-plan-{cn,sgp,ams}.xiaomimimo.com/v1`                                            |
-| Default models   | `xiaomi/mimo-v2-flash`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                          |
+| Default models   | `xiaomi/mimo-v2.5`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                              |
 | TTS default      | `mimo-v2.5-tts`, voice `mimo_default`; voicedesign model `mimo-v2.5-tts-voicedesign`                                                               |
 
 ## Getting started
@@ -151398,9 +152172,8 @@ Onboarding validates the key shape and warns when a `tp-...` key is entered into
 
 | Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
 | ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi/mimo-v2-flash` | text        | 262,144   | 8,192      | No        | Default model |
-| `xiaomi/mimo-v2-pro`   | text        | 1,048,576 | 32,000     | Yes       | Large context |
-| `xiaomi/mimo-v2-omni`  | text, image | 262,144   | 32,000     | Yes       | Multimodal    |
+| `xiaomi/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | Default model |
+| `xiaomi/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | Flagship      |
 
 ## Token Plan catalog
 
@@ -151424,10 +152197,9 @@ provider is not offered without one of those.
 
 ## Reasoning models
 
-`mimo-v2-pro`, `mimo-v2-omni`, `mimo-v2.5`, and `mimo-v2.5-pro` support
+`mimo-v2.5` and `mimo-v2.5-pro` support
 OpenClaw's [`/think` directive](/tools/thinking) with levels `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` (default `high`).
-`mimo-v2-flash` has no reasoning support.
 
 ## Text-to-speech
 
@@ -151465,8 +152237,8 @@ message.
 ```
 
 Built-in voices: `mimo_default`, `default_zh`, `default_en`, `Mia`, `Chloe`,
-`Milo`, `Dean`. Preset-voice models (`mimo-v2.5-tts`, `mimo-v2-tts`) use
-`audio.voice`, so OpenClaw sends `speakerVoice` for those models.
+`Milo`, `Dean`. The preset-voice model `mimo-v2.5-tts` uses `audio.voice`, so
+OpenClaw sends `speakerVoice` for that model.
 
 The voicedesign model `mimo-v2.5-tts-voicedesign` generates the voice from a
 natural-language style prompt instead of a preset voice id. Set `style` to
@@ -151500,7 +152272,7 @@ mono Opus with `ffmpeg` before delivery.
 ```json5
 {
   env: { XIAOMI_API_KEY: "your-key" },
-  agents: { defaults: { model: { primary: "xiaomi/mimo-v2-flash" } } },
+  agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5" } } },
   models: {
     mode: "merge",
     providers: {
@@ -151510,28 +152282,20 @@ mono Opus with `ffmpeg` before delivery.
         apiKey: "XIAOMI_API_KEY",
         models: [
           {
-            id: "mimo-v2-flash",
-            name: "Xiaomi MiMo V2 Flash",
-            reasoning: false,
-            input: ["text"],
-            contextWindow: 262144,
-            maxTokens: 8192,
+            id: "mimo-v2.5",
+            name: "Xiaomi MiMo V2.5",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1048576,
+            maxTokens: 131072,
           },
           {
-            id: "mimo-v2-pro",
-            name: "Xiaomi MiMo V2 Pro",
+            id: "mimo-v2.5-pro",
+            name: "Xiaomi MiMo V2.5 Pro",
             reasoning: true,
             input: ["text"],
             contextWindow: 1048576,
-            maxTokens: 32000,
-          },
-          {
-            id: "mimo-v2-omni",
-            name: "Xiaomi MiMo V2 Omni",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 262144,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
         ],
       },
@@ -151587,11 +152351,8 @@ Pricing comes from the bundled manifest (Token Plan models include tiered cache-
   </Accordion>
 
   <Accordion title="Model details">
-    - **mimo-v2-flash** - lightweight and fast, ideal for general-purpose text tasks. No reasoning support.
-    - **mimo-v2-pro** - supports reasoning with a 1M token context window for long-document workloads.
-    - **mimo-v2-omni** - reasoning-enabled multimodal model that accepts both text and image inputs.
-    - **mimo-v2.5-pro** - Token Plan default with Xiaomi's current V2.5 reasoning stack.
-    - **mimo-v2.5** - Token Plan multimodal V2.5 route.
+    - **mimo-v2.5** - pay-as-you-go default and Token Plan multimodal V2.5 route.
+    - **mimo-v2.5-pro** - flagship reasoning model and Token Plan default.
 
     <Note>
     Pay-as-you-go models use the `xiaomi/` prefix. Token Plan models use the `xiaomi-token-plan/` prefix.
@@ -151721,6 +152482,11 @@ openclaw plugins install @openclaw/zai-provider
 | `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
 | `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
 
+Z.AI also publishes the Anthropic-compatible Coding Plan base URL
+`https://api.z.ai/api/anthropic`. OpenClaw's Z.AI choices use the documented
+OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
+speak Anthropic Messages directly.
+
 `zai-api-key` auto-detects one of these four by probing your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
 then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
@@ -151810,6 +152576,11 @@ The manifest-backed catalog currently includes:
 | `zai/glm-4.5-air`    |                                 |
 | `zai/glm-4.5-flash`  |                                 |
 | `zai/glm-4.5v`       |                                 |
+
+Catalog token-cost metadata follows Z.AI's current
+[pay-as-you-go pricing](https://docs.z.ai/guides/overview/pricing). Coding Plan
+subscriptions use plan quota instead of per-token billing; see the live
+[subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).
@@ -152522,9 +153293,17 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Backup: `sqlite-runtime`. Backup stages compact SQLite snapshots, omits live
   WAL/SHM sidecars, verifies SQLite integrity, and records backup runs in the
   global database.
+- Workspace setup: `sqlite-runtime`. Setup completion, workspace attestations,
+  and generated bootstrap hashes live in typed shared SQLite tables. Runtime
+  does not read or write the retired workspace JSON and `.attested` sidecars;
+  Doctor owns their validated import and verified removal.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
+- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
+  active state directory's `exec-approvals.json`; the reserved
+  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
+  add same-state doctor import and move both runtimes together.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -152555,7 +153334,7 @@ without exceptions outside doctor/import/export/debug boundaries.
       Proof: no schema change in this pass; `pnpm db:kysely:check`;
       `pnpm lint:kysely`.
 - [x] Re-run focused tests for touched stores, commands, and scripts.
-      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-trajectory.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
+      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-session.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
 - [x] Before declaring `done`, run the changed gate or remote broad proof.
       Proof: `pnpm check:changed --timed -- <changed extension paths>` passed on
       Hetzner Crabbox run `run_3f1cabf6b25c` after temporary Node 24/pnpm setup and
@@ -152687,7 +153466,8 @@ The branch already has a real shared SQLite base:
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `model_capability_cache`,
-  `workspace_setup_state`, `native_hook_relay_bridges`,
+  `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
+  `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
   `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
   `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
@@ -152827,17 +153607,21 @@ The branch already has a real shared SQLite base:
   instead of scanning a whole namespace or relying on `LIKE` path matching.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
-- Workspace bootstrap completion markers now live in typed shared
-  `workspace_setup_state` rows keyed by resolved workspace path instead of
-  `.openclaw/workspace-state.json`; runtime no longer reads or rewrites the
-  legacy workspace marker, and helper APIs no longer pass around a fake
-  `.openclaw/setup-state` path just to derive storage identity.
-- Exec approvals now live in the typed shared SQLite `exec_approvals_config`
-  singleton row. Doctor imports legacy `~/.openclaw/exec-approvals.json`;
-  runtime writes no longer create, rewrite, or report that file as its active
-  store location. The macOS companion reads and writes the same
-  `state/openclaw.sqlite` table row; it keeps only the Unix prompt socket on disk
-  because that is IPC, not durable runtime state.
+- Workspace bootstrap completion, attestation recency, and generated bootstrap
+  hashes now live in typed shared `workspace_setup_state`,
+  `workspace_path_aliases`, `workspace_attestations`, and
+  `workspace_generated_bootstrap_hashes` rows keyed by canonical workspace
+  identity. Persisted lexical and real-path aliases keep vanished-workspace
+  protection stable after a configured symlink disappears; repointed aliases
+  fail closed. Runtime no longer reads or writes
+  `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
+  `workspace-attestations/*.attested`, or sibling `<workspace>.attested`
+  sidecars. `openclaw doctor --fix` validates and claims legacy sources,
+  imports them into SQLite with migration receipts, verifies the canonical
+  rows, and only then removes the claimed files.
+- The shared schema reserves an `exec_approvals_config` singleton row, but the
+  runtime cutover remains pending. TypeScript and the macOS companion still use
+  the state-scoped JSON file and must move to SQLite together.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers. Device identity uses typed `device_identities` rows and device auth
@@ -152894,11 +153678,16 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
   tables for subscriptions, VAPID keys, node registrations, trigger rows,
   routing rows, update-notification state, and config health entries instead of
-  whole opaque JSON blobs. Web push and APNs snapshot writes now reconcile
-  subscriptions/registrations by primary key instead of clearing their tables;
-  config health does the same by config path.
-  Their runtime modules keep SQLite snapshot readers/writers separate from
-  doctor-only legacy JSON import helpers.
+  whole opaque JSON blobs. Web Push and APNs writes upsert only the affected
+  primary-key row; config health reconciles by config path. Their runtime
+  modules remain separate from Doctor-only legacy JSON import helpers.
+- APNs runtime reads and writes only `apns_registrations`. Explicit
+  `openclaw doctor --fix` strictly imports the retired
+  `push/apns-registrations.json`, preserves existing canonical rows, verifies
+  the transaction, records a receipt, and removes the secret-bearing JSON.
+  Receipt-backed retries perform cleanup only, while
+  `apns_registration_tombstones` cover invalidations before first repair, so
+  stale relay grants or device tokens cannot resurrect.
 - Node-host config now uses a typed singleton row in the shared SQLite database.
   Runtime fails closed while the old `node.json` file or an interrupted claim
   remains; explicit `openclaw doctor --fix` strictly imports and removes it
@@ -152922,9 +153711,9 @@ The branch already has a real shared SQLite base:
   an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
   reload decisions no longer wrap those rows in fake `plugins.installs` config
   objects.
-- Matrix named-account credential upgrade no longer happens during runtime
-  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
-  rename when a single/default Matrix account can be resolved.
+- Matrix account credentials now live in SQLite plugin state. Runtime reads
+  only that canonical store; Doctor imports, verifies, and archives retired
+  `credentials/matrix/credentials*.json` files when their account can be resolved.
 - Core pairing and cron runtime modules no longer use legacy JSON path builders.
   The deprecated pairing-path SDK helper remains migration-only compatibility;
   doctor state migration owns its file reads and imports. Doctor-owned legacy
@@ -153551,8 +154340,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Zalo hosted outbound media now uses shared SQLite `plugin_blob_entries`
   instead of `openclaw-zalo-outbound-media` JSON/bin temp sidecars.
 - Diffs viewer HTML and metadata now use shared SQLite `plugin_blob_entries`
-  instead of `meta.json`/`viewer.html` temp files. Rendered PNG/PDF outputs stay
-  temp materializations because channel delivery still needs a file path.
+  instead of `meta.json`/`viewer.html` temp files. Viewer HTML is stored as a
+  gzip blob and only the URL token hash is persisted. Rendered PNG/PDF outputs
+  stay temp materializations because channel delivery still needs a file path;
+  their expiry metadata is SQLite-owned without JSON sidecars.
 - Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
   of a default `state/canvas/documents` directory. The Canvas host serves those
   blobs directly; local files are created only for explicit `host.root`
@@ -153807,16 +154598,17 @@ create` validates the written archive by default; `--no-verify` is the
   `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
   runtime code. The implementation writes SQLite and the embedded PI registry is
   hydrated from that stored payload without creating a `models.json` file.
-- QMD session transcript markdown export and `memory.qmd.sessions` config were
-  removed. There is no QMD transcript collection, no `qmd/sessions*` runtime
-  path, and no file-backed session memory bridge.
-- Memory-core runtime imports SQLite transcript indexing helpers from
-  `openclaw/plugin-sdk/memory-core-host-engine-session-transcripts`, not the
-  QMD SDK subpath. The QMD subpath keeps a compatibility re-export only for
-  external callers until a major SDK cleanup can remove it.
-- QMD's own `index.sqlite` is now a temp runtime materialization backed by the
-  main SQLite `plugin_blob_entries` table. Runtime no longer creates a durable
-  `~/.openclaw/agents/<agentId>/qmd` sidecar.
+- Optional `memory.qmd.sessions` export reads canonical transcript rows from
+  the per-agent database and materializes sanitized Markdown under the QMD home
+  as an explicit QMD input artifact. QMD session collections and artifact
+  identity mappings therefore remain part of the configured external-tool
+  bridge; they are not a second canonical transcript store.
+- QMD's own `index.sqlite`, YAML collection config, and model downloads remain
+  external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
+  mirrored into `plugin_blob_entries`. OpenClaw-owned QMD coordination is
+  database-first: shared `state_leases` serialize embeds globally and per-agent
+  `state_leases` serialize collection/update/embed writers. Runtime creates no
+  QMD lock sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an
@@ -153866,12 +154658,16 @@ skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, r
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
-apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registration_tombstones(node_id, deleted_at_ms)
 node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, gateway_context_path, updated_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
 workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, updated_at_ms)
+workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
+workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
 agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
@@ -154382,8 +155178,10 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD embed coordination uses a SQLite state lease instead of
-     `qmd/embed.lock`. Done.
+   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
+     SQLite lease for every collection/update/embed writer. Runtime no longer
+     creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
+     Doctor removes only definitely stale retired sidecars. Done.
 
 7. Make workers database-aware.
    - Workers open their own SQLite connections.
@@ -154563,7 +155361,10 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `auth-profiles.json`
 - `auth-state.json`
 - `exec-approvals.json`
+- `openclaw-workspace-state.json`
 - `workspace-state.json`
+- `workspace-attestations/*.attested`
+- sibling `<workspace>.attested`
 - Matrix `credentials*.json` and `recovery-key.json`
 - `cron/runs/*.jsonl`
 - `cron/jobs.json`
@@ -154578,7 +155379,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `identity/device-auth.json`
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
-- `push/apns-registrations.json`
+- `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)
 - `process-leases.json`
 - `gateway-instance-id`
 - `session-toggles.json`
@@ -154622,7 +155423,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Discord `model-picker-preferences.json`
 - Discord `command-deploy-cache.json`
 - sandbox registry shard JSON files
-- native hook relay `/tmp` bridge JSON files
 - `plugin-state/state.sqlite`
 - ad-hoc `openclaw-state.sqlite` runtime sidecars
 - `tasks/runs.sqlite`
@@ -154632,7 +155432,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `gateway-restart-intent.json`
 - `gateway-supervisor-restart-handoff.json`
 - `gateway.<hash>.lock`
-- `qmd/embed.lock`
+- `qmd/embed.lock.lock`
+- `agents/<agentId>/qmd-write.lock.lock`
 - `commands.log`
 - `config-health.json`
 - `port-guard.json`
@@ -155520,7 +156321,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.
-- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and plugin SDK API baseline. `pnpm release:check` re-runs those guards in check mode (plus a plugin SDK surface budget check) and reports every generated drift failure in one pass before running package release checks.
+- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, plugin SDK API baseline, and Control UI locale bundles. `pnpm release:check` re-runs those guards in check mode (including the strict zero-fallback locale gate plus the plugin SDK surface budget) and reports every generated drift failure in one pass before running package release checks.
 - Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to kick off all pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` is retained for an explicit beta soak. Package Acceptance provides the canonical package Telegram E2E during candidate validation, avoiding a second concurrent live poller.
 
@@ -156160,9 +156961,12 @@ identically-named `exec`/`wait` tools.
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
-- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden from
-  the model prompt and exposed inside the guest program through `ALL_TOOLS`
+- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
+  standalone model tool and exposed inside the guest program through `ALL_TOOLS`
   and `tools`.
+- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
+  catalog ids and compact input hints. It omits descriptions, full schemas, MCP
+  entries, and overflow entries; guest-side catalog lookup remains the fallback.
 - Guest code searches the hidden catalog, describes a tool's schema, and calls
   a tool through the same execution path used by normal agent turns (policy,
   approvals, hooks, telemetry all still apply).
@@ -156177,8 +156981,9 @@ behavior, or model selection.
 
 ## Why use it
 
-- Smaller prompt surface: providers get two control tools and only the few
-  required direct tools instead of dozens or hundreds of full tool schemas.
+- Smaller prompt surface: providers get two control tools, a bounded native-tool
+  index, and only the few required direct tools instead of dozens or hundreds
+  of full tool schemas.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
@@ -156428,12 +157233,15 @@ type CodeModeFailedResult = {
 };
 ```
 
-`exec` returns `waiting` when the QuickJS VM suspends with resumable state that
-still needs a model-visible continuation; the result includes a `runId` for
-`wait`. Namespace bridge calls, including MCP namespace calls, are auto-drained
-inside the same `exec`/`wait` call while they are ready, so a compact code
-block can call an MCP tool without forcing one model tool call per namespace
-await.
+`exec` returns `waiting` when the guest suspends with resumable state that still
+needs a model-visible continuation — an explicit `yield_control(...)`, or a
+bridge tool call that has not resolved within the exec deadline. The result
+includes a `runId` for `wait`. Bridge tool calls — `tools.search`/`describe`/
+`call` and namespace calls, including MCP namespace calls — are auto-drained
+inside the same `exec`/`wait` call while they resolve within the deadline, so a
+compact code block that awaits several tools runs to completion in one model
+turn instead of forcing one model tool call per await. Restart-safe runs never
+auto-drain; their pending work still goes through the replay-safe checks.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -156493,7 +157301,18 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 `ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not
-contain full schemas by default.
+contain full schemas by default. The model-visible `exec` description also
+includes a bounded, deterministic subset of exact OpenClaw/plugin ids and
+compact input hints so common calls can start without a separate catalog
+discovery turn. Descriptions remain deferred so adversarial catalog prose cannot
+steer the model. When that index omits a tool, read `ALL_TOOLS` or call
+`tools.search(...)` inside the guest program.
+
+Compact entries describe tool inputs, not result schemas, so the index marks
+their result shape as `-> ?` (output unknown). When a workflow needs result
+fields, the first `exec` must return the raw
+`tools.callValue(...)` result unchanged. Filter or map the observed shape only
+in a later `exec` call instead of guessing field names.
 
 ```typescript
 type ToolCatalogEntry = {
@@ -156503,8 +157322,12 @@ type ToolCatalogEntry = {
   description: string;
   source: "openclaw" | "mcp" | "client";
   sourceName?: string;
+  input: string;
 };
 ```
+
+`input` is a bounded TypeScript-style signature for the common case. Use
+`tools.describe(...)` when the exact full schema is still needed.
 
 Plugin tools use `source: "openclaw"` with `sourceName` set to the owning
 plugin id; there is no separate `"plugin"` source value. `source: "mcp"` is
@@ -156525,6 +157348,7 @@ Catalog helpers:
 type ToolCatalog = {
   search(query: string, options?: { limit?: number }): Promise<ToolCatalogEntry[]>;
   describe(id: string): Promise<ToolCatalogEntryWithSchema>;
+  callValue(id: string, input?: unknown): Promise<unknown>;
   call(id: string, input?: unknown): Promise<unknown>;
   [safeToolName: string]: unknown;
 };
@@ -156535,17 +157359,21 @@ Convenience tool functions are installed only for unambiguous safe names:
 ```typescript
 const files = await tools.search("read local file");
 const fileRead = await tools.describe(files[0].id);
-const content = await tools.call(fileRead.id, { path: "README.md" });
+const content = await tools.callValue(fileRead.id, { path: "README.md" });
 
 // If the hidden catalog has an unambiguous `web_search` entry:
 const hits = await tools.web_search({ query: "OpenClaw code mode" });
 ```
 
-MCP catalog entries are not callable through `tools.call(...)` or convenience
-functions in code mode; they are exposed only through the generated `MCP`
-namespace. TypeScript-style declaration files are available through the
-read-only `API` virtual file surface, so agents can inspect MCP signatures
-without adding MCP schemas to the prompt:
+`tools.callValue(...)` returns a normal tool's JSON `details` value directly.
+`tools.call(...)` preserves the raw `{ tool, result }` envelope for callers
+that need content blocks or other result metadata.
+
+MCP catalog entries are not callable through `tools.callValue(...)`,
+`tools.call(...)`, or convenience functions in code mode; they are exposed
+only through the generated `MCP` namespace. TypeScript-style declaration files
+are available through the read-only `API` virtual file surface, so agents can
+inspect MCP signatures without adding MCP schemas to the prompt:
 
 ```typescript
 const files = await API.list("mcp");
@@ -156849,7 +157677,7 @@ because their structured results cannot cross the QuickJS bridge.
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with
 normal tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
-`tools.describe(...)`, and `tools.call(...)` views omit MCP entries. The
+`tools.describe(...)`, `tools.callValue(...)`, and `tools.call(...)` views omit MCP entries. The
 generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
 exact catalog id and dispatches through the same executor path.
 
@@ -157062,7 +157890,7 @@ Code mode coverage should prove:
 - all catalog-eligible effective non-MCP tools appear in `ALL_TOOLS`
 - direct-only tools stay model-visible and do not appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
-- `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
+- `tools.search`, `tools.describe`, `tools.callValue`, and `tools.call` work for OpenClaw tools
 - `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
   MCP declarations without a bridge/tool call
 - MCP namespace `$api()` remains available as an inline fallback for schemas
@@ -157099,7 +157927,7 @@ Run these as integration or end-to-end tests when changing the runtime:
 7. In `exec`, read `ALL_TOOLS` and assert the catalog-eligible effective test
    tools are present while direct-only tools are absent.
 8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
-   `tools.describe`, and `tools.call`.
+   `tools.describe`, and `tools.callValue` (or raw `tools.call`).
 9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
    assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and
@@ -157229,7 +158057,9 @@ read_when:
 
 `Full Release Validation` is the release product-validation umbrella. Most work
 happens in child workflows so a failed box can be rerun without restarting the
-whole release.
+whole release. Run release preparation before freezing the Code SHA; it
+refreshes Control UI locale output when the background bot has not landed it
+yet, then enforces the same strict zero-fallback check used by release CI.
 
 Freeze the product-complete pre-changelog commit as the **Code SHA**, then run:
 
@@ -157276,6 +158106,10 @@ SHA/artifact runs pack `extensions/codex` from the selected ref; and operators
 can set `codex_plugin_spec` directly for `npm:`, `npm-pack:`, or `git:` plugin
 sources. The lane grants the explicit Codex CLI install approval required by
 that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
+Its final zero-retry, medium-thinking turn sends visible progress with omitted
+Codex `final`, reads randomized workspace inputs, writes their exact artifact,
+and sends explicit completion. This catches the v2026.7.1 regression where an
+ordinary progress send terminated the turn.
 
 ## Top-level stages
 
@@ -157364,16 +158198,16 @@ or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                                                   |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                                                      |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live turns, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                             |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                              |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                        |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                              |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                      |
-| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                    |
+| Chunk                                                           | Coverage                                                                                                                                     |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                        |
+| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live progress follow-through, and Chat Completions tool calls. |
+| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                                               |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                                |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                          |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun
@@ -158777,6 +159611,171 @@ Related docs:
 
 
 
+# Section: reference/pull-request-review-flow.md
+
+---
+summary: "How Barnacle and ClawSweeper feedback helps move OpenClaw pull requests through review."
+read_when:
+  - Following up after Barnacle or ClawSweeper feedback
+  - Asking ClawSweeper for review
+  - Debugging Barnacle, ClawSweeper, stale labels, or auto-closures
+title: "Pull request review flow"
+sidebarTitle: "PR review flow"
+---
+
+This page explains the review flow after you open or update an OpenClaw pull
+request: what Barnacle and ClawSweeper do, how to improve the PR from their
+feedback, and what to check when automation stays quiet.
+
+Barnacle and ClawSweeper help maintainers keep the review queue usable. They do
+not replace maintainer judgment.
+
+## Barnacle
+
+Barnacle is deterministic GitHub triage. It looks for known queue-management
+cases and responds with labels, comments, or closures.
+
+Barnacle may act when:
+
+- a PR body is mostly empty or missing problem context;
+- a PR has no useful evidence;
+- a docs-only, test-only, refactor-only, CI-only, or infra change lacks linked
+  maintainer context;
+- a change looks like it belongs in ClawHub or a plugin instead of core;
+- a branch carries unrelated work;
+- an author has more than 20 open PRs.
+
+Barnacle runs from trusted repository workflow code. It does not check out or
+run contributor code.
+
+Most routing labels are maintainer or automation signals, so contributors do
+not need to add labels themselves.
+
+## ClawSweeper
+
+ClawSweeper is the AI-assisted review and maintenance bot for OpenClaw
+repositories. It can review PRs, evaluate proof, leave durable review comments,
+and help maintainers with guarded repair or automerge flows.
+
+A positive ClawSweeper result is supporting evidence, not maintainer approval.
+Maintainers still decide whether and when a PR is ready to merge.
+
+ClawSweeper is queue-based. Do not expect an immediate response after opening a
+PR, pushing a commit, or adding a review request. Label updates after a
+ClawSweeper run can also take time.
+
+New PRs enter the ClawSweeper review queue. Maintainers can also queue review,
+repair, or automerge flows with labels or commands. For ordinary contributor
+updates, ask ClawSweeper for another review only after you have updated the
+branch, PR description, proof, or code. Then request a fresh review with a new
+PR comment:
+
+```text
+@clawsweeper re-review
+```
+
+PR authors can also use `@clawsweeper re-run`; users with repository write
+access can use either command on any open item. The plain
+`@clawsweeper review` command is maintainer-only. Be patient: asking again
+before the requested changes are present just adds queue noise.
+
+When ClawSweeper leaves review conversations, treat them like normal review
+feedback and use the follow-up checklist below.
+
+If a human contributor or maintainer has taken over the PR and is actively
+working on it, do not summon ClawSweeper or otherwise work on the PR at the same
+time. Let the human review or repair finish first. If activity stops, check
+whether the author was asked to provide proof or make other updates.
+
+## Improve a PR during review
+
+Once Barnacle, ClawSweeper, or a maintainer responds, use that feedback as the
+next-step checklist for the PR.
+
+1. Read ClawSweeper's `Rank-up moves:` and `Proof guidance:` as the action list
+   for that PR. Ratings and labels are review signals, not fixed merge targets.
+2. Push the requested code or docs change, and update the PR description when
+   the problem, solution, user impact, or evidence has changed.
+3. Add the requested proof, using evidence that matches the change.
+4. Resolve addressed review conversations yourself. Reply and leave a
+   conversation open only when you need maintainer or reviewer judgment.
+5. Ask for a re-review only after the branch, PR description, evidence, and
+   relevant CI results are current. Multiple update and review cycles between the
+   author, maintainer, and ClawSweeper are normal.
+6. Keep discussion on the PR when possible. Move to `#clawtributors` on Discord
+   only when the PR needs maintainer coordination, automation appears blocked,
+   or the next decision is hard to settle in GitHub comments. Include the PR
+   link, current status, and the specific question or remaining evidence.
+
+Keep the PR body current. Comments help with discussion, but the PR
+description is the durable summary maintainers and automation revisit.
+
+`status: ⏳ waiting on author` means the next action is with the PR author:
+update the branch, PR description, proof, or reply with the missing context
+before asking for another review.
+
+Useful evidence includes focused test output, CI results, screenshots,
+recordings, terminal output, live observations, redacted logs, or artifact
+links. For visual changes, include before and after screenshots when practical.
+For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
+recordings, or a short redacted log excerpt. Do not commit generated proof files
+unless they are part of the actual docs, tests, or product change.
+
+Redacting sensitive data is the contributor's responsibility. Remove secrets,
+tokens, private URLs, user data, and unrelated logs before posting proof.
+
+OpenClaw also uses separate stale automation. Unassigned issues and PRs can be
+marked stale after 14 days of inactivity, then closed after 7 more idle days.
+Assigned PRs are marked stale 27 days after opening, regardless of later
+updates, then closed after 7 stale days without activity. If an assigned PR is
+still active, coordinate with the maintainer working on it.
+
+## When automation stays quiet
+
+Automation may stay quiet when a maintainer is already handling the item, a
+review or repair request is still queued, the event is routine, or the
+ClawSweeper lane is not configured for the requested action.
+
+It may also avoid action when a trusted workflow would need to run untrusted
+contributor code. In that case, maintainers use normal review or a safer
+workflow instead.
+
+## Troubleshooting
+
+If ClawSweeper does not respond immediately, wait before retrying. The service is
+queue-based, and repeated comments or label changes can make the thread harder
+to review without making the queue faster.
+
+Before asking for help, check:
+
+- the PR description is current;
+- the latest commit contains the requested change;
+- CI has finished, or the PR body explains why any remaining failure is
+  unrelated to the PR;
+- the latest review request was made as a PR comment:
+  `@clawsweeper re-review`;
+- a maintainer or contributor is not already actively working on the PR;
+- the latest request is not still within the normal ClawSweeper queue delay.
+
+If there is still no ClawSweeper response several hours after the PR is current,
+or if the PR appears blocked by automation, ask in `#clawtributors` on Discord.
+Include the PR link, what you expected, when you asked, and what changed since
+the last bot comment.
+
+## Forking the automation
+
+Projects that want similar review automation can study or fork ClawSweeper:
+
+- [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper)
+- [ClawSweeper docs](https://clawsweeper.bot/)
+
+## Related
+
+- [Contributing](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md)
+- [CI pipeline](/ci)
+
+
+
 # Section: reference/release-performance-sweep.md
 
 ---
@@ -159318,6 +160317,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `plugins.entries.webhooks.config.routes.*.secret`
 - `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
@@ -159392,6 +160392,7 @@ Notes:
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces. Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+- Cold Gateway startup can isolate resolution failures for mapped owners. The initial mapped owners are `models.providers.*` and the built-in TTS capability (`messages.tts.providers.*`, `agents.list[].tts.providers.*`, and channel voice TTS provider keys). Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying environment or profile credentials. Gateway ingress auth remains required. Structurally invalid refs or values and currently unmapped owners fail startup. Reload and config-write preflight remain strict and retain the last-known-good snapshot.
 - For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
 
 ## Unsupported credentials
@@ -166103,8 +167104,9 @@ or assume that daemon implicitly.
 ## Catalog flow
 
 The generic Gateway method `sessions.catalog.list` dispatches to the `codex`
-catalog provider, which always requests `archived: false` and
-the interactive `cli` and `vscode` source kinds. It combines:
+catalog provider, which always requests `archived: false` and lets App Server
+apply its interactive-source default: `cli`, `vscode`, Atlas, and ChatGPT. It
+combines:
 
 1. Gateway-local `thread/list` results from the supervision App Server,
    which defaults to managed user-home stdio.
@@ -166254,11 +167256,11 @@ snapshot; it is not the durable continuation thread. Starting a distinct
 canonical harness thread on the first turn prevents OpenClaw from becoming a
 competing source writer merely because process-local status failed to see a
 Desktop-owned turn. The visible-history mirror and pinned snapshot may omit work
-that has not yet completed in an active source. The original CLI or VS Code
-source remains eligible for both native and OpenClaw catalogs. The canonical
-branch remains a native Codex thread in the supervision store, but native clients
-may filter its `appServer` source kind, so Codex Desktop visibility is not a
-contract.
+that has not yet completed in an active source. The original CLI, VS Code,
+Atlas, or ChatGPT source remains eligible for both native and OpenClaw catalogs.
+The canonical branch remains a native Codex thread in the supervision store,
+but native clients may filter its `appServer` source kind, so Codex Desktop
+visibility is not a contract.
 
 ## Archive behavior
 
@@ -167373,9 +168375,11 @@ To use a Claude subscription when the Gateway host has no Claude CLI login, run
 printed token as **Anthropic setup-token** under **Connect with an API key or
 token**.
 
-Gemini CLI and Antigravity remain available for normal use after setup. Their
-installed CLIs are shown for context but are not auto-tested because neither can
-enforce the tool-free inference probe.
+Installed Gemini CLI, Antigravity, Pi, and OpenCode CLIs are shown for context
+when they cannot be selected as the reusable guided-setup inference route.
+Gemini and Antigravity cannot enforce the tool-free inference probe. Pi and
+OpenCode are whole-agent harnesses rather than setup inference routes; their
+session integrations require separate runtime and plugin setup.
 
 You can also sign in through the provider's own OAuth or device-pairing flow.
 The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
@@ -167390,6 +168394,16 @@ remains locked until one backend has passed, so the first agent chat cannot
 start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
 other optional features; it is also available later under Settings → OpenClaw.
+</Step>
+<Step title="Import memories (shown when detected)">
+For a local Gateway, onboarding checks the Mac for memories from supported AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When any are found, this page lists each source with its memory count
+and lets you import the selected sources into the agent workspace under
+`memory/imports/` for indexed recall. Already-imported files are skipped, and
+the page never appears when there is nothing to import. Skipping is safe; the
+dashboard's Memory import page offers the same import later with per-file
+control.
 </Step>
 <Step title="Permissions">
 
@@ -169104,8 +170118,10 @@ Plain `openclaw onboard` follows this path:
 2. Detect configured models, API-key environment variables, supported local AI
    CLIs, and already installed tool-capable models from reachable Ollama or LM
    Studio servers on the Gateway host. This read-only pass never downloads a
-   model. Gemini CLI and Antigravity installs are reported but not auto-tested
-   because they cannot enforce a tool-free probe.
+   model. Gemini CLI, Antigravity, Pi, and OpenCode installs are also reported
+   when they cannot serve as the reusable inference route for guided setup.
+   Gemini and Antigravity cannot enforce the tool-free probe; Pi and OpenCode
+   are whole-agent harnesses rather than setup inference routes.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
@@ -169487,6 +170503,8 @@ What this does:
   bootstrap.
 - Exposes plugin tools already registered by installed and enabled OpenClaw
   plugins.
+- Passes the active ACP session identity to plugin tool factories, so
+  agent-scoped tools stay in that agent's namespace.
 - Keeps the feature explicit and default-off.
 
 Security and trust notes:
@@ -173744,11 +174762,11 @@ Supported `defaults` keys: `fontFamily`, `fontSize`, `lineSpacing`, `layout`, `s
 
 ## Artifact lifecycle and storage
 
-- Artifacts live under `$TMPDIR/openclaw-diffs`.
-- Viewer metadata stores a random 20-hex-char artifact ID, a random 48-hex-char token, `createdAt`/`expiresAt`, and the stored `viewer.html` path.
+- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed; SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
+- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata; no JSON sidecars are written.
 - Default artifact TTL: 30 minutes. Maximum accepted TTL: 6 hours.
-- Cleanup runs opportunistically after each artifact create call; expired artifacts are deleted.
-- Fallback sweep removes stale folders older than 24 hours when metadata is missing.
+- Cleanup runs opportunistically after each artifact create call. Expired SQLite rows are deleted first, followed by any corresponding PNG/PDF directory.
+- A fallback sweep removes rowless temporary folders older than 24 hours. Legacy `meta.json`, `file-meta.json`, and `viewer.html` caches are not imported or read.
 
 ## Viewer URL and network behavior
 
@@ -174824,15 +175842,12 @@ The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
-Releases before 2026.6.6 always kept the file in `~/.openclaw`. If
-`OPENCLAW_STATE_DIR` points somewhere else and an approvals file still exists
-in the default directory, run `openclaw doctor --fix` directly once to import
-it into the state directory (the original is archived with a `.migrated`
-suffix). Interactive doctor can also preview and confirm the import. Automated
-update and Gateway watch repair runs never import across state directories: a
-temporary or staging state directory must not capture the default
-installation's approvals. The same boundary applies to legacy
-`plugin-binding-approvals.json` imports into shared SQLite state.
+State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
+points somewhere else, OpenClaw never imports or archives
+`~/.openclaw/exec-approvals.json`; configure approvals separately for the
+custom state directory. Doctor also imports legacy
+`plugin-binding-approvals.json` only when it belongs to the active state
+directory.
 
 Example schema:
 
@@ -176287,7 +177302,7 @@ internal image endpoints remain blocked by default.
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
 | Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -176305,7 +177320,7 @@ backend emits it.
 | ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
 | fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google            | `gemini-3.1-flash-image-preview`        | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| Google            | `gemini-3.1-flash-image`                | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
@@ -176413,7 +177428,7 @@ translation.
         timeoutMs: 180_000,
         fallbacks: [
           "openrouter/google/gemini-3.1-flash-image-preview",
-          "google/gemini-3.1-flash-image-preview",
+          "google/gemini-3.1-flash-image",
           "fal/fal-ai/flux/dev",
         ],
       },
@@ -176602,8 +177617,8 @@ and ComfyUI support 1.
     OpenClaw forwards `prompt`, `count`, reference images, and
     Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
     Current built-in OpenRouter image model shortcuts include
-    `google/gemini-3.1-flash-image-preview`,
-    `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`. Use
+    `google/gemini-3.1-flash-image`,
+    `google/gemini-3-pro-image`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
 
   </Accordion>
@@ -176844,18 +177859,18 @@ The table lists representative tools so you can recognize the surface. It is
 not the full policy reference. For exact groups, defaults, and allow/deny
 semantics, use [Tools and custom providers](/gateway/config-tools).
 
-| Category                | Use when the agent needs to...                                                | Representative tools                                                                                 | Read next                                                                                   |
-| ----------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `code_execution`                                                                  | [Exec](/tools/exec), [Code execution](/tools/code-execution)                                |
-| Files                   | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                                                               | [Apply patch](/tools/apply-patch)                                                           |
-| Web                     | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                      |
-| Browser                 | Operate a browser session                                                     | `browser`                                                                                            | [Browser](/tools/browser)                                                                   |
-| Messaging and channels  | Send replies or channel actions                                               | `message`                                                                                            | [Agent send](/tools/agent-send)                                                             |
-| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
-| Automation              | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                                                          | [Automation](/automation)                                                                   |
-| Gateway and nodes       | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                            |
-| Media                   | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                 | [Media overview](/tools/media-overview)                                                     |
-| Large OpenClaw catalogs | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                                                   | [Tool Search](/tools/tool-search)                                                           |
+| Category                | Use when the agent needs to...                                                | Representative tools                                                                                 | Read next                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `terminal`, `code_execution`                                                      | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
+| Files                   | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                                                               | [Apply patch](/tools/apply-patch)                                                                                      |
+| Web                     | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
+| Browser                 | Operate a browser session                                                     | `browser`                                                                                            | [Browser](/tools/browser)                                                                                              |
+| Messaging and channels  | Send replies or channel actions                                               | `message`                                                                                            | [Agent send](/tools/agent-send)                                                                                        |
+| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)                            |
+| Automation              | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                                                          | [Automation](/automation)                                                                                              |
+| Gateway and nodes       | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
+| Media                   | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                 | [Media overview](/tools/media-overview)                                                                                |
+| Large OpenClaw catalogs | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                                                   | [Tool Search](/tools/tool-search)                                                                                      |
 
 <Note>
 Tool Search is an experimental OpenClaw agent surface. Codex harness runs use
@@ -176873,7 +177888,7 @@ for contract details.
 Common plugin-provided tools include:
 
 - [Diffs](/tools/diffs) for rendering file and markdown diffs
-- [Show widget](/tools/show-widget) for self-contained inline SVG and HTML in web chat
+- [Show widget](/tools/show-widget) for self-contained inline SVG and HTML in supported chat clients
 - [LLM Task](/tools/llm-task) for JSON-only workflow steps
 - [Lobster](/tools/lobster) for typed workflows with resumable approvals
 - [Tokenjuice](/tools/tokenjuice) for compacting noisy `exec` and `bash` tool
@@ -177460,6 +178475,25 @@ Notes:
 
 - `stdin: $step.stdout` and `stdin: $step.json` pass a prior step's output.
 - `condition` (or `when`) can gate steps on `$step.approved`.
+
+### Injected environment variables
+
+Every step shell inherits the parent environment plus these Lobster-injected
+variables, so commands can reference resolved workflow args without embedding
+raw values into the command string:
+
+- `LOBSTER_ARG_<NAME>` - one per workflow arg. The name is uppercased with each
+  run of non-alphanumeric characters collapsed to `_`, so arg `user-id` becomes
+  `LOBSTER_ARG_USER_ID`.
+- `LOBSTER_ARGS_JSON` - every resolved arg as a single JSON string.
+
+That is the complete injected set. There are **no** per-step output variables
+such as `LOBSTER_STEP_<id>_STDOUT` or `LOBSTER_STEP_<id>_JSON_<field>`; shells
+treat those names as unset, so parameter-expansion defaults can hide the error.
+Read a prior step's output through step references instead - `$step.stdout`,
+`$step.json`, or `$step.json.<field>` - in a `stdin:`, `env:`, or `condition:`
+value. (`LOBSTER_STATE_DIR` is a separate runtime setting for the state
+directory, not a per-run arg.)
 
 ## Tool parameters
 
@@ -180663,39 +181697,74 @@ self-learning does not apply, reject, or delete them.
 # Section: tools/show-widget.md
 
 ---
-summary: "Render self-contained SVG or HTML widgets inline in web chat"
+summary: "Show self-contained HTML widgets on supported chat surfaces"
 title: "Show widget"
 sidebarTitle: "Show widget"
 read_when:
-  - You want an agent to render an interactive result inside web chat
+  - You want an agent to render an interactive result in web chat, a native app, or Discord
+  - You want widget buttons to send follow-up prompts into the chat
   - You need the show_widget input, security, or retention contract
 ---
 
-`show_widget` renders a self-contained SVG or HTML fragment inline in the Control UI chat transcript. The bundled Canvas plugin owns the tool and hosts each result as a same-origin Canvas document.
+`show_widget` shows a self-contained HTML widget on the user's current surface. The Canvas plugin renders it inline in the Control UI, iOS, Android, and macOS chat transcripts; Linux uses the browser Control UI. In a Discord session with [Activities](/channels/discord-activities) enabled, the Discord plugin posts an **Open widget** button that launches it as an Activity.
 
-The tool is available only when the originating Gateway client declares the `inline-widgets` capability. The Control UI declares this capability automatically. Channel runs such as Telegram and WhatsApp do not receive `show_widget`.
+## How widgets work
+
+When the agent calls `show_widget`, the Canvas plugin wraps `widget_code` in a minimal HTML document, stores it as a Canvas document, and returns a preview handle. The Control UI renders that handle as a sandboxed iframe directly under the tool call, while native apps use an isolated web view. Both restore the widget after history reload.
+
+For browser embedding, the wrapper document injects two small host bridges around the widget code:
+
+- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
+- A prompt bridge defines a global `sendPrompt(text)` function that widget scripts can call to submit a follow-up message into the chat. The bridge creates a private message channel and offers one endpoint to the chat before any widget code runs; the chat adopts only that first offer. See [Interactive widgets](#interactive-widgets).
+
+Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
+
+The Canvas implementation is available only when the originating Gateway client declares the `inline-widgets` capability. The Control UI and supported native apps declare this capability automatically. The Discord implementation is available only in Discord sessions with Activities configured. Other channel runs do not receive `show_widget`.
 
 Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers and direct HTTP tool-invoke callers remain fail closed because they do not declare client capabilities.
 
 ## Use the tool
 
-The agent supplies two required strings:
+Both implementations use the same required fields:
 
 <ParamField path="title" type="string" required>
   Short title shown with the inline preview and in the hosted document title.
 </ParamField>
 
 <ParamField path="widget_code" type="string" required>
-  Self-contained SVG or HTML fragment. Input beginning with `<svg` after trimming is rendered in SVG mode; all other input is treated as an HTML fragment. Maximum length: 262,144 characters.
+  Self-contained HTML or SVG. For Canvas-backed clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. Discord accepts a complete HTML document or body fragment up to 48 KiB.
 </ParamField>
 
-The tool result includes a Canvas preview handle, so web chat renders the widget directly from the tool call and restores it after history reload. Transcripts that do not render previews still show the hosted Canvas path.
+Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
+
+The Canvas result includes a preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Discord returns the stored widget and posted-message identifiers.
+
+`discord_widget` remains registered as a deprecated alias for one release. New agent calls should use `show_widget`.
+
+## Interactive widgets
+
+In the Control UI, widget scripts can drive the conversation. The wrapper document defines a global `sendPrompt(text)` function; calling it submits `text` to the chat as if the user had typed and sent the message. Wire it to buttons or other controls to build interactive flows such as pickers, quizzes, or drill-down dashboards. Native apps render interactive widget code but do not expose this chat prompt bridge.
+
+```html
+<button onclick="sendPrompt('Show the failing tests in detail')">Failing tests</button>
+```
+
+Every prompt is validated on both sides of the frame boundary:
+
+- `sendPrompt` requires [transient user activation](https://developer.mozilla.org/en-US/docs/Web/Security/User_activation) inside the widget: it only works in the few seconds after the user clicks or presses a key in the widget, so wire it to buttons and other click targets — calling it automatically on load does nothing. The bridge keeps the sending endpoint private to itself and fails closed in browsers that do not expose user activation, so widget code cannot bypass the check.
+- Prompt authority belongs to the original widget document only. The trusted bridge offers its channel endpoint to the chat before widget code can run or navigate the frame, the chat adopts only that first offer, and the channel dies with the document on navigation. Externally allowed embed URLs are never adopted.
+- The widget frame must be visible in the chat transcript and hold focus — an additional host-observed signal that the user is actually interacting with this widget.
+- The text must be non-empty after trimming and at most 4,000 characters.
+- Prompts starting with `/` are rejected, so widget code cannot trigger chat commands such as `/approve` or `/stop`.
+- Each widget document may send at most 10 prompts per rolling minute; excess prompts are dropped silently.
+
+Accepted prompts appear in the transcript as regular user messages and start a normal agent turn in the session that owns the widget. There is no feedback channel into the widget: a dropped prompt fails silently, and the widget cannot read the agent's reply.
 
 ## Security and storage
 
-Widget documents use a restrictive Content Security Policy: inline style and script are allowed, images may use `data:` URLs, and external fetches and resource loads are blocked. Keep all markup, styles, scripts, and image data inside `widget_code`.
+Widget documents use restrictive Content Security Policies. Inline style and script are allowed, while external fetches and resource loads are blocked. Keep all markup, styles, scripts, and image data inside `widget_code`.
 
-The iframe always omits `allow-same-origin`, even when the Control UI's global embed mode is `trusted`, so widget scripts cannot read the parent application origin. The Canvas host also serves widget documents with a `Content-Security-Policy: sandbox allow-scripts` response header, so opening the hosted URL directly still runs the widget in an opaque origin instead of the Control UI origin. Browser sandboxing does not prevent a script from navigating its own iframe; only render widget code you are willing to execute in that isolated frame.
+The Control UI iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The Canvas host also serves widget documents with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 
 The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
 
@@ -180704,6 +181773,7 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 ## Related
 
 - [Control UI hosted embeds](/web/control-ui#hosted-embeds)
+- [Discord Activities](/channels/discord-activities)
 - [Canvas plugin](/plugins/reference/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
 
@@ -182937,6 +184007,10 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
+In the Control UI, parent sessions with recent child runs have an expandable
+sidebar row. The nested rows show child status and runtime, and selecting one
+opens that child's chat while preserving the parent hierarchy.
+
 ### Thread binding controls
 
 These commands work on channels with persistent thread bindings. See
@@ -183765,7 +184839,7 @@ title: "Thinking levels"
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
   - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 is the exception: it exposes `/think off|low|high|max`, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`.
-  - Moonshot Kimi K2.7 Code (`moonshot/kimi-k2.7-code`) always thinks. Its profile exposes only `on`, and OpenClaw omits the outbound `thinking` field as required by Moonshot. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+  - Moonshot API Kimi K3 (`moonshot/kimi-k3`) always thinks at `max`, sends `reasoning_effort: "max"`, omits the K2 `thinking` field and fixed sampling overrides, and preserves K3-supported tool choices. Kimi Code K3 (`kimi/k3` and `kimi/k3[1m]`) exposes `/think off|max`: off sends `thinking.type: "disabled"`, while max sends adaptive thinking with max effort. Current Kimi Code refs also include `kimi/kimi-for-coding` and `kimi/kimi-for-coding-highspeed`. Kimi K2.7 Code (`moonshot/kimi-k2.7-code` and `moonshot/kimi-k2.7-code-highspeed`) always thinks, exposes only `on`, and omits both outbound `thinking` and `reasoning_effort`. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When K2 thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
 
@@ -184086,7 +185160,9 @@ client-provided app tools.
 `openclaw.tools.search(query, options?)`
 
 Searches the effective catalog for the current run. Results are compact and safe
-to put back into prompt context.
+to put back into prompt context. Each hit includes a bounded TypeScript-style
+`input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
+model can skip `describe` when that signature is sufficient.
 
 ```js
 const hits = await openclaw.tools.search("calendar event", { limit: 5 });
@@ -184102,7 +185178,9 @@ const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event"
 
 `openclaw.tools.call(id, args)`
 
-Calls a selected tool through OpenClaw.
+Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
+envelope. JSON-returning tools normally place their value in
+`result.details`.
 
 ```js
 await openclaw.tools.call(calendarCreate.id, {
@@ -185301,6 +186379,16 @@ Reply -> TTS enabled?
     </ParamField>
   </Accordion>
 
+Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
+startup, an unavailable TTS SecretRef marks the built-in TTS capability
+configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
+`UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
+sent. Status and doctor list the degraded TTS owner and its config paths. The
+explicit refs remain in the runtime snapshot, so environment or profile
+credentials cannot silently select a different account. Reloads and config-write
+preflight remain strict and keep the last-known-good snapshot. Structurally
+invalid refs and resolved values still fail startup.
+
   <Accordion title="Azure Speech">
     <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
     <ParamField path="region" type="string">Azure Speech region (e.g. `eastus`). Env: `AZURE_SPEECH_REGION` or `SPEECH_REGION`.</ParamField>
@@ -185429,7 +186517,7 @@ Reply -> TTS enabled?
   <Accordion title="Xiaomi MiMo">
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
-    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts` and `mimo-v2.5-tts-voicedesign`.</ParamField>
+    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="speakerVoice" type="string">Default `mimo_default` for preset-voice models. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`. Not sent for `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>
@@ -185602,8 +186690,8 @@ openclaw tasks cancel <lookup>
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (1.0)        | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (I2V models only; first + last frame) | -                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus (bundled)    | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
 | ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
 | DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
@@ -185819,24 +186907,21 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     Uses DashScope / Model Studio async endpoint. Reference images and
     videos must be remote `http(s)` URLs.
   </Accordion>
-  <Accordion title="BytePlus (1.0)">
+  <Accordion title="BytePlus (bundled)">
     Provider id: `byteplus`.
 
     Models: `seedance-1-0-pro-250528` (default),
-    `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`,
-    `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`.
+    `seedance-1-5-pro-251215`.
 
-    T2V models (`*-t2v-*`) do not accept image inputs; I2V models and
-    general `*-pro-*` models support a single reference image (first
-    frame). Pass the image positionally or set `role: "first_frame"`.
-    T2V model IDs are automatically switched to the corresponding I2V
-    variant when an image is provided.
+    Uses the unified `content[]` API. Supports up to 2 input images
+    (`first_frame` + `last_frame`). Pass images positionally or set each
+    image's `role` explicitly.
 
     Supported `providerOptions` keys: `seed` (number), `draft` (boolean -
     forces 480p), `camera_fixed` (boolean).
 
   </Accordion>
-  <Accordion title="BytePlus Seedance 1.5">
+  <Accordion title="BytePlus Seedance 1.5 plugin">
     Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark)
     plugin (external, not bundled). Provider id: `byteplus-seedance15`. Model:
     `seedance-1-5-pro-251215`.
@@ -187007,7 +188092,7 @@ local-path sources, updates, and advanced plugin configuration.
 
 ## Sidebar navigation
 
-The sidebar pins navigation above a scrollable session list. In multi-agent setups every agent appears as a collapsible top-level section; expanding an agent browses its sessions without navigating away from the open chat, and collapsed agents show an unread indicator. Within an agent the list splits into **Pinned**, one built-in section per connected channel (Telegram, Slack, WhatsApp, ...), a built-in **Work** section for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), custom groups (the session `category`), and **Chats** for the rest. Channel and Work sections classify rows automatically; assigning a session to a custom group always wins. Opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a session onto **Pinned** to pin it, or onto a custom group or **Chats** to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while the collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Chats. The single **+** in the session-list header opens the New session page (see below). The sort control also has a Group by toggle: Grouped (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. **Usage**, **Automations**, and **Plugins** are pinned by default; the **More** row opens a menu with every other destination, including plugin-provided tabs. Select **Edit pinned items** in that menu, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set is stored in the current browser profile and survives reloads.
+The sidebar pins navigation above a scrollable session list. In multi-agent setups every agent appears as a collapsible top-level section; expanding an agent browses its sessions without navigating away from the open chat, and collapsed agents show an unread indicator. Within an agent the list splits into **Pinned**, one built-in section per connected channel (Telegram, Slack, WhatsApp, ...), a built-in **Work** section for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), custom groups (the session `category`), and **Chats** for the rest. Channel and Work sections classify rows automatically; assigning a session to a custom group always wins. Opening a session moves the selection highlight without reordering the rows. Parent sessions with recent child runs show a disclosure and child count; expand it to inspect nested child sessions, live or terminal status, and runtime without leaving the sidebar. Selecting a child opens its chat and automatically reveals its ancestor path. Child rows stay outside root grouping, pinning, dragging, multi-select, and pagination. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group or **Chats** to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while the collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Chats. The single **+** in the session-list header opens the New session page (see below). The sort control also has a Group by toggle: Grouped (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. **Usage**, **Automations**, and **Plugins** are pinned by default; the **More** row opens a menu with every other destination, including plugin-provided tabs. Select **Edit pinned items** in that menu, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set is stored in the current browser profile and survives reloads.
 
 ## New session page
 
@@ -187015,7 +188100,7 @@ The **+** in the sidebar session-list header opens a full-page draft at `/new`: 
 
 Inside **Settings**, the dedicated sidebar starts with a **Search settings** field for quickly finding settings sections.
 
-A **Search** field at the top of the sidebar opens the command palette (⌘K). Clicking the OpenClaw brand in the sidebar header opens the clean New session start screen. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The footer shows the active agent as a chip — avatar (identity image or emoji), name, connection dot, and a live subtitle — with a **+** for a new session. Clicking the chip opens the agent menu: an agent switcher (multi-agent setups), "What can this agent do?", **Agent settings**, **Settings**, mobile pairing, **Docs**, the build chip, and the color-mode toggle. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own `?agent=` selection and does not follow the shared page scope. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma opens **Settings** without overriding the browser's Command-Comma shortcut. The sidebar header also holds the collapse toggle (⌘B); collapsing hides the sidebar entirely for a full-width workspace, and a floating expand control (or ⌘B) brings it back; the macOS app hosts that toggle natively in the titlebar instead. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; in the macOS app that header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
+A **Search** field at the top of the sidebar opens the command palette (⌘K). Clicking the OpenClaw brand in the sidebar header opens the clean New session start screen. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The footer shows the active agent as a chip — avatar (identity image or emoji), name, connection dot, and a live subtitle — with a **+** for a new session. Clicking the chip opens the agent menu: an agent switcher (multi-agent setups), "What can this agent do?", **Agent settings**, **Settings**, mobile pairing, **Docs**, the build chip, and the color-mode toggle. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own `?agent=` selection and does not follow the shared page scope. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma opens **Settings** without overriding the browser's Command-Comma shortcut. The sidebar header also holds the collapse toggle (⌘B); collapsing hides the sidebar entirely for a full-width workspace, and a floating expand control (or ⌘B) brings it back; the macOS app hosts that toggle natively in the titlebar instead. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
 
 ## What it can do (today)
 
@@ -187037,12 +188122,13 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
     - Sessions (a settings page under **Agents & Tools**, `/settings/sessions`): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts. Rows show an unread dot for sessions with activity since their last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
-    - Import Memory (a settings page under **Agents & Tools**, `/settings/memory-import`): preview and copy local Codex consolidated memory or Claude Code auto-memory into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
+    - Import Memory (a settings page under **Agents & Tools**, `/settings/memory-import`): preview and copy local Claude Code auto-memory, Codex consolidated memory, or Hermes memory files into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
+    - Onboarding memory offer: when the Control UI opens in onboarding mode (`?onboarding=1`, used by the Linux companion app after its first-run install), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
     - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
-    - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
+    - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`). Chat's Background tasks rail groups running and finished work; select a row to inspect its bounded prompt and output or error summary.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
@@ -187153,6 +188239,8 @@ The terminal is an unconfined host shell and inherits the Gateway process enviro
 
 Use **Ctrl + backtick** to toggle the dock. The layout supports bottom and right docking, resizes with the browser viewport, and keeps multiple shell tabs. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
+Owner-authorized, unsandboxed agents can use the `terminal` tool for long or interactive work that the operator should watch. Each tool call can open, read, write, resize, close, or list the agent's own gateway PTYs. New sessions open a co-attached Control UI tab by default, so the agent and operator share output and either can type or resize. Agent access is exact-session scoped: an agent cannot read or control operator-created terminals or terminals opened by another agent session.
+
 Drag one or more files onto the active terminal, or use the paperclip button to choose files. OpenClaw stages each file on the machine that owns the PTY and pastes shell-quoted absolute paths at the cursor; it never presses Enter or executes the input. A compact batch indicator shows the current file and completed count. Cancel stops the remaining batch without pasting paths; a failed transfer stays visible so you can retry from that file without re-uploading completed files. Images, PDFs, archives, and other file types are accepted up to 16 MiB per file. Staged files use a private system-temporary directory on POSIX hosts (directory mode `0700`, file mode `0600`) or a directory under the user-profile ACL boundary on Windows, plus a 24-hour cleanup timer, so move or copy anything you need to keep.
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the Gateway inside WSL for a native WSL terminal and Linux upload paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
@@ -187161,7 +188249,9 @@ Codex and Claude Code sessions discovered in the sessions sidebar can open in th
 
 Eligibility is per session and per host. Gateway-local sessions start the provider-owned resume command on the Gateway host. Paired-node sessions start an allowlisted provider command on the owning node and relay only that PTY's output, input, and resize events; this does not expose a general node shell or accept browser-supplied commands. File uploads use the separate, size-bounded `terminal.upload` node command and remain bound to the already-open terminal session. Approve the node pairing upgrade when that command first appears. Nodes that do not advertise the matching terminal-resume command, including embedded worker bridges without duplex streaming, keep the viewer available and show terminal opening as unavailable; older nodes can still run a terminal but cannot receive dragged files.
 
-Sessions survive disconnects: a page reload, laptop sleep, or network blip detaches the session on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). `terminal.list` shows attachable sessions, `terminal.attach` adopts one (tmux-style take-over), and `terminal.text` reads a session's recent output as plain text without attaching - an agent/tooling affordance.
+Connection-owned sessions survive disconnects: a page reload, laptop sleep, or network blip detaches the session on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
+
+Agent-owned sessions are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing a viewer tab detaches only that browser. The PTY remains until the owning agent closes it, its process exits, policy disables it, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned, and `terminal.text` lets an admin connection read recent plain-text output without attaching.
 
 The terminal is also available as a full-screen, terminal-only document at `/?view=terminal`. The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
 
@@ -187197,15 +188287,16 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. Detection runs server-side through `controlUi.sessionPullRequests`, which reuses the Gateway's `GH_TOKEN`/`GITHUB_TOKEN` when set. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). Once the pushed branch has commits to compare, the row adds a Create PR button that opens GitHub's new-pull-request page; before that, a session with changed files (committed, uncommitted, or untracked) still gets the row without the button. The row hides itself while an open or draft PR exists. The branch row comes from local git only, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
-    - The session diff panel shows what a session's checkout actually changed: the branch button (in the workspace rail header, the split-pane header, or the floating button in single-pane chat) opens the detail panel with a per-file diff of branch, uncommitted, and untracked work against the checkout's default-branch merge base — status dot, rename arrow, per-file +/− counts, collapsible files, and "N unmodified lines" markers between hunks. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
-    - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. A collapsed rail takes no space at all: reopen it with ⇧⌘B, the files toggle in the split-pane header, or the floating files button in single-pane chat (both carry a changed-file count badge). The separate file, tool, and Canvas detail panel is unaffected.
+    - The session diff panel shows what a session's checkout actually changed: the branch button in the workspace rail or chat title bar opens the detail panel with a per-file diff of branch, uncommitted, and untracked work against the checkout's default-branch merge base — status dot, rename arrow, per-file +/− counts, collapsible files, and "N unmodified lines" markers between hunks. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
+    - Every Chat pane has a title bar. Click the session title to rename it; the workspace chip copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
+    - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. A collapsed rail takes no space at all: reopen it with ⇧⌘B or the files toggle in the title bar, which carries a changed-file count badge. The separate file, tool, and Canvas detail panel is unaffected.
     - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in the workspace rail opens the file detail panel: a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them.
-    - The background tasks rail in each Chat pane lists the current agent's background tasks and subagents (`tasks.list` scoped by agent, kept live by `task` events): running work shows a live elapsed timer, tool-use count, the tool currently in use, and a stop control; the collapsible finished section adds run durations; and a View transcript link opens the task's child session in the pane. Open it with the activity toggle in the split-pane header or the floating activity button in single-pane chat — the task snapshot loads eagerly, so both carry a running-count badge without opening the rail first. The Tasks page remains the full cross-agent ledger.
+    - The background tasks rail in each Chat pane lists the current agent's background tasks and subagents (`tasks.list` scoped by agent, kept live by `task` events): running work shows a live elapsed timer, tool-use count, the tool currently in use, and a stop control; the collapsible finished section adds run durations; and a View transcript link opens the task's child session in the pane. Open it with the title-bar activity toggle; the task snapshot loads eagerly, so it carries a running-count badge without opening the rail first. The Tasks page remains the full cross-agent ledger.
     - The workspace rail, background tasks rail, and detail panel adapt to each pane's own width rather than the window: in a narrow pane or compact window both rails present as bottom strips (side-dock controls hide until the pane widens; the workspace rail keeps first claim on the side slot when only one column fits), and the detail panel stacks below the thread with a horizontal resize handle instead of sharing the row with it. Phone-sized viewports still open the detail panel full-screen.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
-    - **Split view:** open it from the top-right floating toggle row (beside the session diff, background tasks, and session files toggles), then split the active pane right or down for as many panes as fit. Each pane has its own session, transcript, composer, and tool stream.
+    - **Split view:** open it from the chat title bar (beside the session diff, background tasks, and session files toggles), then split the active pane right or down for as many panes as fit. Each pane has its own session, transcript, composer, and tool stream.
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
-    - The active split pane drives the sidebar selection and URL. Each pane carries its own header row with the session title plus workspace-rail, split, and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
+    - The active split pane drives the sidebar selection and URL. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane, including its header with the close control.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
@@ -187220,13 +188311,15 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
 
     The Talk control itself is the microphone button in the composer toolbar. Its caret lists **System default** and every microphone exposed by the browser, including USB, Bluetooth, and virtual inputs. The selected device ID stays browser-local and is never sent to the Gateway; if that exact device disappears, Talk asks you to choose another input instead of silently recording from a different microphone. While Talk is live, the microphone button becomes a pill showing the live input-level meter; clicking it stops voice input, and hovering it reveals the stop glyph. Screen readers announce `Connecting voice input...`, `Listening...`, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`. Stopping a running agent response stays a separate square **Stop** control next to the pill.
 
-    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser WebSocket setup, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
+    **Video Talk** is available for OpenAI Realtime WebRTC and Google Live browser sessions. Click the camera button, allow camera and microphone access, and confirm the local preview. OpenAI sends one bounded JPEG frame over its browser data channel when `describe_view` requests visual context. Google Live sends bounded JPEG frames directly from the browser to the provider at the supported maximum of one frame per second and answers `describe_view` function calls with the camera-stream state. Camera frames never pass through the Gateway. Stopping Talk closes the preview and releases both media tracks. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities#video) and [function-calling guide](https://ai.google.dev/gemini-api/docs/live-api/tools) for the provider wire contracts.
+
+    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser setup with a JPEG frame and `describe_view` function roundtrip, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
 
   </Accordion>
   <Accordion title="Stop and abort">
     - Click **Stop** (calls `chat.abort`).
-    - While a run is active, normal follow-ups steer into the running turn by default. Messages fall back to the queue when steering is unavailable; click **Steer** on a queued message to inject it into the running turn.
-    - **Settings → Appearance → Chat → Follow-ups while the agent is working** changes that default: `Steer into the active run` (default) sends follow-ups into the running turn immediately, while `Queue until the run ends` holds them until the run finishes. Either way, queued rows keep their per-message **Steer** and remove controls, and messages fall back to the queue when steering is unavailable.
+    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. Steering rejection also falls back to that queue. Click **Steer** on a queued message to inject it manually.
+    - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
 
@@ -187292,7 +188385,7 @@ Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway
 
 Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
 
-The bundled Canvas plugin also provides [`show_widget`](/tools/show-widget) to render self-contained SVG or HTML directly from a tool call. The browser advertises the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel-originated runs do not receive this tool.
+The bundled Canvas plugin provides [`show_widget`](/tools/show-widget) to render self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Discord Activities provide the same tool name on Discord; other channel-originated runs do not receive it.
 
 <Tabs>
   <Tab title="strict">
@@ -188263,10 +189356,37 @@ collapse it, hide it, or delete it.
 
 ## Built-in widgets
 
-Nine trusted widgets ship with the plugin and render as first-party UI:
+Thirteen trusted widgets ship with the plugin and render as first-party UI:
 
 `stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
-`instances`, `activity`.
+`instances`, `activity`, `chart`, `preview`, `agent-status`,
+`custom-widget-approvals`.
+
+The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
+`sparkline`, or `gauge`. Bind `value` to a numeric array or to an object shaped like
+`{ "points": [1, { "y": 2 }, { "value": 3 }] }`. Set `props.type` to select the
+visual and optionally set finite numeric `props.min` and `props.max` bounds. Invalid
+types, bounds, points, and series longer than 500 entries render a safe error state;
+empty series render an empty state.
+
+The `preview` widget embeds a live page with reload plus desktop, tablet, and mobile
+viewport controls. Set `props.url`, or bind `value` to a URL when the preview target is
+data-driven; a binding takes precedence over the prop. Relative and same-origin HTTP(S)
+URLs are allowed. External HTTP(S) URLs follow the gateway's external-embed policy, and
+other schemes are blocked. Preview frames share the `iframe-embed` sandbox ceiling and
+never receive same-origin access.
+
+The `agent-status` widget presents the current Busy or Idle state from a
+`sessions.list` RPC binding. Session-list events refresh it immediately, while the normal
+visibility-gated binding poll remains a fallback. The `custom-widget-approvals` widget
+lists only pending entries from the Workspaces custom-widget registry. Its Approve and
+Reject controls are disabled unless the current connection holds `operator.approvals`;
+it does not expose exec, plugin, or system-agent approvals.
+
+Tabs use the 12-column widget grid by default. A tab containing zero or one widget can
+instead use the `full` layout, which removes the widget card chrome and lets the widget
+fill the tab. Switch layouts with `openclaw workspaces tabs full <slug>` and
+`openclaw workspaces tabs grid <slug>`.
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
@@ -188313,12 +189433,13 @@ per-invocation confirmation quoting the exact text, and passes a rate limit.
 ```sh
 openclaw workspaces tabs list
 openclaw workspaces tabs create --title Financials
+openclaw workspaces tabs full financials
 openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
 openclaw workspaces widget-approve revenue-chart
 ```
 
-`widget-approve` needs a device paired with the `operator.approvals` scope; approving from
-the Control UI does not, because the browser already holds it.
+`widget-approve` and the Control UI decision controls both need a device paired with the
+`operator.approvals` scope.
 
 ## Storage
 
