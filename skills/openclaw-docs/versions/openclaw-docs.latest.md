@@ -157,6 +157,12 @@ Resource types not listed in a manifest fall back to discovery of conventional `
 - `auto` selects a registered plugin harness that supports the effective provider route, otherwise the built-in OpenClaw runtime. A provider or model prefix alone never selects a harness.
 - OpenAI may select `codex` implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override. Completions adapters, custom endpoints, and routes with authored request behavior stay on `openclaw`; plaintext official HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
 
+## Model Runtime Generations
+
+Gateway startup and config, plugin, or auth publication build one prepared model runtime generation per configured agent. Each generation owns the discovered auth template, model registry, and projected model catalog as one atomic snapshot. Agent runs fork mutable auth and registry stores from that snapshot; browse, status, cron, doctor, TUI, PDF, and image paths read the published catalog instead of repeating filesystem discovery.
+
+Standalone embedded runtimes publish the same snapshot shape at their activation boundary. A failed or stale generation is never served alongside a newer partial generation; the lifecycle owner must publish a complete replacement first.
+
 ## Related
 
 - [OpenClaw agent runtime workflow](/openclaw-agent-runtime)
@@ -334,7 +340,7 @@ dispatch.
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture | Node-relevant changes                          |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                            | Manual CI dispatch for releases                |
 | `check-docs`                       | Docs formatting, lint, and broken-link checks                                                                                                                                                                         | Docs changed (PRs and manual dispatch)         |
-| `native-i18n`                      | Native app, Android, and Apple i18n inventory checks                                                                                                                                                                  | Native i18n-relevant changes                   |
+| `native-i18n`                      | Verify native source extraction and localization safety on source PRs; enforce full translated/platform-generated parity on generated PRs and manual CI                                                               | Native i18n-relevant changes                   |
 | `skills-python`                    | Ruff + pytest for Python-backed skills                                                                                                                                                                                | Python-skill-relevant changes                  |
 | `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                  | Windows-relevant changes                       |
 | `macos-node`                       | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                            | macOS-relevant changes                         |
@@ -351,7 +357,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately, but its concurrency group admits only one complete run and coalesces later pushes into one newest pending run. Node-relevant main pushes also serialize the sole dependency-disk writer and its size maintenance here before downstream jobs may mount the key; Blacksmith may expose a fresh commit only to a later workflow run, so same-run consumers retain the marker-checked local fallback.
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
-3. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Source PRs exclude generated locale snapshots; the standalone refresh workflow repairs and auto-merges an isolated generated PR in the background. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
+3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
 5. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
 
@@ -408,7 +414,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - The full Node matrix admits the consistently slow serial tooling, auto-reply command shards, and broad core-fast cache writer first. This keeps the 28-job cap while preventing critical-path work and the next run's transform seed from slipping into a later wave.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
 - Linux Node shard jobs persist Vitest's experimental filesystem module cache through the upstream Actions cache API, which Blacksmith transparently accelerates on its runners. Every CI shard is restore-only and unpacks the protected seed into its own runner-local root; the shard wrapper then gives concurrent Vitest processes separate live subdirectories. Only the non-cancelling daily or explicitly dispatched warmer saves a new immutable archive, so pull requests cannot publish transforms or mint per-PR cache families. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations. The protected writer scans and prunes its restored cache to 75% after it exceeds 2 GiB. Vitest hashes module id, source content, environment, and resolved transform config, so ordinary partial source changes keep unchanged entries warm while changed modules miss safely. Coarse restore prefixes bridge workflow runs; normal Actions cache LRU and inactivity eviction bound old immutable archives.
-- Trusted Linux Node jobs also bind the pnpm store and `node_modules` from one protected dependency disk per supported Node line. Package manifests, install settings, runner platform, and the exact Node patch stay out of the disk key; an exact runtime and install-input fingerprint decides whether a job reuses the tree or reinstalls and refreshes the same disk. Manifests are canonicalized before hashing. The audited direct root hooks retain only pnpm's install lifecycle scripts, so formatting and ordinary test/build script edits keep the warm dependency tree; unaudited lifecycle-hook drift fails closed until its source inputs join the fingerprint contract. Dependency, package-manager, hook-source, and lockfile changes always invalidate the snapshot. A pull request whose read-only snapshot has a different fingerprint detaches the workspace bind and installs into runner-local storage, avoiding slow writes to a clone it cannot publish. Sticky cold installs disable pnpm's inner fetch retries and make up to three bounded full-install attempts from the progressively warmed store; a timeout remains a failure. After an exact restore or frozen-lockfile install, setup disables pnpm's redundant pre-run dependency check: the repository intentionally prunes plugin-local `node_modules`, which pnpm otherwise treats as stale and repairs through unsafe concurrent implicit installs during shard fanout. Canonical main preflight is the sole writer and measures the store on every refresh, running `pnpm store prune` only after retired package versions push it above 8 GiB. Blacksmith snapshot publication is asynchronous even after a writer job completes, so the first run after a fresh key or fingerprint can remain cold; later exact-marker restores are the rollout proof. Required CI jobs and pull requests get disposable clones, so dependency changes do not create new disks, competing snapshots, or a cache lock that can cancel builds.
+- Trusted Linux Node jobs also bind the pnpm store and `node_modules` from one protected dependency disk per supported Node line. Package manifests, install settings, runner platform, and the exact Node patch stay out of the disk key; an exact runtime and install-input fingerprint decides whether a job reuses the tree or reinstalls and refreshes the same disk. Manifests are canonicalized before hashing. The audited direct root hooks retain only pnpm's install lifecycle scripts, so formatting and ordinary test/build script edits keep the warm dependency tree; unaudited lifecycle-hook drift fails closed until its source inputs join the fingerprint contract. Dependency, package-manager, hook-source, and lockfile changes always invalidate the snapshot. A matching fingerprint is necessary but not sufficient: setup also checks the importer archive and manifest checksums, then verifies registry-backed lockfile dependencies retained by postinstall against the package manifests Node resolves from their importers. Missing or stale importer content falls back to a fresh install instead of serving the root hoist. A pull request whose read-only snapshot is unusable detaches the workspace bind and installs into runner-local storage, avoiding slow writes to a clone it cannot publish. Sticky cold installs disable pnpm's inner fetch retries and make up to three bounded full-install attempts from the progressively warmed store; a timeout remains a failure. After a content-validated restore or frozen-lockfile install, setup disables pnpm's redundant pre-run dependency check: the repository intentionally prunes plugin-local `node_modules`, which pnpm otherwise treats as stale and repairs through unsafe concurrent implicit installs during shard fanout. Canonical main preflight is the sole writer and measures the store on every refresh, running `pnpm store prune` only after retired package versions push it above 8 GiB. Blacksmith snapshot publication is asynchronous even after a writer job completes, so the first run after a fresh key or fingerprint can remain cold; later content-validated exact-marker restores are the rollout proof. Required CI jobs and pull requests get disposable clones, so dependency changes do not create new disks, competing snapshots, or a cache lock that can cancel builds.
 - Node shard and build-artifact jobs also restore Node's portable on-disk compile cache through immutable Actions caches. Independent `test` and `build` namespaces prevent their writers from replacing each other's archives: the scheduled test warmer owns the protected test seed, while `build-artifacts` may publish at most one protected build archive per UTC day from trusted `main` pushes. PR and ordinary test jobs only read protected snapshots, so feature-branch bytecode never enters the shared seed and PR traffic creates no cache archives. This reuses V8 bytecode for Node-loaded orchestration, build tooling, and external dependencies across different checkout paths, including when only part of the source graph changes. Vitest child processes disable an inherited compile cache because coverage can be enabled inside dynamic configs and V8 coverage can lose source-position precision when scripts are deserialized from bytecode.
 - The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs.
 - Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
@@ -446,7 +452,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 ## Manual dispatches
 
-Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Release prep runs the same locale sync before the Code SHA is frozen, then verifies the strict zero-fallback state. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI/native app i18n. Automatic source PRs verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Full native parity remains blocking for generated-artifact PRs, manual CI, Full Release Validation, and release prep. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 PR max-lines checks derive the baseline from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; the max-lines baseline is compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
@@ -515,6 +521,9 @@ pnpm test                                     # vitest tests
 pnpm test:changed                             # cheap smart changed Vitest targets
 pnpm test:ui                                  # Control UI unit/browser suite
 pnpm ui:i18n:check                            # generated Control UI locale parity (release gate)
+pnpm native:i18n:baseline                     # update source-owned native extraction inventory
+pnpm native:i18n:verify                       # source inventory + Android/Apple localization safety
+pnpm native:i18n:check                        # strict translated/platform-generated parity (release gate)
 pnpm test:channels
 pnpm test:contracts:channels
 pnpm check:docs                               # docs format + lint + broken links
@@ -1260,6 +1269,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Boundaries
   - H2: Manifests
   - H2: Runtime Selection
+  - H2: Model Runtime Generations
   - H2: Related
 
 ## announcements/bluebubbles-imessage.md
@@ -1560,7 +1570,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Alternative: env-based token
   - H3: JSON5 reference
   - H3: Account config keys
+  - H3: Keep an auth-gated public hostname
   - H2: Multiple bots
+  - H2: Session discussions
   - H2: Reply modes
   - H2: Command menu
   - H2: Durable media delivery
@@ -3071,6 +3083,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What OpenClaw shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Change history
   - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
@@ -3735,7 +3748,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Home
   - H2: What flows into the main session
   - H2: Memory across resets and conversations
-  - H2: A rolling session, not an immortal one
+  - H2: A rolling session with durable history
   - H2: When you want isolation instead
   - H2: Related
 
@@ -4486,6 +4499,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## gateway/clients.md
+
+- Route: /gateway/clients
+- Headings:
+  - H2: Install the packages
+  - H2: Choose scopes and pair the device
+  - H2: Advertise client capabilities
+  - H2: Recover state after reconnect
+  - H2: Use history metadata and stable anchors
+  - H2: Subscribe instead of polling usage
+  - H2: Backfill exec approvals
+  - H2: Track protocol versions
+  - H2: Related
+
 ## gateway/cloud-workers.md
 
 - Route: /gateway/cloud-workers
@@ -4531,7 +4558,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
-  - H3: agents.defaults.runRetries
   - H3: agents.defaults.contextPruning
   - H3: Block streaming
   - H3: Typing indicators
@@ -4662,7 +4688,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Supported credential surface
   - H3: Secret providers config
   - H2: Auth storage
-  - H3: auth.cooldowns
   - H2: Audit
   - H2: Logging
   - H2: Diagnostics
@@ -4673,10 +4698,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Identity
   - H2: Bridge (legacy, removed)
   - H2: Cron
-  - H3: cron.retry
   - H3: cron.failureAlert
   - H3: cron.failureDestination
-  - H2: Worktrees
   - H2: Media model template variables
   - H2: Config includes ($include)
   - H2: Related
@@ -4737,6 +4760,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does (summary)
   - H2: Dreams UI backfill and reset
   - H2: Detailed behavior and rationale
+  - H2: Related
+
+## gateway/embedding.md
+
+- Route: /gateway/embedding
+- Headings:
+  - H2: Start the child with an embedding preset
+  - H3: Electron shell snapshot warning
+  - H2: Handle invalid config by exit code
+  - H2: Wait for protocol readiness
+  - H2: Interpret restart and shutdown
+  - H2: Use RPC instead of state files
+  - H2: Install; do not flatten
   - H2: Related
 
 ## gateway/external-apps.md
@@ -4907,7 +4943,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: When to use this endpoint
   - H2: Agent-first model contract
   - H2: Session behavior
-  - H2: Request limits (config)
+  - H2: Request limits
   - H2: Chat tool contract
   - H3: Supported request fields
   - H3: Unsupported variants
@@ -4933,7 +4969,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tools (client-side function tools)
   - H2: Images (inputimage)
   - H2: Files (inputfile)
-  - H2: File + image limits (config)
+  - H2: File + image limits
   - H2: Streaming (SSE)
   - H2: Usage
   - H2: Errors
@@ -5036,6 +5072,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/protocol
 - Headings:
+  - H2: npm packages
   - H2: Transport and framing
   - H2: Handshake
   - H3: Worker role and closed protocol
@@ -6844,7 +6881,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Public capability model
   - H3: External compatibility stance
   - H3: Plugin shapes
-  - H3: Legacy hooks
   - H3: Compatibility signals
   - H2: Architecture overview
   - H3: Plugin metadata snapshot and lookup table
@@ -7131,6 +7167,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
+  - H3: Sender-aware policy in one file
   - H3: Exec environment hook
   - H3: Tool result persistence
   - H2: Prompt and model hooks
@@ -8678,6 +8715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Durable ingress monitors
   - H2: Adapter
+  - H2: Outbound echo suppression
   - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
@@ -8743,8 +8781,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
+  - H3: Process-global API-provider publication
   - H3: Private testing barrel
-  - H2: Active deprecations
+  - H2: Migration reference
   - H2: Talk and realtime voice migration
   - H2: Removal timeline
   - H2: Suppressing the warnings temporarily
@@ -8821,8 +8860,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-subpaths
 - Headings:
   - H2: Plugin entry
-  - H3: Deprecated compatibility and test helpers
-  - H3: Reserved bundled plugin helper subpaths
+  - H3: Compatibility and private-local helpers
+  - H3: Bundled plugin helper subpaths
   - H2: Related
 
 ## plugins/sdk-testing.md
@@ -11010,6 +11049,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Enable Code Mode
   - H3: What the model does
   - H3: Verify the active surface
+  - H2: Use Swarm for agent fan-out
   - H2: Technical tour
   - H2: Runtime status
   - H2: Scope
@@ -11663,6 +11703,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Liveness and recovery
   - H2: Stopping
   - H2: Limitations
+  - H2: Related
+
+## tools/swarm.md
+
+- Route: /tools/swarm
+- Headings:
+  - H2: Enable Swarm
+  - H2: Requirements
+  - H2: Write a Swarm script
+  - H3: Fan out in parallel with structured results
+  - H3: Loop on a decision gate
+  - H3: Process the first child that finishes
+  - H2: How collector children behave
+  - H3: Children are leaves
+  - H2: Observe a Swarm
+  - H2: Use Swarm from other harnesses
+  - H2: Limits and roadmap
   - H2: Related
 
 ## tools/tavily.md
@@ -13307,7 +13364,7 @@ Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such
 
 During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
 
-Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence.
+Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
 ### Day-of-month and day-of-week use OR logic
 
@@ -13808,15 +13865,8 @@ Use the latest-generation, best-tier model available from your provider for untr
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 8,
     triggers: {
       enabled: false,
-      minIntervalMs: 30000,
-    },
-    retry: {
-      maxAttempts: 3,
-      backoffMs: [30000, 60000, 300000],
-      retryOn: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
     },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
@@ -13824,9 +13874,7 @@ Use the latest-generation, best-tier model available from your provider for untr
 }
 ```
 
-The `retry` values above are the defaults: up to 3 retries with `30s/60s/5m` backoff, retrying all five transient categories. `webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
-
-`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+`webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 
@@ -13834,7 +13882,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to `retry.maxAttempts` times (default 3) using `retry.backoffMs` (default 30s, 60s, 5m). Permanent errors disable the job immediately.
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 
@@ -16546,7 +16594,8 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 | Key                     | Default             | Notes                                                                                   |
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
+| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                    |
+| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.             |
 | `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
 | `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
@@ -16559,6 +16608,32 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
 | `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
 | `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
+| `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).  |
+
+### Keep an auth-gated public hostname
+
+Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host
+but the public ClickClack hostname is protected by an authentication gateway
+such as Cloudflare Access:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      baseUrl: "https://clack.openclaw.ai",
+      apiBaseUrl: "http://127.0.0.1:8484",
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+    },
+  },
+}
+```
+
+The public hostname can remain fully auth-gated for browser users. OpenClaw
+uses the loopback endpoint for REST requests, setup verification, and the
+realtime WebSocket, while discussion `embedUrl` and `openUrl` links continue to
+use the public `baseUrl`. If `apiBaseUrl` is omitted, all traffic uses
+`baseUrl`, preserving existing behavior.
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -16597,6 +16672,105 @@ Each account opens its own ClickClack realtime connection and uses its own bot t
   },
 }
 ```
+
+## Session discussions
+
+Enable discussions on one ClickClack account to give each OpenClaw session a
+dedicated ClickClack channel. The account token must include
+`channels:write` (the `bot:admin` bundle includes it); the normal `bot:write`
+setup token cannot create or synchronize channels.
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      baseUrl: "https://clickclack.example.com",
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      discussions: {
+        enabled: true,
+        workspace: "default",
+        controlUrlBase: "https://team.openclaw.ai",
+        section: "Sessions",
+      },
+    },
+  },
+}
+```
+
+`discussions.workspace` accepts the same workspace id, slug, or display name
+as the account-level `workspace` and defaults to that value. `section` controls
+the ClickClack sidebar section and defaults to `Sessions`. When
+`controlUrlBase` is set, the managed channel links back to the real Control UI
+session route, `/chat?session=<encoded-session-key>`.
+
+Enable discussions on exactly one ClickClack account. The gateway provider has
+no account selector, so multiple enabled discussion accounts are rejected
+rather than choosing one by configuration order.
+
+Opening a discussion creates a public ClickClack channel marked as externally
+managed. The plugin keeps the session label, category, and archive state in
+sync. Restoring a session restores its channel; clearing the session category
+moves the channel back to the configured default section. Deleting an
+OpenClaw session archives the ClickClack channel instead of deleting it, so its
+history remains available. The plugin reconciles bindings when discussion RPCs
+are used and approximately once per minute while any bindings exist.
+
+Inbound messages in a managed channel use a deterministic side session under
+the same agent id as the attached main session. The side agent is told which
+main session to observe and can use `sessions_history` and `session_status`
+(`changesSince` is useful for incremental checks). It uses `sessions_send` only
+when people in the discussion ask it to relay or steer the main session.
+The binding, managed ownership reference, and side-session peer identity include
+the concrete OpenClaw session id along with the pinned ClickClack server and
+channel. Resetting a reusable session key or retargeting an account revokes the
+old channel locally, archives it when the old credential remains usable, and
+cannot reuse its side transcript. Messages arriving through an
+archived, reset, disabled, or retargeted binding are dropped instead of falling
+back to the account's normal channel routing. Released bindings leave a durable
+revoked-channel marker so delayed realtime events remain fail-closed. Remote
+ownership is keyed by ClickClack server and channel id, so renaming the local
+account cannot turn a managed channel into an ordinary one.
+
+Keep `tools.sessions.visibility` at its safer default `tree`. The plugin
+installs a host-scoped grant only between each side session and its attached
+main session, plus a tool-policy hook that blocks session discovery and
+cross-session targets. It allows `sessions_history`, `session_status`, and
+`sessions_send` only for the attached main session and prevents the status call
+from changing that session's model. Those tools must still be present in the
+agent's effective tool allowlist. The system prompt is guidance; the host grant
+and hook are the authorization boundary.
+
+The ClickClack server must support managed-channel fields (`external_managed`,
+`external_ref`, `external_url`, and `sidebar_section`) on channel creation and
+updates and return them in channel responses. OpenClaw verifies that contract
+before persisting a binding. If a create response is lost, the next open adopts
+the channel by its server-enforced `external_ref` instead of creating another.
+Until that outcome is reconciled, the pending reservation quarantines
+otherwise-unbound events in the destination workspace. The coarse reconciler
+adopts the channel when the same session is still live or archives it after a
+reset; it clears the reservation when no remote channel was created.
+That reference contains a durable per-OpenClaw-installation namespace plus a
+hash of the session key, concrete session id, ClickClack destination, and durable
+binding generation. Separate gateways cannot adopt each other's channels,
+reset sessions cannot inherit old channel history, and an account or workspace
+round trip cannot re-adopt a previous channel. Bindings are also pinned to the
+configured ClickClack server URL and are invalidated if the account is
+retargeted. Changing or removing `controlUrlBase` updates or clears the managed
+channel link on the next reconciliation pass. Changing
+`discussions.workspace` archives and releases the old binding before a channel
+can be opened in the new workspace when the old workspace credential remains
+configured. If the token was replaced with a workspace-scoped credential that
+cannot access the old workspace, OpenClaw records the old channel as revoked and
+releases the binding without trying the replacement token; archive that leftover
+channel from ClickClack.
+
+The attached main session also receives a pull-only `discussion` tool. It reads
+the latest messages and recent thread replies as one escaped, attributed record
+per message, and has no write or lifecycle side effects. Channel-root and thread
+lookups have fixed request budgets; the result explicitly warns when that
+safety bound can omit an older active thread.
 
 ## Reply modes
 
@@ -18485,57 +18659,21 @@ openclaw logs --follow
     - `Slow listener detected ...`
     - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
-    Discord gateway queue knobs:
-
-    - single-account: `channels.discord.eventQueue.listenerTimeout`
-    - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
-    - this only controls Discord gateway listener work, not agent turn lifetime
-
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
-
-```json5
-{
-  channels: {
-    discord: {
-      accounts: {
-        default: {
-          eventQueue: {
-            listenerTimeout: 120000,
-          },
-        },
-      },
-    },
-  },
-}
-```
 
   </Accordion>
 
   <Accordion title="Gateway metadata lookup timeout warnings">
     OpenClaw fetches Discord `/gateway/bot` metadata before connecting. Transient failures fall back to Discord's default gateway URL and are rate-limited in logs.
 
-    Metadata timeout knobs:
-
-    - single-account: `channels.discord.gatewayInfoTimeoutMs`
-    - multi-account: `channels.discord.accounts.<accountId>.gatewayInfoTimeoutMs`
-    - env fallback when config is unset: `OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS`
-    - default: `30000` (30 seconds), max: `120000`
+    The metadata timeout defaults to 30 seconds. `OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS` can override it for unusual host environments.
 
   </Accordion>
 
   <Accordion title="Gateway READY timeout restarts">
     OpenClaw waits for Discord's gateway `READY` event during startup and after runtime reconnects. Multi-account setups with startup staggering can need a longer startup READY window than the default.
 
-    READY timeout knobs:
-
-    - startup single-account: `channels.discord.gatewayReadyTimeoutMs`
-    - startup multi-account: `channels.discord.accounts.<accountId>.gatewayReadyTimeoutMs`
-    - startup env fallback when config is unset: `OPENCLAW_DISCORD_READY_TIMEOUT_MS`
-    - startup default: `15000` (15 seconds), max: `120000`
-    - runtime single-account: `channels.discord.gatewayRuntimeReadyTimeoutMs`
-    - runtime multi-account: `channels.discord.accounts.<accountId>.gatewayRuntimeReadyTimeoutMs`
-    - runtime env fallback when config is unset: `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS`
-    - runtime default: `30000` (30 seconds), max: `120000`
+    Startup waits 15 seconds and runtime reconnects wait 30 seconds. `OPENCLAW_DISCORD_READY_TIMEOUT_MS` and `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS` remain available for unusual host environments.
 
   </Accordion>
 
@@ -18642,12 +18780,11 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - startup/auth: `enabled`, `token`, `applicationId`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dmPolicy`, `allowFrom`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups` (global), `configWrites`, `slashCommand.ephemeral`
-- event queue: `eventQueue.listenerTimeout` (listener budget, default `120000`), `eventQueue.maxQueueSize` (default `10000`), `eventQueue.maxConcurrency` (default `50`)
-- gateway: `proxy`, `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
+- gateway: `proxy`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit` (default `2000`), `maxLinesPerMessage` (default `17`)
 - streaming: `streaming.mode`, `streaming.chunkMode`, `streaming.preview.*`, `streaming.progress.*`, `streaming.block.*` (legacy flat `streamMode`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`, `chunkMode` keys are migrated into `streaming.*` by `openclaw doctor --fix`)
-- media/retry: `mediaMaxMb` (caps outbound Discord uploads, default `100`), `retry`
+- media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
 - UI: `ui.components.accentColor`
@@ -28300,6 +28437,8 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
     - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
     - No more than 25 slash commands can be registered on a Slack app at once (Slack platform limit).
 
+    OpenClaw registers handlers for enabled native commands, but Slack manifest entries remain administrator-managed and are not synchronized at runtime. Add `/login` to the manifest manually; the example below includes it instead of the optional `/side` alias to remain at 25 commands. `/login` can be surfaced anywhere, but it issues pairing codes only in private chats or the Web UI.
+
     Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
 
     <Tabs>
@@ -28417,9 +28556,9 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
       "usage_hint": "<question>"
     },
     {
-      "command": "/side",
-      "description": "Ask a side question without changing session context",
-      "usage_hint": "<question>"
+      "command": "/login",
+      "description": "Pair Codex login",
+      "usage_hint": "[codex|openai]"
     },
     {
       "command": "/usage",
@@ -30329,7 +30468,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Long polling uses the grammY runner with per-chat/per-thread sequencing. Runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Multi-account startup bounds concurrent `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Each gateway process guards long polling so only one active poller can use a bot token at a time. Persistent `getUpdates` 409 conflicts point to another OpenClaw gateway, script, or external poller using the same token.
-- The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness by default. Raise `channels.telegram.pollingStallThresholdMs` (30000-600000, per-account overrides supported) only if your deployment sees false polling-stall restarts during long-running work.
+- The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
 <Note>
@@ -30789,17 +30928,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Limits, retry, and CLI targets">
+  <Accordion title="Limits and CLI targets">
     - `channels.telegram.textChunkLimit` default 4000; `streaming.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
-    - `channels.telegram.mediaGroupFlushMs` (default 500, range 10-60000) controls how long albums/media groups are buffered before OpenClaw dispatches them as one inbound message. Increase it if album parts arrive late; decrease it to reduce album reply latency.
-    - `channels.telegram.timeoutSeconds` overrides the API client timeout (grammY default applies if unset). Bot clients clamp configured values below the 60-second outbound text/typing request guard so grammY does not abort visible reply delivery before OpenClaw's transport guard and fallback can run. Long polling still uses a 45-second `getUpdates` request guard so idle polls are not abandoned indefinitely.
-    - `channels.telegram.pollingStallThresholdMs` defaults to 120000; tune between 30000 and 600000 only for false-positive polling-stall restarts.
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state, and `openclaw doctor --fix` imports legacy sidecars. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history: `channels.telegram.dmHistoryLimit`, `channels.telegram.dms["<user_id>"].historyLimit`.
-    - `channels.telegram.retry` applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors. Inbound final-reply delivery uses a bounded safe-send retry for pre-connect failures, but does not retry ambiguous post-send network envelopes that could duplicate visible messages.
 
     CLI and message-tool send targets accept a numeric chat ID, username, or forum topic target:
 
@@ -30850,10 +30985,9 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
 When the agent hits a delivery or provider error, the error policy controls whether error messages reach the Telegram chat:
 
-| Key                                 | Values                     | Default         | Description                                                                                                                                                                                              |
-| ----------------------------------- | -------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `channels.telegram.errorPolicy`     | `always`, `once`, `silent` | `always`        | `always` sends every error message to the chat. `once` sends each unique error message once per cooldown window (suppresses repeated identical errors). `silent` never sends error messages to the chat. |
-| `channels.telegram.errorCooldownMs` | number (ms)                | `14400000` (4h) | Cooldown window for the `once` policy. After an error is sent, the same message is suppressed until this interval elapses. Prevents error spam during outages.                                           |
+| Key                             | Values                     | Default  | Description                                                                                                                                                                |
+| ------------------------------- | -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels.telegram.errorPolicy` | `always`, `once`, `silent` | `always` | `always` sends every error message to the chat. `once` sends each unique error message once per built-in cooldown window. `silent` never sends error messages to the chat. |
 
 Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
 
@@ -30862,7 +30996,6 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
   channels: {
     telegram: {
       errorPolicy: "always",
-      errorCooldownMs: 120000,
       groups: {
         "-1001234567890": {
           errorPolicy: "silent", // suppress errors in this group
@@ -30915,10 +31048,8 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - Logs with `TypeError: fetch failed` or `Network request for 'getUpdates' failed!` are retried as recoverable network errors.
     - During polling startup, OpenClaw reuses the successful startup `getMe` probe for grammY so the runner does not need a second `getMe` before the first `getUpdates`.
     - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw continues into long polling instead of making another pre-poll control-plane call. A still-active webhook then surfaces as a `getUpdates` conflict; OpenClaw rebuilds the transport and retries webhook cleanup.
-    - If Telegram sockets recycle on a short fixed cadence, check for a low `channels.telegram.timeoutSeconds` — bot clients clamp configured values below the outbound and `getUpdates` request guards, but older releases could abort every poll or reply when this was set below those guards.
     - `Polling stall detected` in logs means OpenClaw restarts polling and rebuilds the transport after 120 seconds without completed long-poll liveness by default.
     - `openclaw channels status --probe` and `openclaw doctor` warn when a running polling account has not completed `getUpdates` after startup grace, a running webhook account has not completed `setWebhook` after startup grace, or the last successful polling transport activity is stale.
-    - Raise `channels.telegram.pollingStallThresholdMs` only when long-running `getUpdates` calls are healthy but your host still reports false polling-stall restarts. Persistent stalls usually point to proxy, DNS, IPv6, or TLS egress issues to `api.telegram.org`.
     - Telegram honors process proxy env for Bot API transport: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants. `NO_PROXY` / `no_proxy` can still bypass `api.telegram.org`.
     - If `OPENCLAW_PROXY_URL` is set for a service environment and no standard proxy env is present, Telegram uses that URL for Bot API transport too.
     - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through a proxy:
@@ -30982,12 +31113,12 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - threading/replies: `replyToMode`, `threadBindings`
 - streaming: `streaming` (modes `off | partial | block | progress`), `streaming.preview.toolProgress`
 - formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
+- media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker|createForumTopic|editForumTopic`
 - reactions: `reactionNotifications`, `reactionLevel`
-- errors: `errorPolicy`, `errorCooldownMs`, `silentErrorReplies`
+- errors: `errorPolicy`, `silentErrorReplies`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
 </Accordion>
@@ -31423,15 +31554,15 @@ Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshoot
 
 ### Telegram failure signatures
 
-| Symptom                              | Fastest check                                    | Fix                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                       |
-| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                                  |
-| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                          |
-| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`.     |
-| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; if restarts are false positives, tune `pollingStallThresholdMs`. Persistent stalls still point to proxy/DNS/IPv6. |
-| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                      |
-| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                                |
+| Symptom                              | Fastest check                                    | Fix                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                   |
+| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                              |
+| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                      |
+| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`. |
+| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; persistent stalls usually point to proxy/DNS/IPv6.                                                            |
+| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                  |
+| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                            |
 
 Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshooting)
 
@@ -32207,7 +32338,6 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 
 - The gateway owns the WhatsApp socket and reconnect loop.
 - A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
-- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` (application ping interval), `connectTimeoutMs` (opening handshake timeout), `defaultQueryTimeoutMs` (Baileys query waits, plus OpenClaw's outbound send/presence and inbound read-receipt timeouts).
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
@@ -32621,20 +32751,6 @@ openclaw channels status
 
     Quiet accounts can stay connected past the normal message timeout; the watchdog restarts only when WhatsApp Web transport activity stops, the socket closes, or application-level activity stays silent beyond the longer safety window (see Runtime model above).
 
-    If logs show repeated `status=408 Request Time-out Connection was lost`, tune Baileys socket timings under `web.whatsapp`. Start by shortening `keepAliveIntervalMs` below your network's idle timeout and increasing `connectTimeoutMs` on slow or lossy links:
-
-    ```json5
-    {
-      web: {
-        whatsapp: {
-          keepAliveIntervalMs: 15000,
-          connectTimeoutMs: 60000,
-          defaultQueryTimeoutMs: 60000,
-        },
-      },
-    }
-    ```
-
     Fix:
 
     ```bash
@@ -32764,7 +32880,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
 | Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
-| Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
+| Operations       | `configWrites`, `debounceMs`, `web.enabled`                                                                    |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
 
@@ -35251,7 +35367,7 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
@@ -36616,7 +36732,7 @@ openclaw daemon uninstall
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
-- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded by `gateway.reload.deferralTimeoutMs` (default 300000ms/5 minutes; set to `0` to wait indefinitely). When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
+- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
 - `restart --safe --skip-deferral`: bypasses the active-work deferral gate so the Gateway restarts immediately even when blockers are reported. Requires `--safe`.
 
 ## Notes
@@ -38048,7 +38164,7 @@ openclaw gateway restart --force
 openclaw gateway restart --wait 30s
 ```
 
-`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded by `gateway.reload.deferralTimeoutMs` (default: 5 minutes / `300000`); when the budget expires the restart is forced. Set `deferralTimeoutMs: 0` to wait indefinitely (with periodic still-pending warnings) instead of forcing. `--safe` cannot combine with `--force` or `--wait`.
+`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses the active-work deferral gate on a safe restart, so the Gateway restarts immediately even with reported blockers. It requires `--safe` — use it when a deferral is stuck on a runaway task.
 
@@ -39921,7 +40037,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
     - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
-    - session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable) and one-shot embedded runs clean them up at run end
+    - session-scoped bundled MCP runtimes are reaped after 10 minutes of idle time and one-shot embedded runs clean them up at run end
 
   </Accordion>
 </AccordionGroup>
@@ -41755,6 +41871,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard recommendations --json
 openclaw onboard recommendations acknowledge
+openclaw onboard recommendations acknowledge --retry "<failed-id>"
 openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
@@ -41772,7 +41889,16 @@ onboarding run rescans installed apps and creates a new offer.
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent.
+The acknowledgement is idempotent. If a chosen install fails, pass each failed
+opaque ID with `--retry <id...>`; successful and declined matches are consumed,
+while failed matches remain pending for a later onboarding run. Unknown IDs
+fail without changing the stored offer. After an interrupted ClawHub skill
+install, an existing target counts as successful only when
+`openclaw skills verify "@owner/slug"` succeeds for the same
+publisher-qualified recommendation ID and its JSON output reports
+`openclaw.resolution.source: "installed"`. Registry verification alone is not
+proof of a local install. Otherwise keep that ID pending with `--retry` and do
+not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
@@ -41781,6 +41907,8 @@ The acknowledgement is idempotent.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
+- `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--accept-risk`,
@@ -42202,7 +42330,20 @@ refused for the same reason; exit OpenClaw and run
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
-Applied writes are recorded in `~/.openclaw/audit/system-agent.jsonl`. Discovery is not audited; only applied operations and writes are.
+### Change history
+
+The Ask OpenClaw page can show recent applied system-agent operations, Doctor
+migrations, Settings and CLI config writes, and manual edits to
+`openclaw.json`. The config journal detects external edits while the Gateway
+is watching, during an OpenClaw-owned write, or at the next startup after an
+offline edit.
+
+History is stored in the `diagnostic_events` table of the shared
+`~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
+and `config-audit` scopes. Each scope retains its latest 50,000 records.
+Discovery and read-only operations are not included. Secrets never appear in
+change history; config journal records contain changed paths rather than config
+values, and value comparison uses protected fingerprints.
 
 Channel setup can run as a hosted conversation until it reaches a secret. The
 local OpenClaw TUI does not accept sensitive wizard answers because terminal
@@ -43448,7 +43589,7 @@ For runtime hook debugging:
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `installed_plugin_index` row stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
-When OpenClaw sees shipped legacy `plugins.installs` records in config, runtime reads treat them as compatibility input without rewriting `openclaw.json`. Explicit plugin writes and `openclaw doctor --fix` move those records into the plugin index and remove the config key when config writes are allowed; if either write fails, the config records are kept so the install metadata is not lost.
+`plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite installed-plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 
 ## Uninstall
 
@@ -43566,11 +43707,7 @@ The local plugin registry is OpenClaw's persisted cold read model for installed 
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
 
-`openclaw doctor --fix` also repairs registry-adjacent managed npm drift: if an orphaned or recovered `@openclaw/*` package under a managed plugin npm project or the legacy flat managed npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
-
-<Warning>
-`OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass compatibility switch for registry read failures. Prefer `plugins registry --refresh` or `openclaw doctor --fix`; the env fallback is only for emergency startup recovery while the migration rolls out.
-</Warning>
+`openclaw doctor --fix` also repairs registry-adjacent managed npm drift. If an orphaned or recovered `@openclaw/*` package under a managed plugin npm project or the legacy flat managed npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. When an authoritative install record selects one managed generation but older flat or generation directories remain, doctor retires those stale trees for pruning after the gateway restarts. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
 
 ## Marketplace
 
@@ -45722,7 +45859,8 @@ auth (`--auth-choice`, `--token`, provider key flags), Gateway
 Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--flow quickstart|advanced|manual|import`), and skip flags
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,
-`--skip-health`, `--skip-ui`, `--skip-hooks`). See [Onboard](/cli/onboard) and
+`--skip-health`, `--skip-ui`, `--skip-hooks`). Pass `--tui` to use the same
+terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
@@ -45740,6 +45878,7 @@ entry for the same inference-gated OpenClaw assistant.
 | `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
 | `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
 | `--wizard`                 | Force interactive onboarding.                                                                         |
+| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                                |
 | `--non-interactive`        | Run onboarding without prompts.                                                                       |
 | `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
 | `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
@@ -45755,12 +45894,19 @@ entry for the same inference-gated OpenClaw assistant.
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
+In interactive onboarding, `--remote-url` and `--remote-token` prefill the
+remote Gateway step and take precedence over stored remote values for that run.
+Changing the URL does not reuse stored credentials unless you also pass a token.
+The token remains masked and uses the wizard's selected plaintext or SecretRef
+storage mode.
 
 ### Baseline mode
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding.
+running onboarding. It accepts `--workspace` and harmless output controls, but
+rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
+silently ignoring them.
 
 ## Examples
 
@@ -46400,20 +46546,16 @@ with:
 ```json
 {
   "transcripts": {
-    "enabled": true,
-    "maxUtterances": 2000
+    "enabled": true
   }
 }
 ```
 
 - `enabled` (default `false`): turn the tool on.
-- `maxUtterances` (default `2000`, clamped 1-10000): utterance buffer size per
-  session.
-
-Configure auto-start sources with `transcripts.autoStart`. Each entry is
-enabled by being present; omit an entry to disable that source. `discord-voice`
-is the bundled auto-start-capable source and requires `guildId` and
-`channelId`:
+  Configure auto-start sources with `transcripts.autoStart`. Each entry is
+  enabled by being present; omit an entry to disable that source. `discord-voice`
+  is the bundled auto-start-capable source and requires `guildId` and
+  `channelId`:
 
 ```json
 {
@@ -47606,6 +47748,10 @@ openclaw workboard show 7f4a2c10 --json
 
 Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 
+Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
+self-assessment of the attached command or check; it is not an independent verification
+result.
+
 ## `move`
 
 ```bash
@@ -48640,7 +48786,7 @@ execution, streaming, persistence.
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
 
-Transcript writes are additionally protected by a session write lock on the session file. The lock is process-aware and file-based, so it catches writers that bypass the in-process queue or come from another process. Writers wait up to `session.writeLock.acquireTimeoutMs` (default `60000` ms; env override `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`) before reporting the session as busy.
+Transcript writes are additionally protected by a session write lock on the session file. The lock is process-aware and file-based, so it catches writers that bypass the in-process queue or come from another process. Writers wait up to 60 seconds by default (env override `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`) before reporting the session as busy.
 
 Session write locks are non-reentrant by default. A helper that intentionally nests acquisition of the same lock while preserving one logical writer must opt in with `allowReentrant: true`.
 
@@ -48677,7 +48823,6 @@ These run inside the agent loop or gateway pipeline:
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `before_model_resolve`                                  | Pre-session (no `messages`), to deterministically override provider/model before resolution.                                                                                                                                                                                                |
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext` before submission. Use `prependContext` for per-turn dynamic text and the system-context fields for stable guidance that belongs in system prompt space. |
-| `before_agent_start`                                    | Legacy compatibility hook that may run in either phase; prefer the explicit hooks above.                                                                                                                                                                                                    |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                             |
 | `before_compaction` / `after_compaction`                | Observe or annotate compaction cycles.                                                                                                                                                                                                                                                      |
@@ -48751,13 +48896,13 @@ Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on
 
 ### Stuck session diagnostics
 
-With diagnostics enabled, `diagnostics.stuckSessionWarnMs` (default `120000` ms) classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
+With diagnostics enabled, a built-in two-minute threshold classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
 
-- Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not flagged as stalled too early.
+- Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until the abort threshold so slow or non-streaming providers are not flagged as stalled too early.
 - Active work with no recent progress reports as `session.stalled`. Owned model calls switch to `session.stalled` at or after the abort threshold; ownerless stale model/tool activity is not hidden as long-running.
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
-`diagnostics.stuckSessionAbortMs` defaults to at least 5 minutes and 3x the warn threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
 
 ## Where things can end early
 
@@ -50272,7 +50417,6 @@ A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -50302,7 +50446,6 @@ export default function register(api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };
@@ -50519,7 +50662,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
     Compaction is one responsibility of the context engine. The legacy engine delegates to OpenClaw's built-in summarization. Plugin engines can implement any compaction strategy (DAG summaries, vector retrieval, etc.).
   </Accordion>
   <Accordion title="Memory plugins">
-    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should prefer `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the active memory prompt sections into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level control, it can still pull raw lines from `openclaw/plugin-sdk/memory-host-core` via `buildActiveMemoryPromptSection(...)`.
+    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should use `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the host-prepared memory prompt sections into a ready-to-prepend `systemPromptAddition` without exposing memory-plugin layout.
   </Accordion>
   <Accordion title="Session pruning">
     Trimming old tool results in-memory still runs regardless of which context engine is active.
@@ -51590,20 +51733,26 @@ continuity comes from layers around it:
   is enabled by default; any configured DM isolation turns it off unless you
   opt in explicitly. See [Memory configuration](/reference/memory-config).
 
-## A rolling session, not an immortal one
+## A rolling session with durable history
 
 The main session rolls forward through resets and compaction rather than
-growing forever:
+making the model carry its entire history at once:
 
 - By default there is no automatic reset; compaction keeps the active context
   bounded while preserving the rolling session. Daily and idle resets are
   opt-in (see [Session management](/concepts/session)). On `/new` and `/reset`,
   the tail of the ending conversation is saved to daily memory notes, and the
-  next session re-primes recent notes.
+  next session re-primes recent notes. Reset assigns a new live session id but
+  keeps the previous SQLite transcript searchable under the same main-session
+  key.
 - When the conversation approaches the context window, compaction summarizes
   and continues in place — the transcript history stays in the session store.
-- The per-agent session store keeps archived transcripts until a disk budget
-  (default 10 GB) evicts the oldest ones.
+- Session lists show the current live conversation, not every historical
+  session id behind it.
+- When the per-agent store's physical database, WAL, and session artifacts
+  exceed the disk budget (default 10 GB), OpenClaw extracts the oldest
+  unreferenced history to a verified compressed archive before removing its
+  database rows. Live, routed, and in-flight sessions are never budget victims.
 
 ## When you want isolation instead
 
@@ -51703,7 +51852,6 @@ OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Hourly cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Manual worktrees are never automatically removed.
-- When `worktrees.cleanup.maxCount` or `worktrees.cleanup.maxTotalSizeGb` is configured, cleanup also snapshots and removes the least recently active Workboard- and session-owned worktrees until the total count and disk size fit the limits. All managed worktrees count toward the totals, but manual and otherwise protected worktrees are never limit-evicted, so a limit can remain exceeded until eligible worktrees exist. 0 or unset disables a limit.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
@@ -51719,7 +51867,7 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot. Its **Cleanup** section edits the `worktrees.cleanup` retention limits described in the [configuration reference](/gateway/configuration-reference#worktrees).
+The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 ## Gateway methods
 
@@ -53874,7 +54022,7 @@ a restart.
 The refactor absorbed or deprecated: `reply-runtime`, `reply-dispatch-runtime`,
 `reply-reference`, `reply-chunking`, `reply-payload` helpers exposed as public
 API, `inbound-reply-dispatch`, `channel-reply-pipeline`, and most public uses
-of `outbound-runtime`. `src/plugin-sdk/channel-message.ts` is now a
+of the old outbound facade. `src/plugin-sdk/channel-message.ts` is now a
 `@deprecated` re-export barrel pointing at `channel-outbound` /
 `channel-inbound`; `channel.turn` runtime aliases were removed and the old
 `/plugins/sdk-channel-turn` doc page redirects to
@@ -54097,7 +54245,7 @@ When a run is already active, inbound messages steer into it by default. `messag
 | `collect`         | Batch compatible messages into one later turn.      |
 | `interrupt`       | Abort the active run, then start the newest prompt. |
 
-Defaults: `messages.queue.debounceMs` is 500ms (applies to steer, followup, and collect batching alike), `messages.queue.cap` is 20 queued messages, and `messages.queue.drop` is `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
+The queue uses a built-in 500ms debounce for steer, followup, and collect batching. `messages.queue.cap` defaults to 20 queued messages, and `messages.queue.drop` defaults to `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
 
 Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
@@ -54366,7 +54514,7 @@ Regular (non-billing, non-auth-permanent) cooldowns scale with the profile's rec
 - 2nd failure: 1 minute
 - 3rd+ failure: 5 minutes (cap)
 
-Counters reset once the profile's failure window has passed (`auth.cooldowns.failureWindowHours`, default 24).
+Counters reset once the profile's built-in failure window has passed.
 
 State is stored in the per-agent SQLite auth state under `usageStats`:
 
@@ -54406,19 +54554,6 @@ State is stored in the per-agent SQLite auth state:
   }
 }
 ```
-
-Defaults (`auth.cooldowns.*`):
-
-| Key                           | Default | Purpose                                                                     |
-| ----------------------------- | ------- | --------------------------------------------------------------------------- |
-| `billingBackoffHours`         | 5       | Base billing backoff, doubles per billing failure                           |
-| `billingMaxHours`             | 24      | Billing backoff cap                                                         |
-| `authPermanentBackoffMinutes` | 10      | Base backoff for high-confidence permanent-auth failures                    |
-| `authPermanentMaxMinutes`     | 60      | Cap for that backoff                                                        |
-| `failureWindowHours`          | 24      | Failure counters reset if no failures occur in this window                  |
-| `overloadedProfileRotations`  | 1       | Same-provider profile rotations allowed before model fallback on overload   |
-| `overloadedBackoffMs`         | 0       | Fixed delay before an overloaded rotation retry                             |
-| `rateLimitedProfileRotations` | 1       | Same-provider profile rotations allowed before model fallback on rate limit |
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns: by default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting.
 
@@ -54526,11 +54661,6 @@ That cooldown summary is model-aware:
 See [Gateway configuration](/gateway/configuration) for:
 
 - `auth.profiles` / `auth.order`
-- `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
-- `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
-- `auth.cooldowns.authPermanentBackoffMinutes` / `auth.cooldowns.authPermanentMaxMinutes`
-- `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
-- `auth.cooldowns.rateLimitedProfileRotations`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 
@@ -55328,8 +55458,8 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. Adding an entry does not restrict model overrides.
-- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or `provider/*` entries; omit it or set `[]` to allow any model. Per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
-- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
+- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`; omit it or set `[]` to allow any model. Per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
+- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Generated title tasks retry once with the primary model when a distinct utility model fails. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
 - `agents.defaults.imageGenerationModel`, `musicGenerationModel`, and `videoGenerationModel` back the shared media-generation tools. If unset, each tool infers an auth-backed provider default: current default provider first, then the remaining registered providers for that capability in provider-id order. Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to disable that cross-provider inference while keeping explicit fallbacks.
@@ -55352,7 +55482,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including `provider/*` wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including trailing prefix wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
@@ -55384,14 +55514,14 @@ If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist fo
 
 ```text
 Model override "provider/model" is not allowed by agents.defaults.modelPolicy.allow.
-Add "provider/model" or "provider/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.
+Add "provider/model", "provider/*", or a narrower "provider/namespace/*" prefix to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.
 ```
 
 Fix it by adding the model or a provider wildcard to the named `modelPolicy.allow` key, removing/emptying that list, or picking a model from `/model list`. If the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same command.
 
 For local/GGUF models, the allowlist needs the full provider-prefixed ref, for example `ollama/gemma4:26b` or `lmstudio/Gemma4-26b-a4-it-gguf` — check `openclaw models list --provider <provider>` for the exact string. Bare filenames or display names are not enough once the allowlist is active.
 
-To limit providers without listing every model, use `provider/*` wildcard entries:
+To limit providers without listing every model, use trailing prefix wildcard entries. A provider-wide `provider/*` matches every model under that provider; a narrower prefix such as `clawrouter/anthropic/*` matches only that namespace:
 
 ```json5
 {
@@ -58586,7 +58716,7 @@ Use `followup` or `collect` when you want messages to queue by default instead o
 
 ## Debounce
 
-`messages.queue.debounceMs` applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. For OpenClaw, active steering itself does not use the debounce timer because OpenClaw naturally batches messages until the next model boundary.
+The built-in queue debounce applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. For OpenClaw, active steering itself does not use the debounce timer because OpenClaw naturally batches messages until the next model boundary.
 
 ## Related
 
@@ -58732,7 +58862,7 @@ not a local-mode command.
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
-- Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`; both use `cron.maxConcurrentRuns`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
+- Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
 
@@ -58740,11 +58870,11 @@ not a local-mode command.
 
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity:
-  - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not reported as stalled too early.
+- When diagnostics are enabled, sessions that remain in `processing` past the built-in warning threshold with no observed reply, tool, status, block, or ACP progress are classified by current activity:
+  - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
   - Active work with no recent progress logs as `session.stalled`; owned model calls, blocked tool calls, and stalled embedded runs switch to `session.stalled` at or after the abort threshold. Ownerless stale model/tool activity is not hidden as long-running.
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
-  - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past `diagnostics.stuckSessionAbortMs` (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`.
+  - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past the abort threshold (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`.
   - Repeated `session.stuck` and `session.long_running` warning log lines back off exponentially while the session remains unchanged; recovery attempts still run on every heartbeat tick regardless of that backoff.
 
 ## Related
@@ -59198,7 +59328,7 @@ Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not vali
 
 Messages and A2A follow-up replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 
-After the target responds, OpenClaw can run a **reply-back loop** where the agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range 0-20, default 5). The target agent can reply `REPLY_SKIP` to stop early.
+After the target responds, OpenClaw can run a **reply-back loop** where the agents alternate messages up to the built-in limit. The target agent can reply `REPLY_SKIP` to stop early.
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
@@ -60592,13 +60722,12 @@ Set the agent-level default:
 }
 ```
 
-Override mode or cadence per session:
+Override the mode per session:
 
 ```json5
 {
   session: {
     typingMode: "message",
-    typingIntervalSeconds: 4,
   },
 }
 ```
@@ -60609,7 +60738,7 @@ Override mode or cadence per session:
 - `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`), and can also start from active execution before reasoning deltas arrive.
 - Heartbeat typing is a liveness signal for the resolved delivery target. It starts at heartbeat run start instead of following `message` or `thinking` stream timing. Set `typingMode: "never"` to disable it.
 - Heartbeats do not show typing when the heartbeat target is `"none"`, when the target cannot be resolved, when chat delivery is disabled for the heartbeat, or when the channel does not support typing.
-- `typingIntervalSeconds` controls the **refresh cadence**, not the start time. Default: 6 seconds.
+- `agents.defaults.typingIntervalSeconds` controls the **refresh cadence**, not the start time. Default: 6 seconds.
 
 ## Related
 
@@ -62364,27 +62493,6 @@ openclaw config unset agents.defaults.timeoutSeconds
 openclaw config set agents.defaults.timeoutSeconds 43200
 ```
 
-For a CLI that legitimately emits no output for long periods, tune the relevant watchdog profile instead of the overall turn timeout:
-
-```json5
-{
-  agents: {
-    defaults: {
-      cliBackends: {
-        "claude-cli": {
-          reliability: {
-            watchdog: {
-              fresh: { noOutputTimeoutMs: 1800000 },
-              resume: { noOutputTimeoutMs: 1800000 },
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
 Background work started inside a CLI is still part of that CLI subprocess. If the parent turn reaches its overall limit, OpenClaw stops the subprocess and its CLI-internal background tasks together. For durable long work, use a detached OpenClaw [sub-agent](/tools/subagents) or [ACP agent](/tools/acp-agents); detached sub-agents have no run timeout by default.
 
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns; see [`openclaw agent`](/cli/agent).
@@ -62418,7 +62526,7 @@ Set `agents.defaults.cliBackends.claude-cli.command` only when the `claude` bina
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`, so follow-up turns reuse the live Claude process while it is active, including for custom configs that omit transport fields. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
-- Claude live sessions keep bounded JSONL output guards: 8 MiB and 20,000 raw JSONL lines per turn by default. Raise them per backend with `agents.defaults.cliBackends.claude-cli.reliability.outputLimits.maxTurnRawChars` and `maxTurnLines`; OpenClaw clamps those settings to 64 MiB and 100,000 lines.
+- Claude live sessions keep bounded JSONL output guards: 8 MiB and 20,000 raw JSONL lines per turn.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions normally reseed only from OpenClaw's compaction summary plus the post-compaction tail. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
 
@@ -62552,13 +62660,13 @@ When bundle MCP is enabled, OpenClaw:
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable). One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
+Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
 ## Reseed history cap
 
 When a fresh CLI session is seeded from a prior OpenClaw transcript (for example after a `session_expired` retry), the rendered `<conversation_history>` block is capped to keep reseed prompts from exploding. The default is 12,288 characters (about 3,000 tokens).
 
-Claude CLI backends scale this cap with the resolved Claude context window instead: larger context windows get a larger prior-history slice, up to a fixed ceiling; other CLI backends keep the conservative default. This cap only governs the reseed prompt's prior-history block — live-session output limits are tuned separately under `reliability.outputLimits` (see [Sessions](#sessions)).
+Claude CLI backends scale this cap with the resolved Claude context window instead: larger context windows get a larger prior-history slice, up to a fixed ceiling; other CLI backends keep the conservative default. This cap only governs the reseed prompt's prior-history block.
 
 ## Limitations
 
@@ -62579,6 +62687,208 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 
 - [Gateway runbook](/gateway)
 - [Local models](/gateway/local-models)
+
+
+
+# Section: gateway/clients.md
+
+---
+summary: "Build a third-party operator or WebChat client for the Gateway WebSocket protocol"
+read_when:
+  - Building an operator, dashboard, or WebChat client outside the OpenClaw repository
+  - Implementing Gateway reconnect, history, approvals, or device pairing
+  - Updating a third-party client for a new Gateway wire version
+title: "Building a Gateway client"
+---
+
+Use the published Gateway packages to build operator dashboards, WebChat clients,
+and other third-party applications. This guide covers the client lifecycle around
+the wire contract: authentication, capabilities, reconnect recovery, history,
+subscriptions, and version upgrades.
+
+For frame shapes, the handshake, errors, and the complete method surface, read the
+[Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol).
+
+## Install the packages
+
+```bash
+npm install @openclaw/gateway-client @openclaw/gateway-protocol
+```
+
+<Note>
+These packages ship with OpenClaw release trains. During the initial rollout, npm
+may return `E404` until the first package-bearing OpenClaw release is published;
+install them only after the registry pages below resolve.
+</Note>
+
+- [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
+  provides schemas, runtime validators, TypeScript types, client identity and
+  capability registries, structured error readers, and protocol version constants.
+  Its npm tarball also includes the generated
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  machine-readable contract.
+- [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
+  is the reference connection implementation. Import the package root for the Node
+  client and `@openclaw/gateway-client/browser` for the browser-safe protocol,
+  device-auth, and reconnect helpers.
+
+The Node entry owns its WebSocket transport. A browser host supplies a WebSocket
+adapter plus persistent storage and signing callbacks for the device identity and
+device token.
+
+## Choose scopes and pair the device
+
+A full interactive chat client that also renders approval prompts should request
+`role: "operator"` with these scopes:
+
+| Scope                | Use it for                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `operator.read`      | `chat.history`, `sessions.list`, `sessions.subscribe`, model status, and read-only events |
+| `operator.write`     | `chat.send` and ordinary session mutations                                                |
+| `operator.approvals` | Listing, displaying, and resolving exec or plugin approvals                               |
+
+Add `operator.questions` only if the client handles interactive questions,
+`operator.pairing` only if it manages paired devices or nodes, and
+`operator.admin` only for administrative operations such as `config.patch`.
+The [operator scopes reference](https://docs.openclaw.ai/gateway/operator-scopes)
+defines the complete method and approval-time rules.
+
+Do not create a per-client bearer token by hand-editing `openclaw.json`. Configure
+the Gateway's shared bootstrap authentication with `openclaw configure --section
+gateway` or the `openclaw onboard --gateway-auth ...` options, then let device
+pairing mint the client token:
+
+1. Persist an Ed25519 device identity in the client.
+2. Wait for `connect.challenge`, sign the challenge-bound device payload, and send
+   `connect` with the requested operator role, scopes, and the shared Gateway token
+   or password for bootstrap authentication.
+3. If the Gateway returns structured `PAIRING_REQUIRED` details, show the request
+   ID and pause or retry according to `error.details.recommendedNextStep`.
+4. On the Gateway host, review the request with `openclaw devices list`, then
+   approve that exact current request with `openclaw devices approve <requestId>`.
+5. Reconnect and persist `hello-ok.auth.deviceToken` with the negotiated role and
+   scopes. Use that device token for later connections.
+
+Scope or role upgrades create a new pending pairing request. Token rotation cannot
+expand the approved pairing contract. See the
+[Devices CLI](https://docs.openclaw.ai/cli/devices) for approval, rotation, and
+revocation commands.
+
+## Advertise client capabilities
+
+`connect.params.caps` describes optional behavior the client can consume. It does
+not grant authorization. Import names from `GATEWAY_CLIENT_CAPS` instead of
+duplicating string literals:
+
+```ts
+import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info";
+
+const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
+```
+
+The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
+`run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+Advertise only capabilities the client actually implements.
+
+<Warning>
+`tool-events` gates live tool-execution streaming. The Gateway registers only
+connections that advertise this capability as recipients for a run's structured
+tool events. Without it, the connection receives no live tool events and the
+handshake does not report an error.
+</Warning>
+
+Capability-gated agent tools are a separate use of the same declaration. If an
+agent tool requires a client capability, the Gateway omits that tool unless the
+originating client advertised every required capability.
+
+## Recover state after reconnect
+
+Treat every successful reconnect as a new projection over durable history and
+current in-memory run state:
+
+1. Re-establish `sessions.subscribe` and the selected session's
+   `sessions.messages.subscribe` subscription.
+2. Call `chat.history` for the selected `sessionKey` and replace local persisted
+   rows with the returned `messages` projection.
+3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
+   `plan`. Adopt the run even when `text` is empty.
+4. Read `sessionInfo.hasActiveRun` and `sessionInfo.activeRunIds`. Prefer exact
+   membership in `activeRunIds` when deciding whether a retained run still owns
+   the streaming UI. A true `hasActiveRun` with no listed ID can represent another
+   active runtime projection.
+5. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
+   Maintain the highest accepted sequence independently for each run, ignore an
+   already-seen or lower sequence, and treat a forward gap as a reason to reload
+   authoritative history.
+
+The outer event frame also has an optional `seq`, which orders events on the
+current WebSocket connection. It resets with a new connection. The `seq` inside
+an `agent` event payload is assigned per run and orders that run's lifecycle,
+assistant, plan, tool, and other stream events.
+
+## Use history metadata and stable anchors
+
+Rows returned by `chat.history` can carry an `__openclaw` metadata envelope:
+
+- `id` is the transcript entry identity. Use it for anchored history requests,
+  but not as a unique display-row key.
+- `seq` is the positive transcript-record sequence. One stored record can project
+  into more than one display row, so keep siblings with the same `id` and sequence
+  together.
+- `kind` identifies synthetic rows. A compaction boundary uses
+  `kind: "compaction"` and may include `tokensBefore` and `tokensAfter` when a
+  matching checkpoint recorded those metrics.
+
+Page backward with the response's `hasMore` and `nextOffset` values. Numeric
+offsets describe the current transcript projection, so do not persist them as
+long-lived bookmarks across reset or compaction. Persist `__openclaw.id` instead.
+To restore around a known row, call `chat.history` with `messageId` and the
+`sessionId` that returned it. The Gateway can resolve that anchor from reset
+archive history; anchored responses intentionally omit numeric paging metadata.
+
+## Subscribe instead of polling usage
+
+Load the initial catalog with `sessions.list`, then call `sessions.subscribe` once
+per connection. Merge `sessions.changed` events by `sessionKey`. Session change
+payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
+`totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
+and active-run state.
+
+Some change notifications are only invalidation signals. If an event omits the
+row fields your view needs, refresh `sessions.list`. Do not poll `usage.cost` or
+`sessions.usage` to keep a live session list current; reserve those methods for
+on-demand aggregate or detailed reports.
+
+## Backfill exec approvals
+
+A client with `operator.approvals` should install its event listener as soon as
+`hello-ok` completes, then call `exec.approval.list` to backfill requests that
+predate the connection. Reconcile the list and live
+`exec.approval.requested` / `exec.approval.resolved` events by approval ID so a
+transition racing the list request is neither lost nor resurrected.
+
+## Track protocol versions
+
+The current wire version is `4`. General operator and WebChat clients must
+negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
+Only authenticated node clients and lightweight probes have the N-1 acceptance
+window, currently protocol `3` through `4`.
+
+Protocol changes are additive first. `protocol.schema.json` includes `since`
+release-vintage metadata and required scope metadata for core methods, but a wire
+version bump is still an explicit breaking event for third-party clients. Pin the
+package versions you test, upgrade the client and Gateway together when the wire
+version changes, and review the
+[OpenClaw changelog](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+before each upgrade.
+
+## Related
+
+- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Gateway RPC reference](https://docs.openclaw.ai/reference/rpc)
+- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
 
 
 
@@ -63130,7 +63440,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.
   - Object form sets primary plus ordered failover models.
-- `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, and [progress-draft narration](/concepts/progress-drafts#narrated-status). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise fall back to the agent's primary model, and narration stays off. Set `utilityModel: ""` to disable utility routing entirely. `agents.list[].utilityModel` overrides the default (an empty per-agent value disables it for that agent), and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Choose a provider that matches your cost and data-handling requirements.
+- `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, and [progress-draft narration](/concepts/progress-drafts#narrated-status). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise use the agent's primary model, and narration stays off. If a distinct utility model cannot prepare or complete a generated title, OpenClaw retries that title once with the primary model. Set `utilityModel: ""` to disable utility routing entirely. `agents.list[].utilityModel` overrides the default (an empty per-agent value disables it for that agent), and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Choose a provider that matches your cost and data-handling requirements.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
   - Also used as fallback routing when the selected/default model cannot accept image input.
@@ -63165,7 +63475,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe metadata edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing entries unless you pass `--replace`.
-- `modelPolicy.allow`: explicit override allowlist. Accepts aliases, exact `provider/model` refs, and provider wildcards such as `openai/*`. Omit it or use `[]` to allow any model. `agents.list[].modelPolicy.allow` replaces the default policy for that agent; an explicit empty list opts that agent into allow-any.
+- `modelPolicy.allow`: explicit override allowlist. Accepts aliases, exact `provider/model` refs, and trailing prefix wildcards such as `openai/*` or `clawrouter/anthropic/*`. Omit it or use `[]` to allow any model. `agents.list[].modelPolicy.allow` replaces the default policy for that agent; an explicit empty list opts that agent into allow-any.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#advanced-configuration).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
@@ -63349,10 +63659,8 @@ Periodic heartbeat runs.
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
         thinkingLevel: "low", // optional compaction-only thinking override
         timeoutSeconds: 180,
-        reserveTokensFloor: 24000,
         keepRecentTokens: 50000,
         recentTurnsPreserve: 3,
-        maxHistoryShare: 0.7,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         qualityGuard: { enabled: true, maxRetries: 1 },
@@ -63381,11 +63689,8 @@ Periodic heartbeat runs.
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `thinkingLevel`: optional thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`). It overrides the session's current thinking level and is clamped to the selected compaction model/runtime. Leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
-- `reserveTokens`: token headroom kept available for model output and future tool results after compaction. When the model context window is known, OpenClaw caps the effective reserve so it cannot consume the prompt budget.
-- `reserveTokensFloor`: minimum reserve enforced by the embedded runtime. Set `0` to disable the floor. The floor remains subject to the active context-window cap.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
-- `maxHistoryShare`: maximum fraction of the total context budget allowed for retained history after compaction (range `0.1`-`0.9`).
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
@@ -63398,36 +63703,6 @@ Periodic heartbeat runs.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when transcript size reaches the threshold even if token counters are stale. Skipped when workspace is read-only.
 
-### `agents.defaults.runRetries`
-
-Outer run loop retry iteration boundaries for the embedded agent runtime to prevent infinite execution loops during failure recovery. This setting only applies to the embedded agent runtime, not ACP or CLI runtimes.
-
-```json5
-{
-  agents: {
-    defaults: {
-      runRetries: {
-        base: 24,
-        perProfile: 8,
-        min: 32,
-        max: 160,
-      },
-    },
-    list: [
-      {
-        id: "main",
-        runRetries: { max: 50 }, // optional per-agent overrides
-      },
-    ],
-  },
-}
-```
-
-- `base`: base number of run retry iterations for the outer run loop. Default: `24`.
-- `perProfile`: additional run retry iterations granted per fallback profile candidate. Default: `8`.
-- `min`: minimum absolute limit for run retry iterations. Default: `32`.
-- `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
-
 ### `agents.defaults.contextPruning`
 
 Prunes **old tool results** from in-memory context before sending to the LLM. Does **not** modify session history on disk. Disabled by default; set `mode: "cache-ttl"` to enable.
@@ -63438,14 +63713,6 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
     defaults: {
       contextPruning: {
         mode: "cache-ttl", // off (default) | cache-ttl
-        ttl: "1h", // duration (ms/s/m/h), default unit: minutes; default: 5m
-        keepLastAssistants: 3,
-        softTrimRatio: 0.3,
-        hardClearRatio: 0.5,
-        minPrunableToolChars: 50000,
-        softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
-        hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
-        tools: { deny: ["browser", "canvas"] },
       },
     },
   },
@@ -63455,9 +63722,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 <Accordion title="cache-ttl mode behavior">
 
 - `mode: "cache-ttl"` enables pruning passes.
-- `ttl` controls how often pruning can run again (after the last cache touch). Default: `5m`.
 - Pruning soft-trims oversized tool results first, then hard-clears older tool results if needed.
-- `softTrimRatio` and `hardClearRatio` accept values from `0.0` through `1.0`; config validation rejects values outside that range.
 
 **Soft-trim** keeps beginning + end and inserts `...` in the middle.
 
@@ -63467,7 +63732,7 @@ Notes:
 
 - Image blocks are never trimmed/cleared.
 - Ratios are character-based (approximate), not exact token counts.
-- If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
+- The most recent assistant messages are preserved.
 
 </Accordion>
 
@@ -63511,7 +63776,7 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
 
 - Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
 - `typingIntervalSeconds` default: `6`.
-- Per-session overrides: `session.typingMode`, `session.typingIntervalSeconds`.
+- Per-session overrides: `session.typingMode`.
 
 See [Typing Indicators](/concepts/typing-indicators).
 
@@ -64017,18 +64282,12 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       maxDiskBytes: "500mb", // optional hard budget
       highWaterBytes: "400mb", // optional cleanup target
     },
-    writeLock: {
-      acquireTimeoutMs: 60000,
-      staleMs: 1800000,
-      maxHoldMs: 300000,
-    },
     threadBindings: {
       enabled: true,
       idleHours: 24, // default inactivity auto-unfocus in hours (`0` disables)
       maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
     mainKey: "main", // legacy (runtime always uses "main")
-    agentToAgent: { maxPingPongTurns: 5 },
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
@@ -64052,7 +64311,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: legacy field. Runtime always uses `"main"` for the main direct-chat bucket.
-- **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`-`20`, default: `5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
@@ -64063,10 +64321,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
-- **`writeLock`**: session transcript write-lock controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default policies.
-  - `acquireTimeoutMs`: milliseconds to wait while acquiring a lock before reporting the session as busy. Default: `60000`; env override `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`.
-  - `staleMs`: milliseconds before an existing lock is treated as stale and reclaimed. Default: `1800000`; env override `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`.
-  - `maxHoldMs`: milliseconds a held in-process lock may remain held before the watchdog releases it. Default: `300000`; env override `OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
   - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
@@ -64425,19 +64679,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 {
   web: {
     enabled: true,
-    heartbeatSeconds: 60,
-    whatsapp: {
-      keepAliveIntervalMs: 25000,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-    },
-    reconnect: {
-      initialMs: 2000,
-      maxMs: 30000,
-      factor: 1.8,
-      jitter: 0.25,
-      maxAttempts: 12, // 0 = retry forever
-    },
   },
   channels: {
     whatsapp: {
@@ -64457,8 +64698,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
-- `web.whatsapp.keepAliveIntervalMs` (default `25000`), `connectTimeoutMs` (default `60000`), and `defaultQueryTimeoutMs` (default `60000`) tune the Baileys socket.
-- `web.reconnect` defaults: `initialMs: 2000`, `maxMs: 30000`, `factor: 1.8`, `jitter: 0.25`, `maxAttempts: 12`. `maxAttempts: 0` retries forever instead of giving up.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 
 <Accordion title="Multi-account WhatsApp">
@@ -65529,55 +65768,10 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
   tools: {
     loopDetection: {
       enabled: true,
-      historySize: 30,
-      warningThreshold: 10,
-      unknownToolThreshold: 10,
-      criticalThreshold: 20,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-      postCompactionGuard: {
-        windowSize: 3,
-      },
     },
   },
 }
 ```
-
-<ParamField path="historySize" type="number">
-  Max tool-call history retained for loop analysis.
-</ParamField>
-<ParamField path="warningThreshold" type="number">
-  Repeating no-progress pattern threshold for warnings.
-</ParamField>
-<ParamField path="unknownToolThreshold" type="number">
-  Blocks repeated calls to the same unavailable/unknown tool name after this many misses.
-</ParamField>
-<ParamField path="criticalThreshold" type="number">
-  Higher repeating threshold for blocking critical loops.
-</ParamField>
-<ParamField path="globalCircuitBreakerThreshold" type="number">
-  Hard stop threshold for any no-progress run.
-</ParamField>
-<ParamField path="detectors.genericRepeat" type="boolean">
-  Warn on repeated same-tool/same-args calls.
-</ParamField>
-<ParamField path="detectors.knownPollNoProgress" type="boolean">
-  Warn/block on known poll tools (`process.poll`, `command_status`, etc.).
-</ParamField>
-<ParamField path="detectors.pingPong" type="boolean">
-  Warn/block on alternating no-progress pair patterns.
-</ParamField>
-<ParamField path="postCompactionGuard.windowSize" type="number">
-  Number of attempts after auto-compaction the guard stays armed for; aborts if the agent repeats the same (tool, args, result) inside that window.
-</ParamField>
-
-<Warning>
-If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
-</Warning>
 
 ### `tools.web`
 
@@ -66317,7 +66511,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       maxDiskBytes: "500mb", // optional
       highWaterBytes: "400mb", // optional (defaults to 80% of maxDiskBytes)
     },
-    typingIntervalSeconds: 5,
     sendPolicy: {
       default: "allow",
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
@@ -66528,7 +66721,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
     sessionRetention: "24h",
   },
 
@@ -66936,8 +67128,6 @@ target server during config edits.
 ```json5
 {
   mcp: {
-    // Optional. Default: 600000 ms (10 minutes). Set 0 to disable idle eviction.
-    sessionIdleTtlMs: 600000,
     servers: {
       docs: {
         command: "npx",
@@ -67008,9 +67198,8 @@ target server during config edits.
   block before passing native `mcp_servers` config to Codex. Omit the block to
   keep the server projected for every Codex app-server agent with Codex's
   default MCP approval behavior.
-- `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
-  One-shot embedded runs request run-end cleanup; this TTL is the backstop for
-  long-lived sessions and future callers.
+- Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
+  One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
@@ -67105,7 +67294,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
-- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
@@ -67214,7 +67403,7 @@ precedence when the same app is present in both paths. If `app/list` cannot be
 read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
-  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey` or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
   - `onlyMainContent`: extract only the main content from pages (default: `true`).
   - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).
@@ -67302,9 +67491,7 @@ See [Inferred commitments](/concepts/commitments).
 - `tabCleanup` controls best-effort periodic cleanup for tracked primary-agent
   tabs after idle time or when a session exceeds its cap. Tracking applies only
   to tabs created by browser tool `action: "open"`; tabs opened by the user or
-  with unknown ownership are never adopted. Set `idleMinutes: 0` or
-  `maxTabsPerSession: 0` to disable those individual cleanup modes. Disabling
-  `tabCleanup` does not disable explicit session lifecycle cleanup.
+  with unknown ownership are never adopted. Disabling `tabCleanup` does not disable explicit session lifecycle cleanup.
 - Host-local opens with a stable native CDP target and browser identity are
   stored in shared SQLite state and remain eligible across Gateway restarts for
   `/new` and session lifecycle cleanup. Native tool-facing CDP targets also
@@ -67326,10 +67513,6 @@ See [Inferred commitments](/concepts/commitments).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
-- `remoteCdpTimeoutMs` and `remoteCdpHandshakeTimeoutMs` apply to remote and
-  `attachOnly` CDP reachability plus tab-opening requests. Managed loopback
-  profiles keep local CDP defaults. Persistent remote Playwright tab
-  enumeration uses the larger value as its operation deadline.
 - If an externally managed CDP service is reachable through loopback, set that
   profile's `attachOnly: true`; otherwise OpenClaw treats the loopback port as a
   local managed browser profile and may report local port ownership errors.
@@ -67351,11 +67534,6 @@ See [Inferred commitments](/concepts/commitments).
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
-- Local managed profiles use `browser.localLaunchTimeoutMs` for Chrome CDP HTTP
-  discovery after process start and `browser.localCdpReadyTimeoutMs` for
-  post-launch CDP websocket readiness. Raise them on slower hosts where Chrome
-  starts successfully but readiness checks race startup. Both values must be
-  positive integers up to `120000` ms; invalid config values are rejected.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `browser.executablePath` and `browser.profiles.<name>.executablePath` both
   accept `~` and `~/...` for your OS home directory before Chromium launch.
@@ -67383,7 +67561,7 @@ See [Inferred commitments](/concepts/commitments).
       locale: "en",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatPersistCommentary: false,
+      chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
     },
@@ -67397,6 +67575,10 @@ See [Inferred commitments](/concepts/commitments).
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot and keep
   a device-local copy when they cannot write config (viewer scope, offline).
+  `chatPersistCommentary` defaults to `true`. Setting it to `false` keeps live
+  commentary visible during a run but removes it at completion and prevents new
+  Codex commentary from entering the durable transcript mirror. Messaging-channel
+  delivery remains separate and unchanged.
   Connected clients apply server-side changes live: the gateway broadcasts a
   hash-only `config.changed` event after every persisted config write and
   clients refresh their snapshot (skipped while a local settings draft has
@@ -67532,10 +67714,7 @@ See [Inferred commitments](/concepts/commitments).
 - Relay-backed registrations are delegated to a specific gateway identity. The paired iOS app fetches `gateway.identity.get`, includes that identity in the relay registration, and forwards a registration-scoped send grant to the gateway. Another gateway cannot reuse that stored registration.
 - `OPENCLAW_APNS_RELAY_BASE_URL` / `OPENCLAW_APNS_RELAY_TIMEOUT_MS`: temporary env overrides for the relay config above.
 - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true`: development-only escape hatch for loopback HTTP relay URLs. Production relay URLs should stay on HTTPS.
-- `gateway.handshakeTimeoutMs`: pre-auth Gateway WebSocket handshake timeout in milliseconds. Default: `15000`. `OPENCLAW_HANDSHAKE_TIMEOUT_MS` takes precedence when set. Increase this on loaded or low-powered hosts where local clients can connect while startup warmup is still settling.
-- `gateway.channelHealthCheckMinutes`: channel health-monitor interval in minutes. Set `0` to disable health-monitor restarts globally. Default: `5`.
-- `gateway.channelStaleEventThresholdMinutes`: stale-socket threshold in minutes. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`. Default: `30`.
-- `gateway.channelMaxRestartsPerHour`: maximum health-monitor restarts per channel/account in a rolling hour. Default: `10`.
+- `OPENCLAW_HANDSHAKE_TIMEOUT_MS`: optional environment override for the built-in pre-auth Gateway WebSocket handshake timeout.
 - `channels.<provider>.healthMonitor.enabled`: per-channel opt-out for health-monitor restarts while keeping the global monitor enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: per-account override for multi-account channels. When set, it takes precedence over the channel-level override.
 - Local gateway call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
@@ -67738,7 +67917,6 @@ Lifetime values are data only in the first cloud-worker release; automatic enfor
     enabled: true,
     token: "shared-secret",
     path: "/hooks",
-    maxBodyBytes: 262144,
     defaultSessionKey: "hook:ingress",
     allowRequestSessionKey: true,
     allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
@@ -68044,42 +68222,6 @@ Notes:
 - See [OAuth](/concepts/oauth).
 - Secrets runtime behavior and `audit/configure/apply` tooling: [Secrets Management](/gateway/secrets).
 
-### `auth.cooldowns`
-
-```json5
-{
-  auth: {
-    cooldowns: {
-      billingBackoffHours: 5,
-      billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
-      billingMaxHours: 24,
-      authPermanentBackoffMinutes: 10,
-      authPermanentMaxMinutes: 60,
-      failureWindowHours: 24,
-      overloadedProfileRotations: 1,
-      overloadedBackoffMs: 0,
-      rateLimitedProfileRotations: 1,
-    },
-  },
-}
-```
-
-- `billingBackoffHours`: base backoff in hours when a profile fails due to true
-  billing/insufficient-credit errors (default: `5`). Explicit billing text can
-  still land here even on `401`/`403` responses, but provider-specific text
-  matchers stay scoped to the provider that owns them (for example OpenRouter
-  `Key limit exceeded`). Retryable HTTP `402` usage-window or
-  organization/workspace spend-limit messages stay in the `rate_limit` path
-  instead.
-- `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
-- `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
-- `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
-- `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
-- `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
-- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`). Provider-busy shapes such as `ModelNotReadyException` land here.
-- `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
-- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`). That rate-limit bucket includes provider-shaped text such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, and `resource exhausted`.
-
 ---
 
 ## Audit
@@ -68158,9 +68300,6 @@ writer is best-effort, not a lossless compliance archive.
   diagnostics: {
     enabled: true,
     flags: ["telegram.*"],
-    stuckSessionWarnMs: 30000,
-    stuckSessionAbortMs: 300000,
-    memoryPressureSnapshot: false,
 
     otel: {
       enabled: false,
@@ -68201,9 +68340,6 @@ writer is best-effort, not a lossless compliance archive.
 
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
-- `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck` (default: `120000`). Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
-- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
-- `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
@@ -68234,9 +68370,6 @@ writer is best-effort, not a lossless compliance archive.
 
     auto: {
       enabled: false,
-      stableDelayHours: 6,
-      stableJitterHours: 12,
-      betaCheckIntervalHours: 1,
     },
   },
 }
@@ -68245,9 +68378,6 @@ writer is best-effort, not a lossless compliance archive.
 - `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is package-only: foreground commands own installation, while the Gateway may emit read-only update hints.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`). Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
 - `auto.enabled`: enable background auto-update for stable and beta package installs (default: `false`). Extended-stable never applies automatically.
-- `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
-- `auto.stableJitterHours`: extra stable-channel rollout spread window in hours (default: `12`; max: `168`).
-- `auto.betaCheckIntervalHours`: how often beta-channel checks run in hours (default: `1`; max: `24`). Stable delay/jitter and beta polling settings do not apply to extended-stable.
 
 ---
 
@@ -68262,20 +68392,9 @@ writer is best-effort, not a lossless compliance archive.
     fallbacks: ["acpx-secondary"],
     defaultAgent: "main",
     allowedAgents: ["main", "ops"],
-    maxConcurrentSessions: 10,
-
     stream: {
-      coalesceIdleMs: 50,
-      maxChunkChars: 1000,
       repeatSuppression: true,
       deliveryMode: "live", // live | final_only
-      hiddenBoundarySeparator: "paragraph", // none | space | newline | paragraph
-      maxOutputChars: 50000,
-      maxSessionUpdateChars: 500,
-    },
-
-    runtime: {
-      ttlMinutes: 30,
     },
   },
 }
@@ -68288,16 +68407,9 @@ writer is best-effort, not a lossless compliance archive.
 - `fallbacks`: ordered list of fallback ACP backend ids tried when the primary backend fails early with a transient-looking error (unavailable, rate-limited, quota exhausted, or overloaded) before it produced any output. Each entry must match a registered ACP runtime plugin backend.
 - `defaultAgent`: fallback ACP target agent id when spawns do not specify an explicit target.
 - `allowedAgents`: allowlist of agent ids permitted for ACP runtime sessions; empty means no additional restriction.
-- `maxConcurrentSessions`: maximum concurrently active ACP sessions.
-- `stream.coalesceIdleMs`: idle flush window in ms for streamed text.
-- `stream.maxChunkChars`: maximum chunk size before splitting streamed block projection.
 - `stream.repeatSuppression`: suppress repeated status/tool lines per turn (default: `true`).
 - `stream.deliveryMode`: `"live"` streams incrementally; `"final_only"` buffers until turn terminal events.
-- `stream.hiddenBoundarySeparator`: separator before visible text after hidden tool events (default: `"paragraph"`).
-- `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
-- `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
 - `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
-- `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
 - `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
 
 ---
@@ -68383,7 +68495,6 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 {
   cron: {
     enabled: true,
-    maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
@@ -68395,26 +68506,6 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
-
-### `cron.retry`
-
-```json5
-{
-  cron: {
-    retry: {
-      maxAttempts: 3,
-      backoffMs: [30000, 60000, 300000],
-      retryOn: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
-    },
-  },
-}
-```
-
-- `maxAttempts`: maximum retries for cron jobs on transient errors (default: `3`; range: `0`-`10`).
-- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
-- `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
-
-One-shot jobs stay enabled until retry attempts are exhausted, then disable while keeping the final error state. Recurring jobs use the same transient retry policy to run again after backoff before their next scheduled slot; permanent errors or exhausted transient retries fall back to the normal recurring schedule with error backoff.
 
 ### `cron.failureAlert`
 
@@ -68465,30 +68556,6 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
-
----
-
-## Worktrees
-
-```json5
-{
-  worktrees: {
-    cleanup: {
-      maxCount: 25, // max managed worktrees across all repositories; 0 or unset disables
-      maxTotalSizeGb: 50, // max total size in GB across all managed worktrees; 0 or unset disables
-    },
-  },
-}
-```
-
-Retention limits for OpenClaw-managed worktrees, enforced by hourly cleanup, `openclaw worktrees gc`, and the Control UI **Clean up now** action. When a limit is exceeded, cleanup snapshots and removes the least recently active session- and Workboard-owned worktrees until the count and total size fit. Manual worktrees, worktrees with live locks or run leases, and worktrees owned by recently active sessions are never limit-evicted, so a limit can remain exceeded when only protected worktrees are left. Removed worktrees stay restorable from their snapshots for 30 days.
-
-- `cleanup.maxCount`: maximum number of managed worktrees to retain across all repositories. Default: unset (no limit).
-- `cleanup.maxTotalSizeGb`: maximum total disk size in GB across all managed worktrees, measured during cleanup. Fractional values such as `0.5` are accepted. Default: unset (no limit).
-
-The Control UI **Worktrees** page under Settings exposes both limits as stepper controls. See [Managed worktrees](/concepts/managed-worktrees).
-
----
 
 ## Media model template variables
 
@@ -68798,16 +68865,11 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
   </Accordion>
 
-  <Accordion title="Tune gateway channel health monitoring">
-    Control how aggressively the gateway restarts channels that look stale:
+  <Accordion title="Configure per-channel health monitoring">
+    Disable or enable automatic health restarts for a channel or account:
 
     ```json5
     {
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 30,
-        channelMaxRestartsPerHour: 10,
-      },
       channels: {
         telegram: {
           healthMonitor: { enabled: false },
@@ -68821,28 +68883,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - Values shown are the defaults. Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
-    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
-    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
     - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
-
-  </Accordion>
-
-  <Accordion title="Tune gateway WebSocket handshake timeout">
-    Give local clients more time to complete the pre-auth WebSocket handshake on
-    loaded or low-powered hosts:
-
-    ```json5
-    {
-      gateway: {
-        handshakeTimeoutMs: 30000,
-      },
-    }
-    ```
-
-    - Default is `15000` milliseconds.
-    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
-    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
 
   </Accordion>
 
@@ -68980,7 +69022,6 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
       },
     }
@@ -69486,21 +69527,9 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail; it does not affect normal
 Gateway logging.
 
-Critical memory pressure snapshots are off by default. To capture the
-pre-OOM stability snapshot in addition to normal diagnostics events:
-
-```json5
-{
-  diagnostics: {
-    memoryPressureSnapshot: true,
-  },
-}
-```
-
-Use this only on hosts that can tolerate the extra file-system scan and
-snapshot write during critical memory pressure. Normal memory pressure events
-still record RSS, heap, threshold, and growth facts (`rss_threshold`,
-`heap_threshold`, `rss_growth`) when the snapshot is off.
+Memory pressure events record RSS, heap, threshold, and growth facts
+(`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
+file-system scan or writing a pre-OOM snapshot.
 
 ## Related
 
@@ -69998,7 +70027,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `plugins.openai-codex` policy ids                                                                | `plugins.openai`                                                             |
     | `tools.web.x_search.apiKey`                                                                      | `plugins.entries.xai.config.webSearch.apiKey`                               |
     | `session.maintenance.rotateBytes`, `session.parentForkMaxTokens`                                 | removed (deprecated)                                                        |
-    | `diagnostics.memoryPressureBundle`                                                               | `diagnostics.memoryPressureSnapshot`                                        |
+    | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
 
     <Note>
       The `plugins.entries.voice-call.config.*` rows above are normalized by
@@ -70286,6 +70315,172 @@ That stages grounded durable candidates into the short-term dreaming store while
 
 
 
+# Section: gateway/embedding.md
+
+---
+summary: "Supervise the OpenClaw Gateway as a child process from Electron or another host app"
+read_when:
+  - Embedding OpenClaw in a desktop or server application
+  - Supervising the Gateway as a child process
+  - Handling Gateway readiness, restart, shutdown, or invalid config without scraping logs
+title: "Embedding OpenClaw"
+---
+
+An embedding host should supervise the installed `openclaw` executable, use the
+Gateway WebSocket protocol as its control plane, and treat the child process as a
+replaceable runtime. This keeps process ownership, readiness, failure recovery,
+and upgrades explicit without depending on OpenClaw's private state layout.
+
+For client authentication and reconnect state, read
+[Building a Gateway client](https://docs.openclaw.ai/gateway/clients).
+
+## Start the child with an embedding preset
+
+Use a real `node_modules` installation and spawn the package executable. A useful
+baseline for a host that owns discovery, restart, and channel lifecycle is:
+
+```ts
+import { spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Supply an absolute path to a real Node runtime managed by the host application.
+declare const hostNodeExecutable: string;
+
+const packageEntry = fileURLToPath(import.meta.resolve("openclaw"));
+const openclawEntry = resolve(dirname(packageEntry), "..", "openclaw.mjs");
+const gateway = spawn(hostNodeExecutable, [openclawEntry, "gateway", "--allow-unconfigured"], {
+  env: {
+    ...process.env,
+    OPENCLAW_DISABLE_BONJOUR: "1",
+    OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_SKIP_CHANNELS: "1",
+  },
+  stdio: ["ignore", "inherit", "inherit"],
+});
+```
+
+Resolve OpenClaw through the installed package as shown; do not assume that a
+project-local `openclaw` binary is on the host process's `PATH`. The example
+inherits output so the child cannot block on full stdout or stderr pipes. If the
+host captures those streams instead, attach consumers immediately after spawning.
+
+| Setting                          | Embedding effect                                                                                                                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_DISABLE_BONJOUR=1`     | Disables Gateway-owned LAN multicast advertising when the host owns discovery.                                                                                                             |
+| `OPENCLAW_NO_RESPAWN=1`          | In an unmanaged embedding child, prevents OpenClaw from handing an update restart to a detached child. Routine restarts remain in process, so the host keeps ownership of the tracked PID. |
+| `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` | Disables login-shell snapshot capture for host exec commands.                                                                                                                              |
+| `OPENCLAW_SKIP_CHANNELS=1`       | Skips channel startup and reload. Set it only when the embedding app wants a control-plane or WebChat-only Gateway.                                                                        |
+
+`--allow-unconfigured` bypasses only the `gateway.mode=local` startup guard. It
+does not write configuration or repair an invalid file. Omit it when the embedding
+app provisions a normal local configuration through onboarding, the config CLI,
+or Gateway RPC.
+
+### Electron shell snapshot warning
+
+Shell snapshot capture runs `process.execPath -e <script>` from a login shell. In
+a normal Node process, `process.execPath` is the Node executable. Under Electron,
+it is the Electron binary, which can interpret the invocation as an application
+launch and show an "Unable to find Electron app" popup. Set
+`OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway child's environment, not only in
+the renderer process. For the same reason, `hostNodeExecutable` must point to a
+real Node runtime rather than Electron's `process.execPath`.
+
+## Handle invalid config by exit code
+
+Gateway startup uses exit code `78` (`EX_CONFIG`) for configuration-class startup
+failures, including an invalid config. Branch on the exit code instead of scraping
+human-readable stderr:
+
+1. Run `openclaw doctor --fix --yes --non-interactive` against the same config and
+   state environment as the Gateway child.
+2. Retry Gateway startup once after doctor exits successfully.
+3. If the child exits `78` again, stop the repair loop and surface the config
+   failure to the user.
+
+Keep stderr for diagnostics, but do not make lifecycle decisions from its wording.
+
+After a successful startup, an invalid live config edit is less destructive. The
+config watcher logs that reload was skipped and continues serving the last accepted
+in-memory config. Repair the file, then let the watcher accept the next valid
+snapshot.
+
+## Wait for protocol readiness
+
+Use WebSocket signals instead of a log substring:
+
+1. Open the Gateway WebSocket.
+2. Wait for the `connect.challenge` event. It proves that the listener accepted the
+   WebSocket and the challenge handshake can begin.
+3. Send `connect` with the challenge-bound device signature.
+4. Treat `hello-ok` as application readiness for authenticated RPC.
+
+The challenge is deliberately earlier than full initialization. If startup
+sidecars are still pending, `connect` returns a retryable `UNAVAILABLE` error with
+`details.reason: "startup-sidecars"`, a bounded `retryAfterMs`, and then closes
+with code `1013` and reason `gateway starting`. Use
+`resolveGatewayStartupRetryAfterMs` from
+`@openclaw/gateway-protocol/startup-unavailable` or the reference client's built-in
+policy, then reconnect.
+
+## Interpret restart and shutdown
+
+Before an orderly close, the Gateway broadcasts a `shutdown` event with `reason`
+and `restartExpectedMs`. A non-null `restartExpectedMs` means an in-process or
+supervised restart is expected; `null` means a terminal shutdown.
+
+The subsequent WebSocket close code is `1012` for both cases. The ordinary client
+close reason is also `service restart` in both cases, so neither the close code nor
+the reason distinguishes restart from shutdown. Preserve the preceding `shutdown`
+payload when it arrives, and combine it with the host's own stop intent and the
+child exit status. If the connection disappears without the event, use normal
+bounded reconnect and child-supervision policy.
+
+## Use RPC instead of state files
+
+Keep the Gateway as the only owner of OpenClaw state. Common embedding operations
+already have RPC methods:
+
+| Task                          | RPC methods                                          |
+| ----------------------------- | ---------------------------------------------------- |
+| Session catalog and lifecycle | `sessions.list`, `sessions.patch`, `sessions.delete` |
+| Transcript display            | `chat.history`                                       |
+| Cost and usage reports        | `usage.cost`, `sessions.usage`                       |
+| Model credential status       | `models.authStatus`                                  |
+| Configuration                 | `config.get`, `config.patch`                         |
+
+`config.get` redacts sensitive values and SecretRef identifiers before returning
+the snapshot. Write methods also return redacted config. A client must treat the
+redaction sentinel as opaque and use the documented config write contract; it
+must never expect the Gateway to return plaintext secrets.
+
+Do not read or mutate files, SQLite tables, transcript files, or cache directories
+under `~/.openclaw` to implement app features. Those layouts are private runtime
+implementation details and can move or change without protocol compatibility.
+
+## Install; do not flatten
+
+The root `openclaw` package is not a single-file vendoring target. Bundled runtime
+files under `dist/extensions` retain bare self-imports such as
+`openclaw/plugin-sdk/*`, while the npm package intentionally excludes
+per-extension `node_modules` trees.
+
+Install OpenClaw through npm, pnpm, or another normal Node package installation so
+Node can resolve the package exports and root dependency tree. Spawn the installed
+`openclaw` executable. Do not copy only `dist`, flatten the package into an app
+bundle, or vendor selected extension files.
+
+## Related
+
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
+- [Gateway CLI](https://docs.openclaw.ai/cli/gateway)
+- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+
+
+
 # Section: gateway/external-apps.md
 
 ---
@@ -70304,11 +70499,15 @@ transport plus RPC methods. Use it when a script, dashboard, CI job, IDE
 extension, or another process wants to start agent runs, stream events, wait
 for results, cancel work, or inspect Gateway resources.
 
-<Warning>
-  There is no public npm client package yet. Do not add OpenClaw client package
-  names as application dependencies until release notes announce a published
-  package and this page includes install instructions.
-</Warning>
+<Note>
+  For npm packages, device pairing, reconnect recovery, history, subscriptions,
+  and approvals, start with
+  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  app supervises the Gateway as a child process, also read
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
+  initial package rollout, npm may return `E404` until the first package-bearing
+  OpenClaw release is published.
+</Note>
 
 <Note>
   This page is for code outside the OpenClaw process. Plugin code that runs
@@ -70317,16 +70516,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                 | Status | Use it for                                                                                    |
-| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| [Gateway protocol](/gateway/protocol)   | Ready  | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc) | Ready  | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)          | Ready  | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)      | Ready  | Sending messages or channel actions from scripts.                                             |
-
-A future client library package is in progress internally, but it is not a
-public install surface yet. Treat it as preview implementation detail until a
-release announces a published, versioned package.
+| Surface                                                          | Status        | Use it for                                                                                    |
+| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -70466,6 +70663,8 @@ plugins loaded by OpenClaw.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)
@@ -70583,15 +70782,12 @@ health commands above for live connectivity checks.
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
 - Session store: `ls -l ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Count and recent recipients are surfaced via `status`.
 - Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409-515 or `loggedOut` appear in logs. The QR login flow auto-restarts once for status 515 after pairing.
-- Diagnostics are enabled by default (`diagnostics.enabled: false` disables them). Memory events record RSS/heap byte counts and threshold/growth pressure; critical memory pressure logs through the gateway logger and, when `diagnostics.memoryPressureSnapshot: true` is set, also writes a pre-OOM stability bundle (V8 heap stats, Linux cgroup counters when available, active resource counts, largest session/transcript files by redacted relative path). Liveness warnings record event-loop delay/utilization, CPU-core ratio, and active/waiting/queued session counts when the process is running but saturated. Oversized-payload events record what was rejected/truncated/chunked plus sizes and limits, never message text, attachment contents, webhook bodies, raw request/response bodies, tokens, cookies, or secret values.
-- The same heartbeat drives the bounded stability recorder: `openclaw gateway stability` (or the `diagnostics.stability` Gateway RPC). Fatal Gateway exits, shutdown timeouts, restart startup failures, and (when `diagnostics.memoryPressureSnapshot: true`) critical memory pressure persist the latest snapshot under `~/.openclaw/logs/stability/`. Inspect the newest bundle with `openclaw gateway stability --bundle latest`.
+- Diagnostics are enabled by default (`diagnostics.enabled: false` disables them). Memory events record RSS/heap byte counts and threshold/growth pressure. Liveness warnings record event-loop delay/utilization, CPU-core ratio, and active/waiting/queued session counts when the process is running but saturated. Oversized-payload events record what was rejected/truncated/chunked plus sizes and limits, never message text, attachment contents, webhook bodies, raw request/response bodies, tokens, cookies, or secret values.
+- The same heartbeat drives the bounded stability recorder: `openclaw gateway stability` (or the `diagnostics.stability` Gateway RPC). Fatal Gateway exits, shutdown timeouts, and restart startup failures persist the latest snapshot under `~/.openclaw/logs/stability/`. Inspect the newest bundle with `openclaw gateway stability --bundle latest`.
 - For bug reports, run `openclaw gateway diagnostics export` and attach the generated zip: a Markdown summary, the newest stability bundle, sanitized log metadata, sanitized Gateway status/health snapshots, and config shape. Chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, and secret values are omitted or redacted. See [Diagnostics Export](/gateway/diagnostics).
 
 ## Health monitor config
 
-- `gateway.channelHealthCheckMinutes`: how often the gateway checks channel health. Default: `5`. Set `0` to disable health-monitor restarts globally.
-- `gateway.channelStaleEventThresholdMinutes`: how long a connected channel can stay idle before the health monitor treats it as stale and restarts it. Default: `30`. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`.
-- `gateway.channelMaxRestartsPerHour`: rolling one-hour cap for health-monitor restarts per channel/account. Default: `10`.
 - `channels.<provider>.healthMonitor.enabled`: disable health-monitor restarts for a specific channel while leaving global monitoring enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the built-in channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
@@ -72523,9 +72719,12 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
-## Request limits (config)
+## Request limits
 
-Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
+The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
+parts from the latest user message, and 20 MB of cumulative decoded image
+data. Image source policy remains configurable under
+`gateway.http.endpoints.chatCompletions.images`:
 
 ```json5
 {
@@ -72534,9 +72733,6 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
       endpoints: {
         chatCompletions: {
           enabled: true,
-          maxBodyBytes: 20000000,
-          maxImageParts: 8,
-          maxTotalImageBytes: 20000000,
           images: {
             allowUrl: false,
             urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
@@ -72559,17 +72755,14 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
 }
 ```
 
-Defaults when omitted:
+Image settings default to:
 
-| Key                   | Default                                                                     |
-| --------------------- | --------------------------------------------------------------------------- |
-| `maxBodyBytes`        | 20MB                                                                        |
-| `maxImageParts`       | 8 (max `image_url` parts read from the latest user message)                 |
-| `maxTotalImageBytes`  | 20MB (cumulative decoded bytes across all `image_url` parts in one request) |
-| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled)         |
-| `images.maxBytes`     | 10MB per image                                                              |
-| `images.maxRedirects` | 3                                                                           |
-| `images.timeoutMs`    | 10s                                                                         |
+| Key                   | Default                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled) |
+| `images.maxBytes`     | 10MB per image                                                      |
+| `images.maxRedirects` | 3                                                                   |
+| `images.timeoutMs`    | 10s                                                                 |
 
 HEIC/HEIF `image_url` sources are accepted and normalized to JPEG before provider delivery through the shared OpenClaw image processor (Rastermill), which falls back to a system converter (`sips`, ImageMagick, GraphicsMagick, or ffmpeg) for formats needing external codec support.
 
@@ -72875,9 +73068,10 @@ URL fetch defaults:
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`): exact host (`"cdn.example.com"`) or wildcard subdomains (`"*.assets.example.com"`, does not match the apex). Empty or omitted allowlists mean no hostname allowlist restriction.
 - To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
-## File + image limits (config)
+## File + image limits
 
-Defaults can be tuned under `gateway.http.endpoints.responses`:
+The endpoint uses a built-in 20 MB request-body limit. File and image source
+policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
 {
@@ -72886,7 +73080,6 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
       endpoints: {
         responses: {
           enabled: true,
-          maxBodyBytes: 20000000,
           maxUrlParts: 8,
           files: {
             allowUrl: true,
@@ -72935,7 +73128,6 @@ Defaults when omitted:
 
 | Key                      | Default   |
 | ------------------------ | --------- |
-| `maxBodyBytes`           | 20MB      |
 | `maxUrlParts`            | 8         |
 | `files.maxBytes`         | 5MB       |
 | `files.maxChars`         | 60k       |
@@ -73670,28 +73862,18 @@ bounds; content remains off by default.
 
 ### Session liveness telemetry
 
-`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
-liveness diagnostics. A `processing` session does not age toward this
-threshold while OpenClaw observes reply, tool, status, block, or ACP runtime
-progress. Typing keepalives do not count as progress, so a silent model or
-harness can still be detected.
+A `processing` session does not age toward the built-in liveness threshold while OpenClaw observes reply, tool, status, block, or ACP runtime progress. Typing keepalives do not count as progress, so a silent model or harness can still be detected.
 
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls
-  are still making progress. Owned model calls that stay silent past
-  `diagnostics.stuckSessionWarnMs` also report as long-running before
-  `diagnostics.stuckSessionAbortMs`, so slow or non-streaming model providers
-  do not look like stalled gateway sessions while abort-observable.
+  are still making progress. Owned silent model calls also report as long-running before the built-in abort threshold, so slow or non-streaming model providers do not look like stalled gateway sessions while abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Owned model calls switch from `session.long_running` to
-  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  `session.stalled` at or after the built-in abort threshold; ownerless
   stale model/tool activity is not treated as harmless long-running work.
   Stalled embedded runs stay observe-only at first, then abort-drain after
-  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind
-  the lane can resume. When unset, the abort threshold defaults to the safer
-  extended window of at least 5 minutes and 3x
-  `diagnostics.stuckSessionWarnMs`.
+  the abort threshold with no progress so queued turns behind the lane can resume.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
   affected session lane immediately after recovery gates pass.
@@ -74653,6 +74835,25 @@ The Gateway WS protocol is the single control plane and node transport for
 OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
 headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
+
+## npm packages
+
+These packages ship with OpenClaw release trains. During the initial rollout,
+npm may return `E404` until the first package-bearing release is published.
+
+- [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
+  publishes the schemas, validators, TypeScript types, lightweight frame and error
+  helpers, and version constants. Its tarball includes the generated
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  machine-readable contract.
+- [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
+  publishes the reference Node client and a browser-safe entry at
+  `@openclaw/gateway-client/browser`.
+
+For application lifecycle guidance, see
+[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+that supervise the Gateway as a child process, see
+[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
 
 ## Transport and framing
 
@@ -75789,6 +75990,8 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Bridge protocol](/gateway/bridge-protocol)
 - [Gateway runbook](/gateway)
 
@@ -77264,11 +77467,6 @@ Define providers under `secrets.providers`:
       env: "default",
       file: "filemain",
       exec: "vault",
-    },
-    resolution: {
-      maxProviderConcurrency: 4,
-      maxRefsPerProvider: 512,
-      maxBatchBytes: 262144,
     },
   },
 }
@@ -78770,11 +78968,11 @@ Look for:
 Common signatures:
 
 - `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
-- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `memory pressure: level=critical` appears in gateway logs → OpenClaw detected critical memory pressure and recorded the available in-process memory facts.
 - `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
 - `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure or reduce concurrent work first. For a managed service, inspect `Gateway heap:` in `openclaw gateway status`; if it says `not set`, regenerate old service metadata with `openclaw gateway install --force`. Ambient shell `NODE_OPTIONS` is intentionally ignored. Use an explicit supervisor-level heap override only after confirming the sustained workload and leaving enough native-memory headroom.
 - `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
-- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+- Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence.
 
 The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
 
@@ -79246,7 +79444,7 @@ Internal Gateway clients that do not travel through the reverse proxy should use
   Automatically approve new Control UI and WebChat device identities after trusted-proxy authentication.
 </ParamField>
 <ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.scopes" type="string[]" default='["operator.read", "operator.write", "operator.approvals"]'>
-  Maximum scopes granted to an auto-approved browser device. `operator.admin` is not allowed.
+  Maximum scopes granted to an auto-approved browser device. Explicitly listing `operator.admin` lets every proxy-authenticated user request an automatic full-admin device grant, makes scope-less requests receive full admin automatically, and triggers the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` security audit finding plus a Gateway startup warning.
 </ParamField>
 
 <Warning>
@@ -79280,10 +79478,10 @@ The default is `enabled: false`. When enabled, all of these rules apply:
 1. The WebSocket must have authenticated through the `trusted-proxy` method with a non-empty user identity that passed `allowUsers` when an allowlist is configured. Token, password, Tailscale, and unauthenticated connections never use this policy.
 2. Only a new Control UI or WebChat browser device can be approved automatically. Any request for an existing device, including a scope upgrade, remains pending for manual approval with `openclaw devices approve <requestId>`.
 3. The device is approved with role `operator`. If the connect request includes scopes, the grant is the exact intersection of the requested scopes and `deviceAutoApprove.scopes`. If the request omits scopes, the configured list is granted; when that list is omitted, it defaults to `operator.read`, `operator.write`, and `operator.approvals`. The resulting grant is then additionally capped by the connection's [`x-openclaw-scopes`](#control-ui-pairing-behavior) proxy header when present, so a proxy that narrows a user's scopes also limits the **persistent** device grant, not just the session — a present-but-empty header yields no scopes. This cap applies even when the client omits its own scope list.
-4. `operator.admin` cannot appear in `deviceAutoApprove.scopes`; configuration validation rejects it. Grant admin access manually with `openclaw devices approve` or `openclaw devices rotate`.
+4. `operator.admin` is allowed only through explicit listing in `deviceAutoApprove.scopes`. When listed, every proxy-authenticated user can request and automatically receive full admin on a new browser device; requests without scopes receive full admin automatically. `openclaw security audit` reports the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` finding, and the Gateway logs a warning once at startup. Prefer manual admin approval with `openclaw devices approve` or `openclaw devices rotate` until per-identity roles are available.
 
 <Warning>
-Enabling this option delegates new browser device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
+Enabling this option delegates new browser device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Listing `operator.admin` makes that device a full administrator without manual approval. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
 </Warning>
 
 ## Control UI pairing behavior
@@ -83084,8 +83282,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     OpenClaw may skip a profile in a short **cooldown** (rate limits,
     timeouts, auth failures) or a longer **disabled** state
     (billing/insufficient credits). Inspect with `openclaw models status
-    --json` and check `auth.unusableProfiles`. Tune with
-    `auth.cooldowns.billingBackoffHours*`. Rate-limit cooldowns can be
+    --json` and check `auth.unusableProfiles`. Rate-limit cooldowns can be
     model-scoped — a profile cooling down for one model can still serve a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.
@@ -93632,20 +93829,17 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
     channel: "stable",
     auto: {
       enabled: true,
-      stableDelayHours: 6,
-      stableJitterHours: 12,
-      betaCheckIntervalHours: 1,
     },
   },
 }
 ```
 
-| Channel           | Behavior                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
-| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
-| `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
-| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
+| Channel           | Behavior                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `stable`          | Applies after a built-in delay with deterministic jitter for a spread rollout.                                                |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically. |
+| `beta`            | Checks on a built-in interval and applies immediately.                                                                        |
+| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                           |
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
@@ -105068,10 +105262,8 @@ Crabbox/Testbox for this Codex worktree.
 
 # Swarms — agent fan-out and orchestration in code mode
 
-Status: implementation spec (v1 in progress). This document is the frozen build
-spec. It will be rewritten as user-facing docs (`docs/tools/swarm.md`) once the
-feature lands and is tested. Feature-gated behind `tools.swarm` (default off);
-`main` remains shippable at every point.
+Status: Shipped — superseded by `docs/tools/swarm.md`. This document remains as
+the implementation design record.
 
 ## 1. What and why
 
@@ -109357,10 +109549,6 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
-<Note>
-`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
-</Note>
-
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
@@ -109558,10 +109746,9 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins have three layers:
 
 - **Manifest metadata** for cheap pre-runtime lookup:
-  `setup.providers[].envVars`, deprecated compatibility `providerAuthEnvVars`,
-  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
-- **Config-time hooks**: `catalog` (legacy `discovery`) plus
-  `applyConfigDefaults`.
+  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
+  and `channelConfigs`.
+- **Config-time hooks**: `catalog` plus `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
   stream wrapping, thinking levels, replay policy, and usage endpoints. See
   [Hook order and usage](#hook-order-and-usage).
@@ -109572,9 +109759,7 @@ behavior without needing a whole custom inference transport.
 
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
-loading plugin runtime. Deprecated `providerAuthEnvVars` is still read by the
-compatibility adapter during the deprecation window, and non-bundled plugins
-that use it receive a manifest diagnostic. Use manifest `providerAuthAliases`
+loading plugin runtime. Use manifest `providerAuthAliases`
 when one provider id should reuse another provider id's env vars, auth profiles,
 config-backed auth, and API-key onboarding choice. Use manifest
 `providerAuthChoices` when onboarding/auth-choice CLI surfaces should know the
@@ -109583,9 +109768,8 @@ loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
-Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
-generic shell-env fallback, config/status checks, or setup prompts should see
-without loading channel runtime.
+Describe env-driven channel setup and auth through the owning
+`channelConfigs.<id>.schema` and setup descriptors.
 
 ### Hook order and usage
 
@@ -109901,7 +110085,6 @@ Notes:
   schemas while OpenClaw owns the provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
-- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 Plugins can also launch background subagent runs through `api.runtime.subagent`:
 
@@ -110016,12 +110199,11 @@ Notes:
 Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
 barrel when authoring new plugins. Core subpaths:
 
-| Subpath                             | Purpose                                            |
-| ----------------------------------- | -------------------------------------------------- |
-| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
-| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
-| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
-| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
+| Subpath                            | Purpose                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry` | Plugin registration primitives               |
+| `openclaw/plugin-sdk/channel-core` | Channel entry/build helpers                  |
+| `openclaw/plugin-sdk/core`         | Generic shared helpers and umbrella contract |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
@@ -110039,11 +110221,10 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
-small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
-`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
-and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
-older plugins. New code should import narrower generic primitives instead.
+`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
+`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
+are deprecated compatibility shims for older plugins. New code should import
+narrower generic primitives instead.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -110344,7 +110525,6 @@ Useful `openclaw.channel` fields beyond the minimal example:
 - `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
 - `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
 - `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
-- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
 - `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
 - `forceAccountBinding`: require explicit account binding even when only one account exists
 - `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
@@ -110400,7 +110580,6 @@ pipeline rather than just add memory search or hooks.
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
@@ -110415,7 +110594,6 @@ export default function (api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };
@@ -110454,7 +110632,6 @@ import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", (ctx) => ({
@@ -110473,7 +110650,6 @@ export default function (api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };
@@ -110672,18 +110848,6 @@ OpenClaw classifies every loaded plugin into a shape based on its actual registr
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape and capability breakdown. See [CLI reference](/cli/plugins#inspect) for details.
 
-### Legacy hooks
-
-The `before_agent_start` hook remains supported as a compatibility path for hook-only plugins. Legacy real-world plugins still depend on it.
-
-Direction:
-
-- keep it working
-- document it as legacy
-- prefer `before_model_resolve` for model/provider override work
-- prefer `before_prompt_build` for prompt mutation work
-- remove only after real usage drops and fixture coverage proves migration safety
-
 ### Compatibility signals
 
 `openclaw doctor`, `openclaw plugins inspect <id>`, `openclaw status --all`, and `openclaw plugins doctor` surface these compatibility notices:
@@ -110692,7 +110856,6 @@ Direction:
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | **config valid**                           | Config parses fine and plugins resolve                                                                        |
 | **hook-only** (info)                       | Plugin registers only hooks; a supported path, but not migrated to capability registration yet                |
-| **legacy `before_agent_start`** (warn)     | Plugin uses the deprecated `before_agent_start` hook instead of `before_model_resolve`/`before_prompt_build`  |
 | **deprecated memory-embedding API** (warn) | Non-bundled plugin uses the old memory-specific embedding provider API instead of `registerEmbeddingProvider` |
 | **hard error**                             | Config is invalid or plugin failed to load                                                                    |
 
@@ -110783,6 +110946,8 @@ The current boundary is:
 - channel plugins execute the final action through their action adapter
 
 For channel plugins, the SDK surface is `ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery call lets a plugin return its visible actions, capabilities, and schema contributions together so those pieces do not drift apart.
+
+Message action names use a deliberately closed, core-owned vocabulary so every transport can render every action. Plugins add action names through a core PR; runtime registration is intentionally unsupported.
 
 When a channel-specific message-tool param carries a media source such as a local path or remote media URL, the plugin should also return `mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit list to apply sandbox path normalization and outbound media-access hints without hardcoding plugin-owned param names. Prefer action-scoped maps there, not one channel-wide flat list, so a profile-only media param does not get normalized on unrelated actions like `send`.
 
@@ -110899,16 +111064,13 @@ That same pattern should be preferred for future capabilities.
 A company plugin should feel cohesive from the outside. If OpenClaw has shared contracts for models, speech, realtime transcription, realtime voice, media understanding, image generation, video generation, web fetch, and web search, a vendor can own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  describeImageWithModel,
-  transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk/media-understanding";
-import { createPluginBackedWebSearchProvider } from "openclaw/plugin-sdk/provider-web-search";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { exampleAiMedia } from "./exampleai-media.js";
 
-const plugin: OpenClawPluginDefinition = {
+export default definePluginEntry({
   id: "exampleai",
   name: "ExampleAI",
+  description: "ExampleAI models and media capabilities.",
   register(api) {
     api.registerProvider({
       id: "exampleai",
@@ -110923,36 +111085,26 @@ const plugin: OpenClawPluginDefinition = {
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
       capabilities: ["image", "audio", "video"],
-      async describeImage(req) {
-        return describeImageWithModel({
-          ...req,
-          provider: "exampleai",
-        });
-      },
-      async transcribeAudio(req) {
-        return transcribeOpenAiCompatibleAudio({
-          ...req,
-          provider: "exampleai",
-        });
-      },
+      describeImage: (req) => exampleAiMedia.describeImage(req),
+      transcribeAudio: (req) => exampleAiMedia.transcribeAudio(req),
+      describeVideo: (req) => exampleAiMedia.describeVideo(req),
     });
 
-    api.registerWebSearchProvider(
-      createPluginBackedWebSearchProvider({
-        id: "exampleai-search",
-        // credential + fetch logic
-      }),
-    );
+    api.registerWebSearchProvider({
+      id: "exampleai-search",
+      createTool() {
+        // Return the vendor-owned web search tool.
+      },
+    });
   },
-};
-
-export default plugin;
+});
 ```
 
 What matters is not the exact helper names. The shape matters:
 
 - one plugin owns the vendor surface
 - core still owns the capability contracts
+- provider request translation and HTTP helpers stay in the vendor plugin
 - channels and feature plugins consume `api.runtime.*` helpers, not vendor code
 - contract tests can assert that the plugin registered the capabilities it claims to own
 
@@ -111054,7 +111206,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and injected plugin API capabilities.
 
 ## Internals and reference
 
@@ -111421,12 +111573,6 @@ Import from focused SDK subpaths:
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-```
-
-Do not import from the deprecated root barrel:
-
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk";
 ```
 
 Within your plugin package, use local barrel files such as `api.ts` and
@@ -112013,7 +112159,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
-| `reliability.outputLimits`                                | Max raw JSONL chars/lines retained for one live CLI turn (live-session backends)  |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
@@ -115717,58 +115862,24 @@ compatibility and mark it `active` instead.
 
 ## Current compatibility areas
 
-The registry currently tracks around 70 compatibility codes across these
-areas. New plugin code should use the replacement in each area and in the
-specific migration guide; existing plugins can keep using a compatibility
-path until docs, diagnostics, and release notes announce a removal window.
+The July 2026 sweep removed the expired root SDK, manifest, provider, runtime,
+registry-flag, and plugin-owned web-config aliases. Doctor migrations remain
+separately tracked so supported upgrade paths can still repair old config.
 
-- legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
-- legacy hook-only plugin shapes and `before_agent_start`
-- legacy `api.on("deactivate", ...)` cleanup hook names while plugins
-  migrate to `gateway_stop`
-- legacy `activate(api)` plugin entrypoints while plugins migrate to
-  `register(api)`
-- legacy SDK aliases such as `openclaw/extension-api`,
-  `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
-  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
-  `OpenClawSchemaType` type aliases
-- bundled plugin allowlist and enablement behavior
-- legacy provider/channel env-var manifest metadata
-- legacy provider plugin hooks and type aliases while providers move to
-  explicit catalog, auth, thinking, replay, and transport hooks
-- legacy runtime aliases such as `api.runtime.taskFlow`,
-  `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
-  `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
-- WhatsApp `WebInboundMessage` flat callback fields (see below)
-- WhatsApp `WebInboundMessage` top-level admission fields (see below)
-- legacy memory-plugin split registration while memory plugins move to
-  `registerMemoryCapability`
-- legacy memory-specific embedding provider registration while embedding
-  providers move to `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`
-- legacy channel SDK helpers for native message schemas, mention gating,
-  inbound envelope formatting, and approval capability nesting
-- legacy channel route key and comparable-target helper aliases while
-  plugins move to `openclaw/plugin-sdk/channel-route`
-- activation hints being replaced by manifest contribution ownership
-- `setup-api` runtime fallback while setup descriptors move to cold
-  `setup.requiresRuntime: false` metadata
-- provider `discovery` hooks while provider catalog hooks move to
-  `catalog.run(...)`
-- channel `showConfigured` / `showInSetup` metadata while channel packages
-  move to `openclaw.channel.exposure`
-- legacy runtime-policy config keys while doctor migrates operators to
-  `agentRuntime`
-- generated bundled channel config metadata fallback while registry-first
-  `channelConfigs` metadata lands
-- persisted plugin registry disable and install-migration env flags while
-  repair flows migrate operators to `openclaw plugins registry --refresh`
-  and `openclaw doctor --fix`
-- legacy plugin-owned web search, web fetch, and x_search config paths
-  while doctor migrates them to `plugins.entries.<plugin>.config`
-- legacy `plugins.installs` authored config and bundled plugin load-path
-  aliases while install metadata moves into the state-managed plugin ledger
+The remaining dated compatibility areas are:
+
+- the August and September SDK subpath windows listed in the migration guide
+- `api.on("deactivate", ...)` and `api.on("subagent_spawning", ...)` hook aliases
+- memory-specific embedding registration and the beta.5 session-store bridge
+- WhatsApp inbound callback aliases described below
+- explicit channel target parsing and `openclaw/plugin-sdk/messaging-targets`
+- embedded Pi agent aliases
+- the shipped agent-harness SDK aliases, whose removal is pending a new
+  externally documented migration decision
+
+Active, undated registry records cover supported behavior rather than removal
+debt, including activation hints, plugin capture, bundled plugin enablement,
+and the generated channel-config fallback.
 
 ### WhatsApp inbound callback flat aliases
 
@@ -116072,8 +116183,7 @@ plus a small set of env defaults inside `extensions/copilot/src/`:
 | `enableSessionTelemetry` | Optional SDK session telemetry flag.                                                                                                                                                                                                                                                            |
 
 OpenClaw plugin hooks need no Copilot-specific attempt configuration. The
-harness runs `before_prompt_build` (and the legacy `before_agent_start`
-compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+harness runs `before_prompt_build`, `llm_input`, `llm_output`, and `agent_end` through the
 standard harness helpers. Successful SDK compactions also run
 `before_compaction` and `after_compaction`. Bridged OpenClaw tools run
 `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
@@ -117817,7 +117927,6 @@ observation-only.
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
 | `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
-| `before_agent_start`            | Compatibility-only combined phase; prefer the two hooks above                            |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -117935,6 +118044,10 @@ provider payloads, start the Gateway with `--raw-stream` and
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.requester`, the host-derived requester that initiated the current
+  message run. It can include `channel`, `accountId`, `senderId`,
+  `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
+  not false assurances; fail closed when policy requires them.
 
 It can return:
 
@@ -117973,6 +118086,131 @@ Guard behavior for typed lifecycle hooks:
   requested approval.
 - `onResolution` receives the resolved decision: `allow-once`, `allow-always`,
   `deny`, `timeout`, or `cancelled`.
+
+### Sender-aware policy in one file
+
+A standalone plugin file can keep deployment-specific policy in code instead
+of adding another configuration schema. This example gives owners every tool,
+lets configured maintainers use a conservative tool and message-action set,
+and exposes `/fix` to senders already authorized by the channel configuration:
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const AGENT_ID = "maintenance-agent";
+const MAINTAINER_SCOPES = [
+  {
+    channel: "discord",
+    accountId: "operations",
+    senderIds: new Set(["maintainer-user-id"]),
+    roleIds: new Set(["maintainer-role-id"]),
+  },
+];
+const MAINTAINER_TOOLS = new Set(["read", "web_fetch", "web_search", "session_status", "message"]);
+const MAINTAINER_MESSAGE_ACTIONS = new Set(["react", "reply", "thread-create", "thread-reply"]);
+
+export default definePluginEntry({
+  id: "maintenance-access",
+  name: "Maintenance access",
+  description: "Apply sender-aware tool policy to the maintenance agent.",
+  register(api) {
+    api.on("before_tool_call", (event, ctx) => {
+      if (ctx.agentId !== AGENT_ID) {
+        return;
+      }
+
+      const requester = ctx.requester;
+      if (requester?.senderIsOwner === true) {
+        return;
+      }
+
+      const maintainerScope = requester
+        ? MAINTAINER_SCOPES.find(
+            (scope) =>
+              scope.channel === requester.channel && scope.accountId === requester.accountId,
+          )
+        : undefined;
+      const isMaintainer =
+        maintainerScope !== undefined &&
+        ((requester?.senderId !== undefined && maintainerScope.senderIds.has(requester.senderId)) ||
+          requester?.roleIds?.some((roleId) => maintainerScope.roleIds.has(roleId)) === true);
+      if (!isMaintainer) {
+        return { block: true, blockReason: "Maintainer access required." };
+      }
+
+      if (event.toolName === "message") {
+        const action = typeof event.params.action === "string" ? event.params.action : "";
+        if (MAINTAINER_MESSAGE_ACTIONS.has(action)) {
+          return;
+        }
+        return { block: true, blockReason: `Owner required for message.${action || "unknown"}.` };
+      }
+
+      if (MAINTAINER_TOOLS.has(event.toolName)) {
+        return;
+      }
+      return { block: true, blockReason: `Owner required for ${event.toolName}.` };
+    });
+
+    api.registerCommand({
+      name: "fix",
+      description: "Ask the maintenance agent to investigate and fix an issue.",
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: async (ctx) =>
+        ctx.agentId === AGENT_ID
+          ? { continueAgent: true }
+          : { text: "This command is only available in the maintenance conversation." },
+    });
+  },
+});
+```
+
+Load the file directly and restart the Gateway:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "maintenance-agent",
+        workspace: "~/.openclaw/workspace-maintenance",
+      },
+    ],
+  },
+  bindings: [
+    {
+      agentId: "maintenance-agent",
+      match: {
+        channel: "discord",
+        accountId: "operations",
+        peer: { kind: "channel", id: "maintenance-channel-id" },
+      },
+    },
+  ],
+  plugins: {
+    load: { paths: ["~/.openclaw/policies/maintenance-access.ts"] },
+  },
+}
+```
+
+`AGENT_ID` must name the agent bound to the maintenance conversation. The
+binding selects that agent for normal messages and `/fix`; the standalone file
+remains the single owner of owner-versus-maintainer tool policy.
+
+`requireAuth: true` reuses each channel's existing sender admission. For
+Discord, a guild or channel `users`/`roles` allowlist can authorize the
+maintenance audience. Other channels can use stable sender ids. The hook then
+applies the finer per-tool decision on every tool call in the run, including
+Codex native `PreToolUse` calls. It can veto a tool the model sees, but cannot
+add a tool omitted by the host. Existing sandbox, exec approval, owner-only
+core-tool, and channel policies still apply; the hook cannot grant past them.
+
+Scope sender and role ids to an exact channel/account pair as shown; both are
+provider-local namespaces. Keep the allowlists conservative. Add write or
+execution tools only when the deployment's sandbox and approval policy make
+that safe. For automated or system runs, decide explicitly whether an absent
+`ctx.requester` should pass; the example denies it for the scoped agent.
 
 See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
@@ -118045,9 +118283,6 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-`before_agent_start` remains for compatibility. Prefer the explicit hooks
-above so the plugin does not depend on a legacy combined phase.
-
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
 the current user input as `prompt`, plus loaded session history in `messages`
@@ -118064,7 +118299,7 @@ excluded from transcript, history, broadcast, log, and diagnostics payloads.
 Observability should use sanitized fields such as blocker id, outcome,
 timestamp, or a safe category.
 
-`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+Agent-turn hooks including `agent_end` include `event.runId` when OpenClaw can
 identify the active run; the same value is also on `ctx.runId`. Cron-driven
 runs also expose `ctx.jobId` (the originating cron job id) on the agent-turn
 context so hooks can scope metrics, side effects, or state to a specific
@@ -118494,9 +118729,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`before_agent_start`** remains for compatibility. New plugins should use
-  `before_model_resolve` and `before_prompt_build` instead of the combined
-  phase.
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters
@@ -119455,9 +119687,6 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
   "providerAuthAliases": {
     "openrouter-coding": "openrouter"
   },
-  "channelEnvVars": {
-    "openrouter-chatops": ["OPENROUTER_CHATOPS_TOKEN"]
-  },
   "providerAuthChoices": [
     {
       "provider": "openrouter",
@@ -119518,10 +119747,8 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `syntheticAuthRefs`                  | No       | `string[]`                   | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                                                     |
 | `nonSecretAuthMarkers`               | No       | `string[]`                   | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                                                       |
 | `commandAliases`                     | No       | `object[]`                   | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                                                                       |
-| `providerAuthEnvVars`                | No       | `Record<string, string[]>`   | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                                                                        |
 | `providerUsageAuthEnvVars`           | No       | `Record<string, string[]>`   | Usage/billing-only provider credentials. OpenClaw uses these names for usage discovery and secret scrubbing but never for inference auth.                                                                                                                                  |
 | `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                                                 |
-| `channelEnvVars`                     | No       | `Record<string, string[]>`   | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                                                                   |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                                              |
 | `activation`                         | No       | `object`                     | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                                              |
 | `setup`                              | No       | `object`                     | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                                                           |
@@ -119856,7 +120083,7 @@ Top-level `cliBackends` stays valid and continues to describe CLI inference back
 
 When present, `setup.providers` and `setup.cliBackends` are the preferred descriptor-first lookup surface for setup discovery. If the descriptor only narrows the candidate plugin and setup still needs richer setup-time runtime hooks, set `requiresRuntime: true` and keep `setup-api` in place as the fallback execution path.
 
-OpenClaw also includes `setup.providers[].envVars` in generic provider auth and env-var lookups. `providerAuthEnvVars` remains supported through a compatibility adapter during the deprecation window, but non-bundled plugins that still use it receive a manifest diagnostic. New plugins should put setup/status env metadata on `setup.providers[].envVars`.
+OpenClaw includes `setup.providers[].envVars` in generic provider auth and env-var lookups. Put setup and status env metadata there.
 
 Use `providerUsageAuthEnvVars` when a billing or organization-level credential must activate `resolveUsageAuth` without becoming an inference credential. These names join workspace dotenv blocking, ACP child-process stripping, sandbox secret filtering, and broad secret scrubbing. The provider runtime still reads and classifies the value inside `resolveUsageAuth`.
 
@@ -120652,7 +120879,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
-- Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
+- Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
 
@@ -123991,6 +124218,14 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For media-only inbound events, keep the message body and command text empty and
+pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
+history line or another text-only carrier must describe those facts, use
+`formatMediaPlaceholderText(media)`. It classifies each fact from `kind`, MIME
+type, then path or URL extension; undownloaded native attachments should still
+contribute one type-only fact each. Do not use the formatter to synthesize the
+primary inbound body.
+
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
 importing this subpath directly:
@@ -124182,13 +124417,11 @@ title: "Channel message API"
 
 This page moved to [Channel outbound API](/plugins/sdk-channel-outbound).
 
-`openclaw/plugin-sdk/channel-message` and
-`openclaw/plugin-sdk/channel-message-runtime` remain deprecated compatibility
-subpaths for older plugins; both are thin aliases over the shared channel
-message core. New channel plugins should use
+`openclaw/plugin-sdk/channel-message` remains a deprecated compatibility
+subpath for older plugins. New channel plugins should use
 `openclaw/plugin-sdk/channel-outbound` for message lifecycle, receipt,
 durable send, and live preview helpers instead of adding new helpers to the
-deprecated subpaths.
+deprecated subpath.
 
 Removal plan: keep these aliases through the external plugin migration
 window, then remove them in the next major SDK cleanup after callers have
@@ -124204,7 +124437,7 @@ title: "Channel outbound API"
 read_when:
   - You are building or refactoring a messaging channel plugin send path
   - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
-  - You are migrating from channel-message, channel-message-runtime, or legacy reply dispatch helpers
+  - You are migrating from channel-message or legacy reply dispatch helpers
 ---
 
 Channel plugins expose outbound message behavior from
@@ -124316,6 +124549,10 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
+
+## Outbound echo suppression
+
+When a platform may redeliver the plugin's own outbound message as inbound, call `recordOutboundMessageIdentity(...)` with the channel, account, conversation, and a stable platform message or source identity. The shared inbound turn path drops matching identities for a bounded 30-second window before session recording or agent dispatch; a source identity may be reserved before send or refreshed when a channel route is removed to close delivery races. `isRecentOutboundMessageIdentity(...)` exposes the same query for channel diagnostics and tests. Do not maintain a parallel channel-local TTL cache for the same stable identity.
 
 ## Plain-text sanitization
 
@@ -124546,8 +124783,10 @@ dedupes `chat_id:message_id` because debounce merges can re-surface a message
 under a fresh `update_id`), or a longer window than the channel's tombstone
 retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
-to cover the old guard window instead. Non-dedupe protections (age fences,
-outbound echo caches) are unrelated to this rule and stay.
+to cover the old guard window instead. Non-dedupe protections such as age
+fences are unrelated to this rule. Stable outbound message IDs use the shared
+outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
+channel-local TTL cache.
 
 #### Transport classes and retention
 
@@ -124908,10 +125147,9 @@ adapter/wizard fail closed on config writes and finalization, and they reuse
 the same install-required message across validation, finalize, and docs-link
 copy.
 
-If your channel supports env-driven setup or auth and generic startup/config
-flows should know those env names before runtime loads, declare them in the
-plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
-constants for operator-facing copy only.
+If your channel supports env-driven setup or auth, expose it through the
+channel config schema and setup descriptors. Keep channel runtime `envVars` or
+local constants for operator-facing copy only.
 
 If your channel can appear in `status`, `channels list`, `channels status`, or
 SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
@@ -124942,9 +125180,8 @@ surfaces:
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` for media loading and
-  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
-  and payload planning
+- `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and typed payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve
   an explicit `replyToId`/`threadId` or recover the current `:thread:`
@@ -124953,12 +125190,6 @@ surfaces:
   their platform has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
-- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
-  payload field layout is still required
-- `openclaw/plugin-sdk/telegram-command-config` (deprecated: no bundled
-  plugin uses it in production) for Telegram custom-command normalization,
-  duplicate/conflict validation, and a fallback-stable command config
-  contract; prefer plugin-local command config handling for new plugin code
 
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
@@ -125929,31 +126160,32 @@ change, this guide gets it onto the current contracts.
 
 ## What changed
 
-Two wide-open import surfaces used to let plugins reach almost anything from a
-single entry point:
+Several wide-open import surfaces used to let plugins reach almost anything
+from a single entry point:
 
-- **`openclaw/plugin-sdk/compat`** - re-exported dozens of helpers to keep
-  older hook-based plugins working while the new architecture was built.
+- **`openclaw/plugin-sdk`** and **`openclaw/plugin-sdk/compat`** - re-exported
+  dozens of helpers while the focused SDK was being built. Both roots are now
+  removed; import a documented subpath instead.
 - **`openclaw/plugin-sdk/infra-runtime`** - a broad barrel mixing system
   events, heartbeat state, delivery queues, fetch/proxy helpers, file helpers,
   approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** - a broad config barrel still
-  carrying deprecated direct load/write helpers during the migration window.
-- **`openclaw/extension-api`** - a bridge giving plugins direct access to
-  host-side helpers like the embedded agent runner.
+- **`openclaw/plugin-sdk/config-runtime`** - a broad config barrel retained
+  only for its later compatibility window; direct runtime load/write helpers
+  have been removed.
+- **`openclaw/extension-api`** - a removed bridge that gave plugins direct
+  access to host-side helpers like the embedded agent runner.
 - **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only
   hook that observed embedded-runner events such as `tool_result`. Use agent
   tool-result middleware instead (see [Migrate embedded tool-result extensions
   to middleware](#how-to-migrate)).
 
-These surfaces are **deprecated**: they still work, but new plugins must not
-use them, and existing plugins should migrate before the next major release
-removes them. `registerEmbeddedExtensionFactory` has already been removed;
-legacy registrations no longer load.
+The root SDK, compat barrel, extension bridge, and embedded extension factory
+have been removed. `infra-runtime` and `config-runtime` remain only for their
+separately recorded later windows; new plugins should use focused subpaths.
 
 <Warning>
-  The backwards-compatibility layer will be removed in a future major release.
-  Plugins still importing from these surfaces will break when that happens.
+  Plugins importing the removed root, compat, or extension surfaces no longer
+  load. Follow the mappings below before upgrading.
 </Warning>
 
 OpenClaw does not remove or reinterpret documented plugin behavior in the same
@@ -126050,10 +126282,9 @@ SDK.
     tests and logging; the gateway remains responsible for applying or
     scheduling the restart.
 
-    `loadConfig` and `writeConfigFile` remain as deprecated compatibility
-    helpers for external plugins and warn once with the
-    `runtime-config-load-write` compatibility code. Bundled plugins and repo
-    runtime code are guarded by `pnpm check:deprecated-api-usage` and
+    `loadConfig` and `writeConfigFile` have been removed from the plugin
+    runtime. Bundled plugins and repo runtime code are guarded by
+    `pnpm check:deprecated-api-usage` and
     `pnpm check:no-runtime-action-load-config`: new production plugin usage
     fails outright, direct config writes fail, gateway server methods must use
     the request runtime snapshot, runtime channel send/action/client helpers
@@ -126066,7 +126297,8 @@ SDK.
     | Need | Import |
     | --- | --- |
     | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
-    | Already-loaded config assertions, plugin-entry config lookup, and config merging | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Plugin-entry config lookup | `api.pluginConfig` |
+    | Config merging | Plugin-local logic at the config boundary |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
     | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
@@ -126285,181 +126517,11 @@ SDK.
 
 ## Import path reference
 
-<Accordion title="Common import path table">
-  | Import path | Purpose | Key exports |
-  | --- | --- | --- |
-  | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
-  | `plugin-sdk/core` | Legacy umbrella re-export for channel entry definitions/builders | `defineChannelPluginEntry`, `createChatChannelPlugin` |
-  | `plugin-sdk/config-schema` | Root config schema export | `OpenClawSchema` |
-  | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
-  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
-  | `plugin-sdk/setup` | Shared setup wizard helpers | Setup translator, allowlist prompts, setup status builders |
-  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | `createSetupTranslator`, import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-  | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
-  | `plugin-sdk/setup-tools` | Setup tooling helpers | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
-  | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
-  | `plugin-sdk/account-id` | Account-id helpers | `DEFAULT_ACCOUNT_ID`, account-id normalization |
-  | `plugin-sdk/account-resolution` | Account lookup helpers | Account lookup + default-fallback helpers |
-  | `plugin-sdk/account-helpers` | Narrow account helpers | Account list/account-action helpers |
-  | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
-  | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
-  | `plugin-sdk/channel-reply-pipeline` | Reply prefix, typing, and source-delivery wiring | `createChannelReplyPipeline`, `resolveChannelSourceReplyDeliveryMode` |
-  | `plugin-sdk/channel-config-helpers` | Config adapter factories and DM access helpers | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
-  | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
-  | `plugin-sdk/bundled-channel-config-schema` | Bundled config schemas | OpenClaw-maintained bundled plugins only; new plugins must define plugin-local schemas |
-  | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
-  | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
-  | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
-  | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
-  | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
-  | `plugin-sdk/channel-inbound` | Inbound receive helpers | Context building, formatting, roots, runners, prepared reply dispatch, and dispatch predicates |
-  | `plugin-sdk/messaging-targets` | Deprecated target parsing import path | Use `plugin-sdk/channel-targets` for generic target parsing helpers, `plugin-sdk/channel-route` for route comparison, and plugin-owned `messaging.targetResolver` / `messaging.resolveOutboundSessionRoute` for provider-specific target resolution |
-  | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
-  | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
-  | `plugin-sdk/channel-outbound` | Outbound message lifecycle helpers | Message adapters, receipts, durable send helpers, live preview/streaming helpers, reply options, lifecycle helpers, outbound identity, and payload planning |
-  | `plugin-sdk/channel-streaming` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
-  | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
-  | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
-  | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
-  | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
-  | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
-  | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
-  | `plugin-sdk/runtime` | Broad runtime helpers | Runtime/logging/backup/plugin-install helpers |
-  | `plugin-sdk/runtime-env` | Narrow runtime env helpers | Logger/runtime env, timeout, retry, and backoff helpers |
-  | `plugin-sdk/plugin-runtime` | Shared plugin runtime helpers | Plugin commands/hooks/http/interactive helpers |
-  | `plugin-sdk/hook-runtime` | Hook pipeline helpers | Shared webhook/internal hook pipeline helpers |
-  | `plugin-sdk/lazy-runtime` | Lazy runtime helpers | `createLazyRuntimeModule`, `createLazyRuntimeMethod`, `createLazyRuntimeMethodBinder`, `createLazyRuntimeNamedExport`, `createLazyRuntimeSurface` |
-  | `plugin-sdk/process-runtime` | Process helpers | Shared exec helpers |
-  | `plugin-sdk/cli-runtime` | CLI runtime helpers | Command formatting, waits, version helpers |
-  | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client, event-loop-ready start helper, advertised LAN host resolution, and channel-status patch helpers |
-  | `plugin-sdk/config-runtime` | Deprecated config compatibility shim | Prefer `config-contracts`, `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation` |
-  | `plugin-sdk/telegram-command-config` | Telegram command helpers | Fallback-stable Telegram command validation helpers when the bundled Telegram contract surface is unavailable |
-  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers, and structured approval display path formatting |
-  | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
-  | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
-  | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
-  | `plugin-sdk/approval-gateway-runtime` | Approval gateway helpers | Shared approval gateway resolver |
-  | `plugin-sdk/approval-reference-runtime` | Approval transport references | Deterministic durable-locator helper for transport-limited callbacks |
-  | `plugin-sdk/approval-handler-adapter-runtime` | Approval adapter helpers | Lightweight native approval adapter loading helpers for hot channel entrypoints |
-  | `plugin-sdk/approval-handler-runtime` | Approval handler helpers | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-  | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
-  | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
-  | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
-  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
-  | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
-  | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
-  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent` (including keyed replacement), `peekSystemEventEntries` |
-  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
-  | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
-  | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
-  | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory and persistent-backed dedupe caches |
-  | `plugin-sdk/file-access-runtime` | File access helpers | Safe local-file/media path helpers |
-  | `plugin-sdk/transport-ready-runtime` | Transport readiness helpers | `waitForTransportReady` |
-  | `plugin-sdk/exec-approvals-runtime` | Exec approval policy helpers | `loadExecApprovals`, `resolveExecApprovalsFromFile`, `ExecApprovalsFile` |
-  | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
-  | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
-  | `plugin-sdk/error-runtime` | Error helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers, `PlatformMessageNotDispatchedError` |
-  | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers, EnvHttpProxyAgent option helpers |
-  | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
-  | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
-  | `plugin-sdk/allow-from` | Allowlist formatting and input mapping | `formatAllowFromLowercase`, `mapAllowlistResolutionInputs` |
-  | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers including dynamic argument menu formatting |
-  | `plugin-sdk/command-status` | Command status/help renderers | `buildCommandsMessage`, `buildCommandsMessagePaginated`, `buildHelpMessage` |
-  | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
-  | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
-  | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
-  | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
-  | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize, provider dispatch, and conversation-label helpers |
-  | `plugin-sdk/reply-history` | Reply-history helpers | `createChannelHistoryWindow`; deprecated map-helper compatibility exports such as `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
-  | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
-  | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
-  | `plugin-sdk/session-store-runtime` | Session store helpers | Scoped session row helpers, store path helpers, and updated-at reads |
-  | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
-  | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
-  | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
-  | `plugin-sdk/target-resolver-runtime` | Target resolver helpers | Shared target resolver helpers |
-  | `plugin-sdk/string-normalization-runtime` | String normalization helpers | Slug/string normalization helpers |
-  | `plugin-sdk/request-url` | Request URL helpers | Extract string URLs from request-like inputs |
-  | `plugin-sdk/run-command` | Timed command helpers | Timed command runner with normalized stdout/stderr |
-  | `plugin-sdk/param-readers` | Param readers | Common tool/CLI param readers |
-  | `plugin-sdk/tool-payload` | Tool payload extraction | Extract normalized payloads from tool result objects |
-  | `plugin-sdk/tool-send` | Tool send extraction | Extract canonical send target fields from tool args |
-  | `plugin-sdk/temp-path` | Temp path helpers | Shared temp-download path helpers |
-  | `plugin-sdk/logging-core` | Logging helpers | Subsystem logger and redaction helpers |
-  | `plugin-sdk/markdown-table-runtime` | Markdown-table helpers | Markdown table mode helpers |
-  | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
-  | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers | Self-hosted provider discovery/config helpers |
-  | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers | Same self-hosted provider discovery/config helpers |
-  | `plugin-sdk/provider-auth-runtime` | Provider runtime auth helpers | Runtime API-key resolution helpers |
-  | `plugin-sdk/provider-auth-api-key` | Provider API-key setup helpers | API-key onboarding/profile-write helpers |
-  | `plugin-sdk/provider-auth-result` | Provider auth-result helpers | Standard OAuth auth-result builder |
-  | `plugin-sdk/provider-selection-runtime` | Provider selection helpers | Configured-or-auto provider selection and raw provider config merging |
-  | `plugin-sdk/provider-env-vars` | Provider env-var helpers | Provider auth env-var lookup helpers |
-  | `plugin-sdk/provider-model-shared` | Shared provider model/replay helpers | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers |
-  | `plugin-sdk/provider-catalog-shared` | Shared provider catalog helpers | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-  | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
-  | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers, including audio transcription multipart form helpers |
-  | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
-  | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
-  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
-  | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
-  | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
-  | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |
-  | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
-  | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, and writable transport event streams |
-  | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
-  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
-  | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
-  | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
-  | `plugin-sdk/text-runtime` | Deprecated broad text compatibility export | Use `string-coerce-runtime`, `text-chunking`, `text-utility-runtime`, and `logging-core` |
-  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
-  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
-  | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
-  | `plugin-sdk/speech-settings` | Speech settings | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
-  | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, the transport-independent session harness, audio-energy/speech-onset gates, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
-  | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
-  | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
-  | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
-  | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |
-  | `plugin-sdk/video-generation` | Video-generation helpers | Video-generation provider/request/result types |
-  | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
-  | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
-  | `plugin-sdk/channel-config-primitives` | Channel config primitives | Narrow channel config-schema primitives |
-  | `plugin-sdk/channel-config-writes` | Channel config-write helpers | Channel config-write authorization helpers |
-  | `plugin-sdk/channel-plugin-common` | Shared channel prelude | Shared channel plugin prelude exports |
-  | `plugin-sdk/channel-status` | Channel status helpers | Shared channel status snapshot/summary helpers |
-  | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
-  | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
-  | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades | Use `plugin-sdk/channel-inbound` |
-  | `plugin-sdk/direct-dm-guard-policy` | Direct-DM guard helpers | Narrow pre-crypto guard policy helpers |
-  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
-  | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
-  | `plugin-sdk/webhook-path` | Deprecated webhook path alias | Use `plugin-sdk/webhook-ingress` |
-  | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
-  | `plugin-sdk/zod` | Deprecated Zod compatibility re-export | Import `zod` from `zod` directly |
-  | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
-  | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
-  | `plugin-sdk/memory-core-host-embedding-registry` | Memory embedding registry | Lightweight memory embedding provider registry helpers |
-  | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
-  | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
-  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
-  | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine | Memory host storage engine exports |
-  | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
-  | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
-  | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers | Memory host secret helpers |
-  | `plugin-sdk/memory-core-host-events` | Deprecated memory event alias | Use `plugin-sdk/memory-host-events` |
-  | `plugin-sdk/memory-core-host-status` | Memory host status helpers | Memory host status helpers |
-  | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime | Memory host CLI runtime helpers |
-  | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime | Memory host core runtime helpers |
-  | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers | Memory host file/runtime helpers |
-  | `plugin-sdk/memory-host-core` | Memory host core runtime alias | Vendor-neutral alias for memory host core runtime helpers |
-  | `plugin-sdk/memory-host-events` | Memory host event journal alias | Vendor-neutral alias for memory host event journal helpers |
-  | `plugin-sdk/memory-host-files` | Deprecated memory file/runtime alias | Use `plugin-sdk/memory-core-host-runtime-files` |
-  | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
-  | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
-  | `plugin-sdk/memory-host-status` | Deprecated memory host status alias | Use `plugin-sdk/memory-core-host-status` |
-</Accordion>
+The public package export map is the source of truth for importable SDK
+subpaths. Use the topical SDK guides linked from [SDK overview](/plugins/sdk-overview)
+and prefer the narrowest documented public subpath. The compiler inventory in
+`scripts/lib/plugin-sdk-entrypoints.json` also contains private-local entries used
+to build bundled plugins; their presence there does not make them public package exports.
 
 This table is the common migration subset, not the full SDK surface. The
 compiler entrypoint inventory lives in `scripts/lib/plugin-sdk-entrypoints.json`;
@@ -126471,13 +126533,31 @@ deprecated `plugin-sdk/discord` shim retained for external plugins that still
 import the published `@openclaw/discord` package directly. Owner-specific
 helpers live inside the owning plugin package; shared host behavior moves
 through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
-`plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+`plugin-sdk/security-runtime`, and the injected plugin API.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
 
 ## Removed compatibility surfaces
+
+The July 2026 sweep removed the root SDK and compat barrels, the extension API
+bridge, the expired SDK subpath aliases, unused SDK subpaths, and the public
+exports for bundled-only SDK modules. Bundled-only modules remain available to
+their repository owners through private-local build mappings; they are not
+importable from the published package.
+
+### Process-global API-provider publication
+
+`registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
+`openclaw/plugin-sdk/llm`. They published API transports into process-global
+state, which lifecycle-owned model runtimes then had to copy into each prepared
+registry.
+
+Provider plugins should register text-inference providers through
+`api.registerProvider(...)`. Host-owned code and tests that construct an
+`ApiRegistry` should register directly on that registry so provider ownership
+and teardown stay scoped to the prepared runtime.
 
 ### Private testing barrel
 
@@ -126487,20 +126567,21 @@ tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
 `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
 `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
-## Active deprecations
+## Migration reference
 
-Narrower deprecations across the plugin SDK, provider contract, runtime
-surface, and manifest. Each still works today but will be removed in a future
-major release. Every entry maps the old API to its canonical replacement.
+These mappings cover both removed July 2026 surfaces and later-window active
+deprecations. A mapping is migration guidance, not evidence that the old
+surface remains available; consult the compatibility registry and removal
+timeline for current status.
 
 <AccordionGroup>
   <Accordion title="command-auth help builders -> command-status">
     **Old (`openclaw/plugin-sdk/command-auth`)**: `buildCommandsMessage`,
     `buildCommandsMessagePaginated`, `buildHelpMessage`.
 
-    **New (`openclaw/plugin-sdk/command-status`)**: same signatures, same
-    exports - just imported from the narrower subpath. `command-auth`
-    re-exports them as compat stubs.
+    **New (`openclaw/plugin-sdk/command-status`)**: same signatures, imported
+    from the narrower subpath. The `command-auth` compatibility re-exports
+    have been removed.
 
     ```typescript
     // Before
@@ -126528,13 +126609,12 @@ major release. Every entry maps the old API to its canonical replacement.
   </Accordion>
 
   <Accordion title="Channel runtime shim and channel actions helpers">
-    `openclaw/plugin-sdk/channel-runtime` is a compatibility shim for older
-    channel plugins. Do not import it from new code; use
+    `openclaw/plugin-sdk/channel-runtime` has been removed. Use
     `openclaw/plugin-sdk/channel-runtime-context` for registering runtime
     objects.
 
-    `channelActions*` helpers in `openclaw/plugin-sdk/channel-actions` are
-    deprecated alongside raw "actions" channel exports. Expose capabilities
+    The native message schema helpers in `openclaw/plugin-sdk/channel-actions`
+    were removed alongside raw "actions" channel exports. Expose capabilities
     through the semantic `presentation` surface instead - channel plugins
     declare what they render (cards, buttons, selects) rather than which raw
     action names they accept.
@@ -126630,7 +126710,8 @@ major release. Every entry maps the old API to its canonical replacement.
     | `ProviderDiscoveryResult` | `ProviderCatalogResult`   |
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
-    Plus the legacy `ProviderCapabilities` static bag - provider plugins
+    The aliases and legacy `ProviderCapabilities` static bag have been
+    removed. Provider plugins
     should use explicit provider hooks such as `buildReplayPolicy`,
     `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
@@ -126651,8 +126732,7 @@ major release. Every entry maps the old API to its canonical replacement.
     catalog facts to expose a model-specific profile only when the configured
     request contract supports it.
 
-    Implement one hook instead of three. The legacy hooks keep working during
-    the deprecation window but are not composed with the profile result.
+    Implement one hook instead of three. The legacy hooks have been removed.
 
   </Accordion>
 
@@ -126680,8 +126760,7 @@ major release. Every entry maps the old API to its canonical replacement.
     on the manifest. This consolidates setup/status env metadata in one place
     and avoids booting the plugin runtime just to answer env-var lookups.
 
-    `providerAuthEnvVars` remains supported through a compatibility adapter
-    until the deprecation window closes.
+    `providerAuthEnvVars` is no longer accepted.
 
   </Accordion>
 
@@ -126791,7 +126870,7 @@ major release. Every entry maps the old API to its canonical replacement.
     const flow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
     ```
 
-    Removed after 2026-07-26.
+    The legacy aliases were removed in July 2026.
 
   </Accordion>
 
@@ -126804,14 +126883,14 @@ major release. Every entry maps the old API to its canonical replacement.
   </Accordion>
 
   <Accordion title="OpenClawSchemaType alias -> OpenClawConfig">
-    `OpenClawSchemaType` re-exported from `openclaw/plugin-sdk` is now a
-    one-line alias for `OpenClawConfig`. Prefer the canonical name.
+    The `OpenClawSchemaType` root-SDK alias was removed. Use the canonical
+    `OpenClawConfig` name.
 
     ```typescript
     // Before
     import type { OpenClawSchemaType } from "openclaw/plugin-sdk";
     // After
-    import type { OpenClawConfig } from "openclaw/plugin-sdk/config-schema";
+    import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
     ```
 
   </Accordion>
@@ -126956,25 +127035,15 @@ apps own device capture/playback UX.
 | **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.    |
 | **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                          |
 
-The public SDK subpaths below have registry-backed removal or demotion windows.
-They do not currently emit a runtime warning when an external plugin imports
-them. The repository deprecated-usage guard applies only to the fully unused
-θ1 tier and the earlier compatibility tier; θ2 remains available to bundled
-plugins during the window.
+The remaining public SDK subpaths below have registry-backed removal windows.
+The July 30 rows were removed after their early maintainer-authorized sweep:
+unused subpaths were deleted, earlier compatibility aliases were deleted, and
+bundled-only modules were demoted to private-local build mappings.
 
-For the window introduced on 2026-07-15, θ1 has no known external or bundled
-consumers and will be deleted after the window. θ2 has bundled consumers but no
-known external consumers; only its public package export will be retired. Its
-module will remain available to bundled plugins as a private-local-only
-subpath.
-
-| `removeAfter` | Tier                                   | SDK subpaths                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-07-30`  | Earlier compatibility deprecations     | `agent-dir-compat`, `channel-envelope`, `channel-inbound-roots`, `channel-location`, `channel-message-runtime`, `channel-pairing-paths`, `channel-reply-options-runtime`, `config-schema`, `config-types`, `direct-dm`, `direct-dm-access`, `mattermost`, `media-generation-runtime-shared`, `memory-core`, `memory-core-engine-runtime`, `memory-core-host-events`, `memory-core-host-multimodal`, `memory-core-host-query`, `memory-host-files`, `memory-host-status`, `music-generation-core`, `outbound-runtime`, `outbound-send-deps`, `provider-auth-login`, `provider-zai-endpoint`, `reply-dedupe`, `runtime-logger`, `runtime-secret-resolution`, `self-hosted-provider-setup`, `setup-adapter-runtime`, `telegram-command-config`, `webhook-path`, `zalouser`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `2026-07-30`  | θ1: fully unused; remove subpath       | `command-gating`, `lmstudio`, `lmstudio-runtime`, `secret-provider-integration`, `skills-runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `2026-07-30`  | θ2: bundled-only; retire public export | `access-groups`, `account-resolution-runtime`, `acp-binding-resolve-runtime`, `acp-binding-runtime`, `acp-runtime`, `acp-runtime-backend`, `agent-core`, `agent-harness-exec-review-runtime`, `agent-harness-task-runtime`, `agent-harness-tool-runtime`, `agent-media-payload`, `agent-sessions`, `approval-reaction-runtime`, `approval-reference-runtime`, `async-lock-runtime`, `browser-config`, `bundled-channel-config-schema`, `channel-activity-runtime`, `channel-config-writes`, `channel-mention-gating`, `channel-route`, `channel-secret-tts-runtime`, `channel-targets`, `chat-channel-ids`, `cli-backend`, `cli-runtime`, `codex-mcp-projection`, `command-status-runtime`, `command-surface`, `concurrency-runtime`, `context-visibility-runtime`, `conversation-binding-runtime`, `cron-store-runtime`, `dangerous-name-runtime`, `delivery-queue-runtime`, `direct-dm-guard-policy`, `directory-config-runtime`, `document-extractor`, `embedding-providers`, `exec-approvals-runtime`, `expect-runtime`, `fetch-runtime`, `file-access-runtime`, `file-lock`, `global-singleton`, `group-activation`, `heartbeat-runtime`, `host-runtime`, `html-entity-runtime`, `image-generation`, `image-generation-core`, `image-generation-runtime`, `inline-image-data-url-runtime`, `json-schema-runtime`, `json-unsafe-integers`, `keyed-async-queue`, `llm`, `markdown-table-runtime`, `media-generation-runtime`, `media-understanding`, `memory-core-host-embedding-registry`, `memory-core-host-engine-embeddings`, `memory-core-host-engine-qmd`, `memory-core-host-engine-storage`, `memory-core-host-runtime-cli`, `memory-core-host-runtime-core`, `memory-core-host-runtime-files`, `memory-core-host-secret`, `memory-core-host-status`, `memory-host-core`, `memory-host-events`, `memory-host-markdown`, `memory-host-search`, `message-tool-delivery-hints`, `migration`, `migration-runtime`, `music-generation`, `node-host`, `number-runtime`, `outbound-media`, `pair-loop-guard-runtime`, `plugin-config-runtime`, `plugin-state-runtime`, `poll-runtime`, `process-runtime`, `provider-auth-api-key`, `provider-auth-login-flow-runtime`, `provider-auth-result`, `provider-auth-runtime`, `provider-catalog-live-runtime`, `provider-catalog-shared`, `provider-entry`, `provider-env-vars`, `provider-http`, `provider-model-shared`, `provider-model-types`, `provider-oauth-runtime`, `provider-onboard`, `provider-selection-runtime`, `provider-setup`, `provider-stream`, `provider-stream-family`, `provider-stream-shared`, `provider-tools`, `provider-transport-runtime`, `provider-usage`, `provider-web-fetch`, `provider-web-fetch-contract`, `provider-web-search`, `provider-web-search-config-contract`, `provider-web-search-contract`, `qa-runner-runtime`, `realtime-bootstrap-context`, `realtime-transcription`, `realtime-voice`, `reply-reference`, `request-url`, `response-limit-runtime`, `retry-runtime`, `runtime-doctor`, `runtime-fetch`, `sandbox`, `secret-file-runtime`, `secure-random-runtime`, `session-binding-runtime`, `session-catalog`, `session-key-runtime`, `session-transcript-hit`, `session-transcript-runtime`, `session-visibility`, `simple-completion-runtime`, `speech`, `speech-core`, `sqlite-runtime`, `ssrf-dispatcher`, `string-normalization-runtime`, `system-event-runtime`, `talk-config-runtime`, `target-resolver-runtime`, `text-autolink-runtime`, `text-utility-runtime`, `thread-bindings-runtime`, `thread-bindings-session-runtime`, `time-runtime`, `tool-payload`, `tool-plugin`, `tool-results`, `transcripts`, `transport-ready-runtime`, `tts-runtime`, `types`, `video-generation`, `video-generation-core`, `video-generation-runtime`, `web-content-extractor`, `webhook-targets`, `windows-spawn` |
-| `2026-08-15`  | Earlier compatibility deprecations     | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `2026-09-01`  | Earlier compatibility deprecations     | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `removeAfter` | Tier                               | SDK subpaths                                                                                                                                                           |
+| ------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-08-15`  | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod` |
+| `2026-09-01`  | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                    |
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which
@@ -127045,9 +127114,8 @@ For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
 subpath is for shared schema primitives and the generic builder. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
-bundled-channel schemas. Deprecated compatibility exports remain on
-`plugin-sdk/channel-config-schema-legacy`; neither bundled schema subpath is a
-pattern for new plugins.
+bundled-channel schemas. That bundled schema subpath is not a pattern for new
+plugins.
 
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
@@ -127089,6 +127157,13 @@ deprecated re-export barrels are tracked in
 
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
@@ -127442,8 +127517,7 @@ The contracts intentionally split authority:
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
-  prompt fields from legacy `before_agent_start`, and
-  `enqueueNextTurnInjection`.
+  and `enqueueNextTurnInjection`.
 
 Examples of non-Plan consumers:
 
@@ -127600,9 +127674,6 @@ For an end-to-end authoring guide, see
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
 | `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 
@@ -127610,13 +127681,12 @@ For an end-to-end authoring guide, see
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
-- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
-- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+  for host-managed exports. Companion plugins that enumerate those declared
+  artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
+  `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
+  API exists; they must not reach into another plugin's private layout.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
@@ -128922,11 +128992,10 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
-<Warning>
-`api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated. They warn once per plugin at runtime and remain available only for old external plugins during the migration window. Bundled plugins must not use them: an internal config boundary guard fails the build if plugin code calls them or imports those helpers from plugin SDK subpaths. Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or `replaceConfigFile(...)` instead.
-</Warning>
+Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
+`replaceConfigFile(...)` for runtime config access and writes.
 
-For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `plugin-config-runtime` for already-loaded config assertions, plugin entry lookup, and canonical config merging, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
+For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
 
 Internal OpenClaw runtime code follows the same direction: load config once at the CLI, gateway, or process boundary, then pass that value through. Successful mutation writes refresh the process runtime snapshot and advance its internal revision; long-lived caches should key off the runtime-owned cache key instead of serializing config locally. Long-lived runtime modules have a zero-tolerance scanner for ambient `loadConfig()` calls; use a passed `cfg`, a request `context.getRuntimeConfig()`, or `getRuntimeConfig()` at an explicit process boundary.
 
@@ -129288,7 +129357,6 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     - `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
     - `api.runtime.tasks.flows` and `api.runtime.tasks.runs` are read-only DTO views for listing and status lookups; both expose `bindSession(...)` / `fromToolContext(...)` plus `get`, `list`, `findLatest`, and `resolve`.
-    - `api.runtime.tasks.flow` is a deprecated alias for `managedFlows`.
 
     Task Flow tracks durable multi-step workflow state. It is not a scheduler:
     use Cron or `api.session.workflow.scheduleSessionTurn(...)` for future
@@ -129411,10 +129479,6 @@ two-party event loops that do not go through the shared inbound reply runner.
     Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
 
     `describeImageFileWithModel(...)` describes an already-known image through a specific provider/model, bypassing the default active-model resolution that `describeImageFile(...)` uses.
-
-    <Info>
-    `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias for `api.runtime.mediaUnderstanding.transcribeAudioFile(...)`.
-    </Info>
 
   </Accordion>
   <Accordion title="api.runtime.imageGeneration">
@@ -129715,7 +129779,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     - `implicitMentionKindWhen`
     - `resolveInboundMentionDecision`
 
-    `api.runtime.channel.mentions` intentionally does not expose the older `resolveMentionGating*` compatibility helpers. Prefer the normalized `{ facts, policy }` path.
+    Use the normalized `{ facts, policy }` path for mention decisions.
 
     Several fields under `reply`, `session`, and `inbound` carry per-field `@deprecated` notes pointing at the current channel-turn kernel or channel-outbound adapters; check the inline JSDoc on the specific helper before building new code on it.
 
@@ -129971,10 +130035,6 @@ Example:
 - `setup`: include the channel in interactive setup/configure pickers
 - `docs`: mark the channel as public-facing in docs/navigation surfaces
 
-<Note>
-`showConfigured` and `showInSetup` remain supported as legacy aliases. Prefer `exposure`.
-</Note>
-
 ### `openclaw.install`
 
 `openclaw.install` is package metadata, not manifest metadata.
@@ -130149,11 +130209,10 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
 
 For hot setup-only paths, prefer the narrow setup helper seams over the broader `plugin-sdk/setup` umbrella when you only need part of the setup surface:
 
-| Import path                        | Use it for                                                                                | Key exports                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/setup-runtime`         | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-| `plugin-sdk/setup-adapter-runtime` | deprecated compatibility alias; use `plugin-sdk/setup-runtime`                            | `createEnvPatchedAccountSetupAdapter`                                                                                                                                                                                                                                                                                 |
-| `plugin-sdk/setup-tools`           | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
+| Import path                | Use it for                                                                                | Key exports                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+| `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
 
 Use the broader `plugin-sdk/setup` seam when you want the full shared setup toolbox, including config-patch helpers such as `moveSingleAccountChannelSectionToDefaultAccount(...)`.
 
@@ -130376,9 +130435,9 @@ read_when:
 title: "Plugin SDK subpaths"
 ---
 
-The plugin SDK is exposed as a set of narrow public subpaths under
-`openclaw/plugin-sdk/`. This page catalogs the commonly used subpaths grouped by
-purpose. Three files define the surface:
+The plugin SDK contains narrow public subpaths and repository-only bundled
+helpers under `openclaw/plugin-sdk/`. This page catalogs both and labels
+private-local entries explicitly. Three files define the boundary:
 
 - `scripts/lib/plugin-sdk-entrypoints.json`: the maintained entrypoint inventory
   the build compiles.
@@ -130401,23 +130460,20 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                                                                                     |
 | `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`, `resolveTailscalePublishedHost` |
-| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                                                       |
-| `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                                                  |
-| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `resolvePlannedMigrationTargets`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                             |
+| `plugin-sdk/provider-entry`    | Private-local after July 2026; `defineSingleProviderPluginEntry`                                                                                                                                        |
+| `plugin-sdk/migration`         | Private-local after July 2026; Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                   |
+| `plugin-sdk/migration-runtime` | Private-local after July 2026; Runtime migration helpers such as `copyMigrationFileItem`, `resolvePlannedMigrationTargets`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`              |
 | `plugin-sdk/health`            | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
-| `plugin-sdk/config-schema`     | Deprecated. Root `openclaw.json` Zod schema (`OpenClawSchema`); define plugin-local schemas instead and validate with `plugin-sdk/json-schema-runtime`                                                  |
 
-### Deprecated compatibility and test helpers
+### Compatibility and private-local helpers
 
-Deprecated subpaths stay exported for older plugins, but new code should use the
-focused SDK subpaths below. The maintained list is
+Only the later-window deprecated subpaths remain exported. July 2026 aliases and
+unused subpaths were deleted, while bundled-only helpers were removed from the
+public package and are labeled private-local below. The maintained list is
 `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; CI rejects bundled
-production imports from it. Broad barrels such as `plugin-sdk/compat`,
-`plugin-sdk/config-types`, `plugin-sdk/infra-runtime`, and
 `plugin-sdk/text-runtime` are compatibility only, and `plugin-sdk/zod` is a
 compatibility re-export: import `zod` directly from `zod`. The broad domain
 barrels `plugin-sdk/agent-runtime`, `plugin-sdk/channel-lifecycle`,
-`plugin-sdk/channel-runtime`, `plugin-sdk/cli-runtime`,
 `plugin-sdk/conversation-runtime`, `plugin-sdk/hook-runtime`,
 `plugin-sdk/media-runtime`, `plugin-sdk/plugin-runtime`, and
 `plugin-sdk/security-runtime` are likewise deprecated in favor of focused
@@ -130434,22 +130490,11 @@ longer package exports: `agent-runtime-test-contracts`,
 `ssrf-runtime-internal` and `codex-native-task-runtime` are also repo-local
 only.
 
-### Reserved bundled plugin helper subpaths
+### Bundled plugin helper subpaths
 
-`plugin-sdk/codex-mcp-projection` is the only reserved subpath: a plugin-owned
-compatibility surface for the bundled Codex plugin, not a general SDK API.
-Cross-owner plugin imports are blocked by package contract guardrails, and
-CI fails when a reserved subpath stops being imported.
-`plugin-sdk/codex-native-task-runtime` is repo-local only and is not a package
-export.
-
-`src/plugin-sdk/entrypoints.ts` also tracks supported bundled facades, SDK
+Bundled-only helper modules are private-local after the July 2026 sweep. Cross-owner imports are blocked by package contract guardrails. `src/plugin-sdk/entrypoints.ts` separately tracks the supported bundled facades that remain public, SDK
 entrypoints backed by their bundled plugin until generic contracts replace
-them: `plugin-sdk/discord`, `plugin-sdk/lmstudio`, `plugin-sdk/lmstudio-runtime`,
-`plugin-sdk/matrix`, `plugin-sdk/mattermost`,
-`plugin-sdk/memory-core-engine-runtime`, `plugin-sdk/provider-zai-endpoint`,
 `plugin-sdk/qa-runner-runtime`, `plugin-sdk/telegram-account`,
-`plugin-sdk/tts-runtime`, and `plugin-sdk/zalouser`. Several of these are also
 deprecated for new code; see the per-row notes below.
 
 <AccordionGroup>
@@ -130457,113 +130502,95 @@ deprecated for new code; see the per-row notes below.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
-    | `plugin-sdk/json-schema-runtime` | Cached JSON Schema validation helper for plugin-owned schemas |
+    | `plugin-sdk/json-schema-runtime` | Private-local after July 2026; Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-    | `plugin-sdk/setup-adapter-runtime` | Deprecated compatibility alias; use `plugin-sdk/setup-runtime` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
     | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
     | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
-    | `plugin-sdk/access-groups` | Access-group allowlist parsing and redacted group diagnostics helpers |
+    | `plugin-sdk/access-groups` | Private-local after July 2026; Access-group allowlist parsing and redacted group diagnostics helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
     | `plugin-sdk/channel-config-schema` | Shared channel config schema primitives plus Zod and direct JSON/TypeBox builders |
-    | `plugin-sdk/bundled-channel-config-schema` | Bundled OpenClaw channel config schemas for maintained bundled plugins only |
-    | `plugin-sdk/chat-channel-ids` | `BUNDLED_CHAT_CHANNEL_IDS`, `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES`, `ChatChannelId`. Canonical bundled/official chat channel ids plus formatter labels/aliases for plugins that need to recognize envelope-prefixed text without hardcoding their own table. |
-    | `plugin-sdk/channel-config-schema-legacy` | Deprecated compatibility alias for bundled-channel config schemas |
-    | `plugin-sdk/telegram-command-config` | Deprecated Telegram command-name/description normalization and duplicate/conflict checks; use plugin-local command config handling in new plugin code |
-    | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
+    | `plugin-sdk/bundled-channel-config-schema` | Private-local after July 2026; Bundled OpenClaw channel config schemas for maintained bundled plugins only |
+    | `plugin-sdk/chat-channel-ids` | Private-local after July 2026; `BUNDLED_CHAT_CHANNEL_IDS`, `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES`, `ChatChannelId`. Canonical bundled/official chat channel ids plus formatter labels/aliases for plugins that need to recognize envelope-prefixed text without hardcoding their own table. |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver, implicit-mention policy resolver, and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
     | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus reply pipeline options, receipts, live preview/streaming, lifecycle helpers, outbound identity, payload planning, durable sends, and message-send context helpers. See [Channel outbound API](/plugins/sdk-channel-outbound). |
     | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
-    | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
-    | `plugin-sdk/outbound-media` | Shared outbound media loading and hosted-media state helpers |
-    | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
-    | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
-    | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
-    | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
-    | `plugin-sdk/agent-media-payload` | Agent media payload roots and loaders |
+    | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
+    | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
+    | `plugin-sdk/thread-bindings-runtime` | Private-local after July 2026; Thread-binding lifecycle and adapter helpers |
+    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for agent media payload roots and loaders. New channel plugins use typed outbound payload planning from `plugin-sdk/channel-outbound`; operator-supplied local-media loading still uses the retained facade until a focused public local-roots seam exists. |
     | `plugin-sdk/conversation-runtime` | Deprecated broad barrel for conversation/thread binding, pairing, and configured-binding helpers; prefer focused binding subpaths such as `plugin-sdk/thread-bindings-runtime` and `plugin-sdk/session-binding-runtime` |
     | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
     | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
     | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
-    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
+    | `plugin-sdk/channel-config-writes` | Private-local after July 2026; Channel config-write authorization helpers |
     | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Deprecated group-access decision helpers; use `resolveChannelMessageIngress` from `plugin-sdk/channel-ingress-runtime` |
-    | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound`. |
-    | `plugin-sdk/direct-dm-guard-policy` | Narrow direct-DM pre-crypto guard policy helpers |
+    | `plugin-sdk/direct-dm-guard-policy` | Private-local after July 2026; Narrow direct-DM pre-crypto guard policy helpers |
     | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13` and tracked owner compatibility; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
-    | `plugin-sdk/zalouser` | Deprecated Zalo Personal compatibility facade for published Lark/Zalo packages that still import sender command authorization; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/question-gateway-runtime` | Resolve runtime-authored `ask_user` choices through the Gateway from channel interaction handlers |
     | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
-    | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
-    | `plugin-sdk/channel-envelope`, `plugin-sdk/channel-inbound-roots`, `plugin-sdk/channel-location`, `plugin-sdk/channel-logging` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound` or `plugin-sdk/channel-outbound`. |
-    | `plugin-sdk/channel-pairing-paths` | Deprecated compatibility facade. Use `plugin-sdk/channel-pairing`. |
-    | `plugin-sdk/channel-reply-options-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-mention-gating` | Private-local after July 2026; Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-streaming` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
-    | `plugin-sdk/channel-route` | Shared route normalization, parser-driven target resolution, thread-id stringification, dedupe/compact route keys, parsed-target types, and route/target comparison helpers |
-    | `plugin-sdk/channel-targets` | Target parsing helpers; route comparison callers should use `plugin-sdk/channel-route` |
+    | `plugin-sdk/channel-route` | Private-local after July 2026; Shared route normalization, parser-driven target resolution, thread-id stringification, dedupe/compact route keys, parsed-target types, and route/target comparison helpers |
+    | `plugin-sdk/channel-targets` | Private-local after July 2026; Target parsing helpers; route comparison callers should use `plugin-sdk/channel-route` |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
   </Accordion>
 
-Deprecated channel helper families stay available only for published-plugin
-compatibility. The removal plan is: keep them through the external plugin
-migration window, keep repo/bundled plugins on `channel-inbound` and
-`channel-outbound`, then remove the compatibility subpaths in the next major
-SDK cleanup. This applies to the old channel message/runtime, channel
-streaming, direct-DM access, inbound helper splinter, reply-options,
-and pairing-path families.
+Later-window channel compatibility subpaths remain public only through their
+registry dates. July aliases such as direct-DM access, reply-options, pairing
+paths, and channel runtime splinters have been removed; bundled-only helpers
+are private-local.
 
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
-    | `plugin-sdk/lmstudio` | Supported LM Studio provider facade for setup, catalog discovery, and runtime model preparation |
-    | `plugin-sdk/lmstudio-runtime` | Supported LM Studio runtime facade for local server defaults, model discovery, request headers, and loaded-model helpers |
-    | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
-    | `plugin-sdk/self-hosted-provider-setup` | Deprecated OpenAI-compatible self-hosted setup helpers; use `plugin-sdk/provider-setup` or plugin-owned setup helpers |
-    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
-    | `plugin-sdk/provider-auth-runtime` | Provider auth runtime helpers: OAuth loopback flow, token exchange, auth persistence, and API-key resolution |
-    | `plugin-sdk/provider-oauth-runtime` | Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
-    | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
-    | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
-    | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
+    | `plugin-sdk/provider-entry` | Private-local after July 2026; `defineSingleProviderPluginEntry` |
+    | `plugin-sdk/provider-setup` | Private-local after July 2026; Curated local/self-hosted provider setup helpers |
+    | `plugin-sdk/cli-backend` | Private-local after July 2026; CLI backend defaults + watchdog constants |
+    | `plugin-sdk/provider-auth-runtime` | Private-local after July 2026; Provider auth runtime helpers: OAuth loopback flow, token exchange, auth persistence, and API-key resolution |
+    | `plugin-sdk/provider-oauth-runtime` | Private-local after July 2026; Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
+    | `plugin-sdk/provider-auth-api-key` | Private-local after July 2026; API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
+    | `plugin-sdk/provider-auth-result` | Private-local after July 2026; Standard OAuth auth-result builder |
+    | `plugin-sdk/provider-env-vars` | Private-local after July 2026; Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
-    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `selectPreferredLocalModelId`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
-    | `plugin-sdk/provider-catalog-live-runtime` | Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
+    | `plugin-sdk/provider-model-shared` | Private-local after July 2026; `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `selectPreferredLocalModelId`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-catalog-live-runtime` | Private-local after July 2026; Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
-    | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
-    | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
-    | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
-    | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
-    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
-    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
-    | `plugin-sdk/embedding-providers` | General embedding provider types and read helpers, including `EmbeddingProviderAdapter`, `getEmbeddingProvider(...)`, and `listEmbeddingProviders(...)`; plugins register providers through `api.registerEmbeddingProvider(...)` so manifest ownership is enforced |
-    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
-    | `plugin-sdk/provider-usage` | Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
-    | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Google/Kilocode/MiniMax/Moonshot/OpenAI/OpenRouter/Z.AI wrapper helpers |
-    | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, `normalizeOpenAICompatibleReasoningPayload`, `setQwenChatTemplateThinking`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
-    | `plugin-sdk/provider-transport-runtime` | Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, and writable transport event streams |
-    | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
-    | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
-    | `plugin-sdk/group-activation` | Narrow group activation mode and command parsing helpers |
+    | `plugin-sdk/provider-catalog-shared` | Private-local after July 2026; `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
+    | `plugin-sdk/provider-http` | Private-local after July 2026; Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
+    | `plugin-sdk/provider-web-fetch-contract` | Private-local after July 2026; Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
+    | `plugin-sdk/provider-web-fetch` | Private-local after July 2026; Web-fetch provider registration/cache helpers |
+    | `plugin-sdk/provider-web-search-config-contract` | Private-local after July 2026; Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
+    | `plugin-sdk/provider-web-search-contract` | Private-local after July 2026; Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+    | `plugin-sdk/provider-web-search` | Private-local after July 2026; Web-search provider registration/cache/runtime helpers |
+    | `plugin-sdk/embedding-providers` | Private-local after July 2026; General embedding provider types and read helpers, including `EmbeddingProviderAdapter`, `getEmbeddingProvider(...)`, and `listEmbeddingProviders(...)`; plugins register providers through `api.registerEmbeddingProvider(...)` so manifest ownership is enforced |
+    | `plugin-sdk/provider-tools` | Private-local after July 2026; `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
+    | `plugin-sdk/provider-usage` | Private-local after July 2026; Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
+    | `plugin-sdk/provider-stream` | Private-local after July 2026; `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Google/Kilocode/MiniMax/Moonshot/OpenAI/OpenRouter/Z.AI wrapper helpers |
+    | `plugin-sdk/provider-stream-shared` | Private-local after July 2026; Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, `normalizeOpenAICompatibleReasoningPayload`, `setQwenChatTemplateThinking`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
+    | `plugin-sdk/provider-transport-runtime` | Private-local after July 2026; Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, and writable transport event streams |
+    | `plugin-sdk/provider-onboard` | Private-local after July 2026; Onboarding config patch helpers |
+    | `plugin-sdk/global-singleton` | Private-local after July 2026; Process-local singleton/map/cache helpers |
+    | `plugin-sdk/group-activation` | Private-local after July 2026; Narrow group activation mode and command parsing helpers |
   </Accordion>
 
 Provider usage snapshots normally report one or more quota `windows`, each with
@@ -130582,28 +130609,26 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway resolver |
-    | `plugin-sdk/approval-reference-runtime` | Deterministic durable-locator helper for transport-limited approval callbacks |
+    | `plugin-sdk/approval-reference-runtime` | Private-local after July 2026; Deterministic durable-locator helper for transport-limited approval callbacks |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
     | `plugin-sdk/approval-native-runtime` | Native approval target, account-binding, route-gate, forwarding fallback, and local native exec prompt suppression helpers |
-    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, reaction hint text helpers, and compatibility export for local native exec prompt suppression |
+    | `plugin-sdk/approval-reaction-runtime` | Private-local after July 2026; Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, reaction hint text helpers, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, approval-capability builders, approval auth/profile helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
-    | `plugin-sdk/reply-dedupe` | Deprecated narrow inbound reply dedupe reset helpers |
     | `plugin-sdk/command-auth-native` | Native command auth, dynamic argument menu formatting, and native session-target helpers |
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
-    | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
+    | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization and command-surface helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
-    | `plugin-sdk/provider-auth-login-flow-runtime` | Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
+    | `plugin-sdk/provider-auth-login-flow-runtime` | Private-local after July 2026; Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
-    | `plugin-sdk/channel-secret-tts-runtime` | Narrow nested channel TTS secret assignment helpers |
+    | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and plan-target path lookup for secret-contract/config parsing |
-    | `plugin-sdk/secret-provider-integration` | Type-only SecretRef provider integration manifest and preset contracts for plugins that publish external secret provider presets |
     | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
-    | `plugin-sdk/ssrf-dispatcher` | Narrow pinned-dispatcher helpers without the broad infra runtime surface |
+    | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
@@ -130615,107 +130640,105 @@ usage endpoint failed or returned no usable usage data.
     | --- | --- |
     | `plugin-sdk/runtime` | Runtime/logging/backup helpers, plugin install-path warnings, and process helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
-    | `plugin-sdk/browser-config` | Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
-    | `plugin-sdk/agent-harness-task-runtime` | Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
-    | `plugin-sdk/codex-mcp-projection` | Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
+    | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/codex-native-task-runtime` | Repo-local bundled Codex helper for native task mirror/runtime wiring; not a package export |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
-    | `plugin-sdk/mattermost` | Deprecated Mattermost compatibility facade for older third-party channel packages; new plugins should import generic SDK subpaths directly |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Process exec helpers |
-    | `plugin-sdk/node-host` | Node-host executable resolution and PTY resume helpers |
-    | `plugin-sdk/cli-runtime` | Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
-    | `plugin-sdk/qa-runner-runtime` | Supported facade exposing plugin QA scenarios through the CLI command surface |
-    | `plugin-sdk/tts-runtime` | Supported facade for text-to-speech config schemas and runtime helpers |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; Process exec helpers |
+    | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
+    | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
+    | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
+    | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
     | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
-    | `plugin-sdk/plugin-config-runtime` | Runtime plugin-config helpers such as `mergeDeep`, `requireRuntimeConfig`, `resolvePluginConfigObject`, and `resolveLivePluginConfigObject` |
+    | `plugin-sdk/plugin-config-runtime` | Deprecated compatibility facade for runtime plugin-config helpers; new plugins use `api.pluginConfig` plus focused config contracts, snapshots, and mutation helpers |
     | `plugin-sdk/config-mutation` | Transactional config mutation helpers such as `mutateConfigFile`, `replaceConfigFile`, and `logConfigUpdated` |
-    | `plugin-sdk/message-tool-delivery-hints` | Shared message-tool delivery metadata hint strings |
+    | `plugin-sdk/message-tool-delivery-hints` | Private-local after July 2026; Shared message-tool delivery metadata hint strings |
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
-    | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
+    | `plugin-sdk/text-autolink-runtime` | Private-local after July 2026; File-reference autolink detection without the broad text barrel |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
-    | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
+    | `plugin-sdk/reply-reference` | Private-local after July 2026; `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), repair/lifecycle helpers (`deleteSessionEntry`, `cleanupSessionLifecycleArtifacts`, `resolveSessionStoreBackupPaths`), marker helpers for transitional `sessionFile` values, bounded recent user/assistant transcript text reads by session identity, session store path/session-key helpers, and updated-at reads, without broad config writes/maintenance imports |
-    | `plugin-sdk/session-transcript-runtime` | Transcript identity, bounded raw and visible cursors, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
-    | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
-    | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
+    | `plugin-sdk/session-transcript-runtime` | Private-local after July 2026; Transcript identity, bounded raw and visible cursors, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
+    | `plugin-sdk/sqlite-runtime` | Private-local after July 2026; Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
+    | `plugin-sdk/cron-store-runtime` | Private-local after July 2026; Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/plugin-state-runtime` | Plugin-scoped keyed-state, BLOB, and cooperative SQLite lease contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Lease callbacks receive an abort signal and typed errors distinguish timeout, cancellation, lost ownership, invalid input, and storage failure |
+    | `plugin-sdk/plugin-state-runtime` | Private-local after July 2026; Plugin-scoped keyed-state, BLOB, and cooperative SQLite lease contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Lease callbacks receive an abort signal and typed errors distinguish timeout, cancellation, lost ownership, invalid input, and storage failure |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
-    | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
-    | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
+    | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization helpers |
+    | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
     | `plugin-sdk/tool-plugin` | Define a simple typed agent-tool plugin and expose static metadata for manifest generation |
-    | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
+    | `plugin-sdk/tool-payload` | Private-local after July 2026; Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
-    | `plugin-sdk/sandbox` | Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight |
+    | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
-    | `plugin-sdk/markdown-table-runtime` | Markdown table mode and conversion helpers |
+    | `plugin-sdk/markdown-table-runtime` | Private-local after July 2026; Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
-    | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
+    | `plugin-sdk/talk-config-runtime` | Private-local after July 2026; Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
-    | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
-    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
+    | `plugin-sdk/json-unsafe-integers` | Private-local after July 2026; JSON parsing helpers that preserve unsafe integer literals as strings |
+    | `plugin-sdk/file-lock` | Private-local after July 2026; Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/ingress-effect-once` | Durable claim/commit guard for non-idempotent ingress side effects |
-    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
-    | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
-    | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
+    | `plugin-sdk/acp-runtime` | Private-local after July 2026; ACP runtime/session and reply-dispatch helpers |
+    | `plugin-sdk/acp-runtime-backend` | Private-local after July 2026; Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
+    | `plugin-sdk/acp-binding-resolve-runtime` | Private-local after July 2026; Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/agent-config-primitives` | Deprecated agent runtime config-schema primitives; import schema primitives from a maintained plugin-owned surface |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
-    | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
+    | `plugin-sdk/dangerous-name-runtime` | Private-local after July 2026; Dangerous-name matching resolution helpers |
     | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES` |
     | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives |
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
-    | `plugin-sdk/provider-zai-endpoint` | Deprecated Z.AI provider-owned endpoint detection facade; use the Z.AI plugin public API |
-    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
-    | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
-    | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
+    | `plugin-sdk/async-lock-runtime` | Private-local after July 2026; Process-local async lock helper for small runtime state files |
+    | `plugin-sdk/channel-activity-runtime` | Private-local after July 2026; Channel activity telemetry helper |
+    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
-    | `plugin-sdk/delivery-queue-runtime` | Outbound pending-delivery drain helper |
-    | `plugin-sdk/file-access-runtime` | Safe local-file and media-source path helpers |
-    | `plugin-sdk/heartbeat-runtime` | Heartbeat wake, event, and visibility helpers |
-    | `plugin-sdk/expect-runtime` | Required-value assertion helper for provable runtime invariants |
-    | `plugin-sdk/number-runtime` | Numeric coercion helper |
-    | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
-    | `plugin-sdk/system-event-runtime` | System event queue helpers |
-    | `plugin-sdk/transport-ready-runtime` | Transport readiness wait helper |
-    | `plugin-sdk/exec-approvals-runtime` | Exec approval policy file helpers without the broad infra-runtime barrel |
+    | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
+    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file and media-source path helpers |
+    | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
+    | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
+    | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
+    | `plugin-sdk/secure-random-runtime` | Private-local after July 2026; Secure token/UUID helpers |
+    | `plugin-sdk/system-event-runtime` | Private-local after July 2026; System event queue helpers |
+    | `plugin-sdk/transport-ready-runtime` | Private-local after July 2026; Transport readiness wait helper |
+    | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
-    | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
-    | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
-    | `plugin-sdk/inline-image-data-url-runtime` | Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
-    | `plugin-sdk/response-limit-runtime` | Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
-    | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
-    | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
+    | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
+    | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
+    | `plugin-sdk/response-limit-runtime` | Private-local after July 2026; Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
+    | `plugin-sdk/session-binding-runtime` | Private-local after July 2026; Current conversation binding state without configured binding routing or pairing stores |
+    | `plugin-sdk/context-visibility-runtime` | Private-local after July 2026; Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
-    | `plugin-sdk/html-entity-runtime` | Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
-    | `plugin-sdk/text-utility-runtime` | Low-level text and path helpers, including five-entity HTML escaping |
+    | `plugin-sdk/html-entity-runtime` | Private-local after July 2026; Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
+    | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including five-entity HTML escaping |
     | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |
-    | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
-    | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
+    | `plugin-sdk/host-runtime` | Private-local after July 2026; Hostname and SCP host normalization helpers |
+    | `plugin-sdk/retry-runtime` | Private-local after July 2026; Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
-    | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
+    | `plugin-sdk/keyed-async-queue` | Private-local after July 2026; `KeyedAsyncQueue` |
   </Accordion>
 
   <Accordion title="Capability and testing subpaths">
@@ -130724,25 +130747,23 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/media-runtime` | Deprecated broad media barrel including `saveRemoteMedia`, `saveResponseMedia`, `readRemoteMediaBuffer`, and deprecated `fetchRemoteMedia`; prefer `plugin-sdk/media-store`, `plugin-sdk/media-mime`, `plugin-sdk/outbound-media`, and capability runtime subpaths, and prefer store helpers before buffer reads when a URL should become OpenClaw media |
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
-    | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
+    | `plugin-sdk/media-generation-runtime` | Private-local after July 2026; Shared media-generation failover helpers, candidate selection, and missing-model messaging |
+    | `plugin-sdk/media-understanding` | Deprecated compatibility facade for media-understanding provider types and helpers; new providers register through the injected plugin API and keep request helpers plugin-owned |
     | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, quote-aware HTML tag tokenization, markdown table conversion, directive-tag stripping, and safe-text utilities |
-    | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
-    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
+    | `plugin-sdk/speech` | Private-local after July 2026; Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
+    | `plugin-sdk/speech-core` | Private-local after July 2026; Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
-    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
-    | `plugin-sdk/realtime-bootstrap-context` | Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
-    | `plugin-sdk/realtime-voice` | Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness and output activity tracking |
+    | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
+    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
+    | `plugin-sdk/realtime-voice` | Private-local after July 2026; Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness and output activity tracking |
     | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter`, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
-    | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
-    | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
-    | `plugin-sdk/music-generation` | Music generation provider/request/result types |
-    | `plugin-sdk/music-generation-core` | Deprecated shared music-generation types, failover helpers, provider lookup, and model-ref parsing; prefer plugin-owned music provider surfaces |
-    | `plugin-sdk/video-generation` | Video generation provider/request/result types |
-    | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/transcripts` | Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
-    | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
-    | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
+    | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
+    | `plugin-sdk/image-generation-core` | Private-local after July 2026; Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |
+    | `plugin-sdk/video-generation` | Private-local after July 2026; Video generation provider/request/result types |
+    | `plugin-sdk/video-generation-core` | Private-local after July 2026; Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
+    | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
+    | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry and route-install helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |
     | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
@@ -130753,7 +130774,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, direct import, runtime API, and import side-effect contract helpers |
     | `plugin-sdk/plugin-state-test-runtime` | Repo-local plugin state store, ingress queue, and state DB test helpers |
     | `plugin-sdk/provider-test-contracts` | Repo-local provider runtime, auth, discovery, onboard, catalog, wizard, media capability, replay policy, realtime STT live-audio, web-search/fetch, and stream contract helpers |
-    | `plugin-sdk/provider-http-test-mocks` | Repo-local opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
+    | `plugin-sdk/provider-http-test-mocks` | Private-local after July 2026; Repo-local opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
     | `plugin-sdk/reply-payload-testing` | Repo-local helpers for attaching metadata to reply payload fixtures |
     | `plugin-sdk/sqlite-runtime-testing` | Repo-local SQLite lifecycle helpers for first-party tests |
     | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
@@ -130763,27 +130784,20 @@ usage endpoint failed or returned no usable usage data.
   <Accordion title="Memory subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/memory-core` | Deprecated compatibility alias; use `plugin-sdk/memory-host-core` |
-    | `plugin-sdk/memory-core-engine-runtime` | Deprecated memory index/search runtime facade; prefer vendor-neutral memory-host subpaths |
-    | `plugin-sdk/memory-core-host-embedding-registry` | Lightweight memory embedding provider registry helpers |
+    | `plugin-sdk/memory-core-host-embedding-registry` | Private-local after July 2026; Lightweight memory embedding provider registry helpers |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers. `registerMemoryEmbeddingProvider` on this surface is deprecated; use the generic embedding provider API for new providers. |
-    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
-    | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
-    | `plugin-sdk/memory-core-host-multimodal` | Deprecated memory host multimodal helpers; prefer vendor-neutral memory-host subpaths |
-    | `plugin-sdk/memory-core-host-query` | Deprecated memory host query helpers; prefer vendor-neutral memory-host subpaths |
-    | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
-    | `plugin-sdk/memory-core-host-events` | Deprecated compatibility alias; use `plugin-sdk/memory-host-events` |
-    | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
-    | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
-    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
-    | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
-    | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
-    | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
-    | `plugin-sdk/memory-host-files` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-runtime-files` |
-    | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
-    | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
-    | `plugin-sdk/memory-host-status` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-status` |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers. `registerMemoryEmbeddingProvider` on this surface is deprecated; use the generic embedding provider API for new providers. |
+    | `plugin-sdk/memory-core-host-engine-qmd` | Private-local after July 2026; Memory host QMD engine exports |
+    | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |
+    | `plugin-sdk/memory-core-host-secret` | Private-local after July 2026; Memory host secret helpers |
+    | `plugin-sdk/memory-core-host-status` | Private-local after July 2026; Memory host status helpers |
+    | `plugin-sdk/memory-core-host-runtime-cli` | Private-local after July 2026; Memory host CLI runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-core` | Private-local after July 2026; Memory host core runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-files` | Private-local after July 2026; Memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-core` | Deprecated compatibility facade for vendor-neutral memory host helpers. New memory plugins use injected memory capabilities and host-prepared prompts; companion plugins still use the retained facade for public-artifact discovery until a focused read seam exists. |
+    | `plugin-sdk/memory-host-events` | Private-local after July 2026; Vendor-neutral alias for memory host event journal helpers |
+    | `plugin-sdk/memory-host-markdown` | Private-local after July 2026; Shared managed-markdown helpers for memory-adjacent plugins |
+    | `plugin-sdk/memory-host-search` | Private-local after July 2026; Active memory runtime facade for search-manager access |
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">
@@ -130791,12 +130805,11 @@ usage endpoint failed or returned no usable usage data.
     bundled plugin code. They are tracked in the SDK inventory so package
     builds and aliasing stay deterministic, but they are not general plugin
     authoring APIs. New reusable host contracts should use generic SDK subpaths
-    such as `plugin-sdk/gateway-runtime`, `plugin-sdk/ssrf-runtime`, and
-    `plugin-sdk/plugin-config-runtime`.
+    such as `plugin-sdk/gateway-runtime` and `plugin-sdk/ssrf-runtime`.
 
     | Subpath | Owner and purpose |
     | --- | --- |
-    | `plugin-sdk/codex-mcp-projection` | Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
     | `plugin-sdk/codex-native-task-runtime` | Bundled Codex plugin helper for mirroring Codex app-server native subagents into OpenClaw task state (repo-local only, not a package export) |
 
   </Accordion>
@@ -130864,10 +130877,10 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 
 Use these focused subpaths for bundled plugin tests. The former
 `openclaw/plugin-sdk/testing` barrel was repo-local, excluded from shipped
-packages, and has been removed. The legacy `openclaw/plugin-sdk/test-utils`
-alias remains repo-local; `pnpm run lint:plugins:no-extension-test-core-imports`
-(`scripts/check-no-extension-test-core-imports.ts`) rejects new extension-test
-imports of that alias.
+packages, and has been removed. The former `openclaw/plugin-sdk/test-utils`
+alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports`
+(`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
+the focused test subpaths above.
 
 ### Available exports
 
@@ -131002,11 +131015,9 @@ entry to declare `kind: "memory"`.
 
 ### Testing runtime config access
 
-Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/plugin-test-runtime`.
-Its `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
-mocks throw by default so tests catch new usage of deprecated compatibility
-APIs. Override those mocks only when the test is explicitly covering legacy
-compatibility behavior.
+Prefer the shared plugin runtime mock from
+`openclaw/plugin-sdk/plugin-test-runtime`. Its runtime config helpers model the
+current snapshot and mutation APIs.
 
 ### Unit testing a channel plugin
 
@@ -131154,11 +131165,11 @@ pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 `scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
 import-boundary checks in CI; each can also be run standalone locally:
 
-| Command                                                        | Enforces                                                                                    |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.             |
-| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`). |
-| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `plugin-sdk/test-utils` or other core-only test helpers. |
+| Command                                                        | Enforces                                                                                     |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.              |
+| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`).  |
+| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import removed SDK test aliases or other core-only test helpers. |
 
 External plugins are not subject to these lint rules, but following the same
 patterns is recommended.
@@ -133424,6 +133435,16 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
+Proof statuses are worker-reported outcomes, not independent verification. A `passed`
+entry means the worker reports that its command or check succeeded; consumers that need
+an independent quality gate should inspect the attached command, URL, or artifact and
+run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+`workboard_complete` reports that same proof's terminal status, pass `proofId` so the
+pending record is resolved in place without losing its identity or timestamp. A proof that
+already has the same terminal status is reused unchanged. Completion proof without
+`proofId` remains append-only, so a later retry cannot rewrite older history merely because
+its command or note is identical.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`
@@ -134419,6 +134440,12 @@ Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 ## Surface
 
 channels: `clickclack`
+
+The plugin can optionally create a lifecycle-synchronized ClickClack channel
+for each OpenClaw session. Managed discussion channels use a same-agent side
+session for observation and relay, while the attached main session receives a
+pull-only `discussion` tool. See [ClickClack session discussions](/channels/clickclack#session-discussions)
+for configuration and session-tool visibility requirements.
 
 ## Related docs
 
@@ -157494,8 +157521,6 @@ payload.
 6. Delete file-lock-shaped session mutation.
    - Done for runtime lock creation and runtime lock APIs.
    - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
-   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
-     setting.
    - State integrity no longer has a separate orphan transcript-file pruning
      path; doctor migration imports/removes legacy JSONL sources in one place.
    - Gateway singleton coordination uses typed SQLite `state_leases` rows under
@@ -158645,7 +158670,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.
-- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, the Plugin SDK API contract manifest, and Control UI locale bundles. `pnpm release:check` re-runs those guards in check mode (including the strict zero-fallback locale gate plus the plugin SDK surface budget) and reports every generated drift failure in one pass before running package release checks.
+- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, the Plugin SDK API contract manifest, and Control UI locale bundles. It also blocks until native app translations and platform-generated locale resources match the source inventory; if they lag, wait for or dispatch `Native App Locale Refresh` before freezing the Code SHA. `pnpm release:check` re-runs those guards in check mode (including the strict locale gates plus the plugin SDK surface budget) and reports every generated drift failure in one pass before running package release checks.
 - Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to kick off all pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` is retained for an explicit beta soak. Package Acceptance provides the canonical package Telegram E2E during candidate validation, avoiding a second concurrent live poller.
 
@@ -159774,13 +159799,13 @@ Useful artifacts:
 # Section: reference/memory-config.md
 
 ---
-summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+summary: "Memory search providers, retrieval modes, QMD, and multimodal indexing"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to enable hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
 
@@ -160147,20 +160172,7 @@ All under `memorySearch.sync` unless noted:
 | `onSessionStart`               | `boolean` | `true`  | Sync the memory index when a session starts                           |
 | `onSearch`                     | `boolean` | `true`  | Sync lazily on search after detecting content changes                 |
 | `watch`                        | `boolean` | `true`  | Watch memory files (chokidar) and schedule reindex on changes         |
-| `watchDebounceMs`              | `number`  | `1500`  | Debounce window for coalescing rapid file-watch events                |
-| `intervalMinutes`              | `number`  | `0`     | Periodic reindex interval in minutes (`0` disables)                   |
 | `sessions.postCompactionForce` | `boolean` | `true`  | Force a session reindex after compaction-triggered transcript updates |
-
-<ParamField path="chunking.tokens" type="number">
-  Chunk size in tokens used when splitting memory sources before embedding (default: 400).
-</ParamField>
-<ParamField path="chunking.overlap" type="number">
-  Token overlap between adjacent chunks to preserve context near split boundaries (default: 80).
-</ParamField>
-
-<Note>
-Changing `chunking.tokens` or `chunking.overlap` changes chunk boundaries and invalidates the existing index identity (see the Warning under Provider selection).
-</Note>
 
 ---
 
@@ -160175,25 +160187,20 @@ All under `memorySearch.query`:
 
 And under `memorySearch.query.hybrid`:
 
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
+| Key       | Type      | Default | Description                        |
+| --------- | --------- | ------- | ---------------------------------- |
+| `enabled` | `boolean` | `true`  | Enable hybrid BM25 + vector search |
 
 <Tabs>
   <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description                          |
-    | ------------- | --------- | ------- | ------------------------------------- |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-    | `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
+    | Key           | Type      | Default | Description           |
+    | ------------- | --------- | ------- | --------------------- |
+    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking |
   </Tab>
   <Tab title="Temporal decay (recency)">
-    | Key                          | Type      | Default | Description               |
-    | ---------------------------- | --------- | ------- | -------------------------- |
-    | `temporalDecay.enabled`      | `boolean` | `false` | Enable recency boost      |
-    | `temporalDecay.halfLifeDays` | `number`  | `30`    | Score halves every N days |
+    | Key                     | Type      | Default | Description          |
+    | ----------------------- | --------- | ------- | -------------------- |
+    | `temporalDecay.enabled` | `boolean` | `false` | Enable recency boost |
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
@@ -160211,10 +160218,8 @@ And under `memorySearch.query.hybrid`:
           maxResults: 6,
           minScore: 0.35,
           hybrid: {
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30 },
+            mmr: { enabled: true },
+            temporalDecay: { enabled: true },
           },
         },
       },
@@ -160269,12 +160274,11 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                                  |
-| ------------------ | --------- | ------- | -------------------------------------------- |
-| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite             |
-| `cache.maxEntries` | `number`  | unset   | Best-effort upper bound on cached embeddings |
+| Key             | Type      | Default | Description                      |
+| --------------- | --------- | ------- | -------------------------------- |
+| `cache.enabled` | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 
-Prevents re-embedding unchanged text during reindex or transcript updates. Leave `maxEntries` unset for an unbounded cache; set it when disk growth matters more than peak reindex speed. When set, the oldest entries (by last-updated time) are pruned first once the cache exceeds the limit.
+Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ---
 
@@ -161798,12 +161802,12 @@ The lists below are generated from the source target registry and checked agains
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`
-- `tools.web.fetch.firecrawl.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
+- `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.xai.config.webSearch.apiKey`
@@ -161818,8 +161822,6 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
 - `plugins.entries.webhooks.config.routes.*.secret`
-- `tools.web.search.*.apiKey`
-- `tools.web.search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`
@@ -161893,7 +161895,7 @@ Notes:
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces. Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 - Cold Gateway startup can isolate retryable resolution failures for mapped, non-Gateway owners. Current mapped classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying lower-precedence credentials. Reload and config-write preflight use the same owner-aware policy: healthy owners refresh; an eligible failed owner stays stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a new or changed failure becomes cold. Gateway ingress auth, structurally invalid refs or values, fail-closed owners, and currently unmapped owners remain strict.
-- For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
+- For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Provider credentials use `plugins.entries.<plugin>.config.webSearch.*`.
 - Slack `identity: "user"` uses `channels.slack.userToken` with `channels.slack.appToken` for Socket Mode or `channels.slack.signingSecret` for HTTP mode. The same pairing applies under `channels.slack.accounts.*`; no bot token is required for this identity.
 
 ## Unsupported credentials
@@ -161978,19 +161980,15 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
-Archived transcripts are kept by default and compressed with zstd (`*.jsonl.<reason>.<timestamp>.zst`) when the runtime supports it, so deleting or resetting a session never silently discards conversation history. The disk budget evicts the oldest archives first, before touching live sessions.
+Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
-Active SQLite enforcement of `maxDiskBytes` measures session-row JSON plus transcript-event JSON bytes per session; legacy offline-maintenance enforcement measures files in the selected sessions directory.
+`maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total.
 
 Gateway model-run probe sessions (keys matching `agent:*:explicit:model-run-<uuid>`) get a separate, fixed `24h` retention. This pruning is pressure-gated: it only runs when session-entry maintenance/cap pressure is reached, and only before the global stale-entry cleanup/cap step. Other explicit sessions do not use this retention.
 
-Enforcement order for disk-budget cleanup (`mode: "enforce"`):
+When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup writes, fsyncs, and reads back the compressed archive before a write transaction removes the session row and its transcript, trajectory, active, index, and FTS projections. This includes sessions that contain trajectory events but no transcript events. Cleanup rechecks route, entry, and admission references at deletion time, remeasures physical usage after each archive or session victim, and stops at `highWaterBytes`.
 
-1. Remove oldest archived transcript artifacts, orphan legacy artifacts, or orphan trajectory artifacts first.
-2. If still above target, evict oldest session entries and their transcript rows or trajectory artifacts.
-3. Repeat until usage is at or below `highWaterBytes`.
-
-`mode: "warn"` reports potential evictions without mutating the store or files.
+Committed writes and deletion first land in the WAL. Cleanup checkpoints it so the WAL can shrink immediately, then uses incremental vacuum to return eligible free tail pages from the main file; pages that are not yet reclaimable stay in the main file and therefore remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
 
 Run maintenance on demand:
 
@@ -162007,13 +162005,9 @@ OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups duri
 
 Transcript mutations use the session write queue for the SQLite transcript target:
 
-| Setting                              | Default   | Env override                                     |
-| ------------------------------------ | --------- | ------------------------------------------------ |
-| `session.writeLock.acquireTimeoutMs` | `60000`   | `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS` |
-| `session.writeLock.staleMs`          | `1800000` | `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`           |
-| `session.writeLock.maxHoldMs`        | `300000`  | `OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`        |
-
-`acquireTimeoutMs` is how long a lock wait surfaces a busy-session error before giving up; raise it only when legitimate prep, cleanup, compaction, or transcript mirror work contends longer on slow machines. `staleMs` is when an existing lock can be reclaimed as stale. `maxHoldMs` is the in-process watchdog release threshold.
+Session write locks use fixed production defaults. The corresponding
+`OPENCLAW_SESSION_WRITE_LOCK_*` environment variables remain available for
+process-level diagnostics and emergency overrides.
 
 ### Downgrading After The SQLite Flip
 
@@ -162146,7 +162140,7 @@ When splitting a long transcript into compaction chunks, OpenClaw keeps assistan
 Two triggers in the embedded OpenClaw agent:
 
 1. **Overflow recovery**: the model returns a context-overflow error (`request_too_large`, `context length exceeded`, `input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `input is too long for the model`, `ollama error: context length exceeded`, and other provider-shaped variants) - compact, then retry. When the provider reports the attempted token count, OpenClaw forwards that observed count into overflow-recovery compaction; if the provider confirms overflow but exposes no parseable count, OpenClaw passes a minimally over-budget synthetic count to compaction engines and diagnostics. If overflow recovery still fails, OpenClaw surfaces explicit guidance and preserves the current session mapping instead of silently rotating to a fresh session id - retry the message, run `/compact`, or run `/new`.
-2. **Threshold maintenance**: after a successful turn, when `contextTokens > contextWindow - reserveTokens`, where `contextWindow` is the model's context window and `reserveTokens` is headroom reserved for prompts plus the next model output.
+2. **Threshold maintenance**: after a successful turn, when the current context exceeds the model window minus OpenClaw's built-in headroom for prompts and the next model output.
 
 Two additional guards run outside these two triggers:
 
@@ -162161,7 +162155,6 @@ Two additional guards run outside these two triggers:
     defaults: {
       compaction: {
         enabled: true,
-        reserveTokens: 16384,
         keepRecentTokens: 20000,
       },
     },
@@ -162169,7 +162162,7 @@ Two additional guards run outside these two triggers:
 }
 ```
 
-OpenClaw also enforces a safety floor for embedded runs: if `compaction.reserveTokens` is below `reserveTokensFloor` (default `20000`), OpenClaw bumps it up. Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor. When the active model context window is known, both the floor and the final effective reserve are capped so the reserve cannot consume the whole prompt budget. This keeps small-context models (for example a 16K-token local model) from entering compaction from the first token; without a known context window, configured and current reserve budgets remain uncapped. Why a floor at all: leave enough headroom for multi-turn "housekeeping" (like the memory flush, below) before compaction becomes unavoidable. Implementation: `applyAgentCompactionSettingsFromConfig()` in `src/agents/agent-settings.ts`, called from embedded-runner turn and compaction setup paths.
+OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
 Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
 
@@ -162234,7 +162227,7 @@ OpenClaw exposes a `session_before_compact` hook in the extension API, but the f
 
 - **Session key wrong?** Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
 - **Store vs transcript mismatch?** Confirm the Gateway host and the store path from `openclaw status`.
-- **Compaction spam?** Check the model's context window (too small forces frequent compaction), `reserveTokens` (too high for the model window causes earlier compaction), and tool-result bloat (tune session pruning).
+- **Compaction spam?** Check the model's context window (too small forces frequent compaction) and tool-result bloat (tune session pruning).
 - **Every prompt seems to overflow on a small local model?** Confirm the provider reports the correct model context window. OpenClaw can cap the effective reserve only when that window is known.
 - **Silent turns leaking?** Confirm the reply starts with the exact silent token `NO_REPLY` (case-insensitive) and you are on a build that includes the streaming-suppression fix (`2026.1.10`+).
 
@@ -163748,12 +163741,34 @@ convenience?"**
   `openclaw skills install <id>`.
 - If there are no stored matches, skip this beat without commentary.
 
-After the user answers and any chosen installs finish, record completion so the
-offer never appears again:
+After the user answers and every chosen install succeeds, record completion so
+the offer never appears again:
 
 ```bash
 openclaw onboard recommendations acknowledge
 ```
+
+If an install fails, consume the successful and declined recommendations but
+leave every failed ID pending for a later onboarding run:
+
+```bash
+openclaw onboard recommendations acknowledge --retry "<failed-id>" ["<failed-id>"...]
+```
+
+Use the exact opaque IDs returned by the read command. Never acknowledge a
+failed install without `--retry`. One interrupted skill install can report that
+its target already exists on the next attempt. In that case, verify the exact
+publisher-qualified ID before treating it as successful:
+
+```bash
+openclaw skills verify "@owner/slug"
+```
+
+Only count it as installed when verification succeeds for that same ID and its
+JSON output has `openclaw.resolution.source` set to `installed`. A registry
+verification is not proof of a local install. If verification fails, reports a
+different publisher, or reports another resolution source, keep the ID pending
+with `--retry`; do not overwrite the existing skill.
 
 When the three beats are complete, delete this file. Then say one line:
 
@@ -172271,14 +172286,8 @@ Core ACP baseline:
       "opencode",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      // Defaults are coalesceIdleMs: 350, maxChunkChars: 1800; shown explicitly here.
-      coalesceIdleMs: 350,
-      maxChunkChars: 1800,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }
@@ -172693,7 +172702,7 @@ Quick `/acp` flow from chat:
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
-    - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
+    - Idle runtime workers are eligible for cleanup after the built-in idle period; stored session metadata remains available for `/acp sessions`.
 
   </Accordion>
   <Accordion title="Native Codex routing rules">
@@ -173721,9 +173730,7 @@ Example answered result:
   "status": "answered",
   "answers": {
     "answers": {
-      "deploy_target": {
-        "answers": ["Staging (Recommended)"]
-      }
+      "deploy_target": ["Staging (Recommended)"]
     }
   }
 }
@@ -173791,7 +173798,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 }
 ```
 
-Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path. A shared top-level `tools.web.search.apiKey` and a scoped `tools.web.search.brave.*` still load through a compatibility merge, but new config should use the plugin-scoped path above.
+Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path.
 
 `webSearch.mode` controls the Brave transport:
 
@@ -174460,24 +174467,18 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Config reference
 
-| Option                           | Description                                                          | Default                                                            |
-| -------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `browser.enabled`                | Enable browser control                                               | `true`                                                             |
-| `browser.executablePath`         | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
-| `browser.headless`               | Run without GUI                                                      | `false`                                                            |
-| `OPENCLAW_BROWSER_HEADLESS`      | Per-process override for local managed browser headless mode         | unset                                                              |
-| `browser.noSandbox`              | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
-| `browser.attachOnly`             | Do not launch a browser; only attach to an existing one              | `false`                                                            |
-| `browser.cdpPortRangeStart`      | Starting local CDP port for auto-assigned profiles                   | `18800` (derived from the gateway port)                            |
-| `browser.localLaunchTimeoutMs`   | Local managed Chrome discovery timeout, up to `120000`               | `15000`                                                            |
-| `browser.localCdpReadyTimeoutMs` | Local managed post-launch CDP readiness timeout, up to `120000`      | `8000`                                                             |
+| Option                      | Description                                                          | Default                                                            |
+| --------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `browser.enabled`           | Enable browser control                                               | `true`                                                             |
+| `browser.executablePath`    | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
+| `browser.headless`          | Run without GUI                                                      | `false`                                                            |
+| `OPENCLAW_BROWSER_HEADLESS` | Per-process override for local managed browser headless mode         | unset                                                              |
+| `browser.noSandbox`         | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
+| `browser.attachOnly`        | Do not launch a browser; only attach to an existing one              | `false`                                                            |
 
-Both timeout values must be positive integers up to `120000` ms; other values
-are rejected at config load. On Raspberry Pi, older VPS hosts, or slow
-storage, raise `browser.localLaunchTimeoutMs` when Chrome needs more time to
-expose its CDP HTTP endpoint. Raise `browser.localCdpReadyTimeoutMs` when
-launch succeeds but `openclaw browser start` still reports `not reachable
-after start`.
+On Raspberry Pi, older VPS hosts, or slow storage, use a manually launched
+browser with `attachOnly` when Chrome needs more time to expose its CDP HTTP
+endpoint or become ready than the managed-browser deadline permits.
 
 ### Problem: No Chrome tabs found for profile="user"
 
@@ -174811,8 +174812,8 @@ Good result:
 | empty CDP reply / `other side closed` through a portproxy                               | Windows listener mismatch or a self-loop; inspect both loopback families and `netsh interface portproxy show all`                                                                 |
 | `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable` | the HTTP endpoint answered, but the DevTools WebSocket could not be opened                                                                                                        |
 | stale viewport / dark-mode / locale / offline overrides after a remote session          | run `openclaw browser --browser-profile remote stop` to close the session and release the cached Playwright/CDP connection without restarting the Gateway or the external browser |
-| timeout around `remoteCdpTimeoutMs` (default 1500ms)                                    | usually still CDP reachability, or a slow/unreachable remote endpoint                                                                                                             |
-| `Playwright page enumeration timed out after 3000ms`                                    | the remote CDP connected, but its persistent tab read stalled; the deadline is the larger of `remoteCdpTimeoutMs` and `remoteCdpHandshakeTimeoutMs`                               |
+| timeout during CDP reachability                                                         | usually still CDP reachability, or a slow/unreachable remote endpoint                                                                                                             |
+| `Playwright page enumeration timed out after 3000ms`                                    | the remote CDP connected, but its persistent tab read stalled                                                                                                                     |
 | `No Chrome tabs found for profile="user"`                                               | local Chrome MCP profile selected where no host-local tabs are available                                                                                                          |
 
 ## Fast triage checklist
@@ -174998,16 +174999,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       // allowedHostnames: ["localhost"],
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
-    remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    localLaunchTimeoutMs: 15000, // local managed Chrome discovery timeout (ms)
-    localCdpReadyTimeoutMs: 8000, // local managed post-launch CDP readiness timeout (ms)
-    actionTimeoutMs: 60000, // default browser act timeout (ms)
     tabCleanup: {
       enabled: true, // default: true
-      idleMinutes: 120, // set 0 to disable idle cleanup
-      maxTabsPerSession: 8, // set 0 to disable the per-session cap
-      sweepMinutes: 5,
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
@@ -175142,22 +175135,13 @@ main model can read the screenshot directly.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` from a range starting 9 ports above the control port (default `18800`-`18899`); set those only for
   remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
   the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
-  checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
-  their CDP WebSocket handshakes. Persistent remote Playwright tab enumeration
-  uses the larger of the two as its operation deadline.
-- `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
-  process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
-  follow-up budget for CDP websocket readiness after the process is discovered.
-  Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values must be positive integers up to `120000` ms; invalid
-  config values are rejected.
+- Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
+  managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix
   the startup problem, disable the browser if it is not needed, or restart the
   Gateway after repair.
-- `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 
 </Accordion>
 
@@ -175332,8 +175316,6 @@ Example:
   browser: {
     enabled: true,
     defaultProfile: "browserless",
-    remoteCdpTimeoutMs: 2000,
-    remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
         cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
@@ -175426,8 +175408,6 @@ proxies.
   browser: {
     enabled: true,
     defaultProfile: "browserbase",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       browserbase: {
         cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
@@ -175460,8 +175440,6 @@ WebSocket gateway.
   browser: {
     enabled: true,
     defaultProfile: "notte",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       notte: {
         cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
@@ -176500,6 +176478,14 @@ With code mode active, the logged model-facing tool names should be `exec` and
 `wait`. For the full redacted provider payload, add
 `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
 
+## Use Swarm for agent fan-out
+
+[Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
+for orchestrating concurrent sub-agents from Code Mode scripts. Enable both
+`tools.codeMode` and `tools.swarm`, then use normal JavaScript control flow for
+fan-out, decision gates, and structured collection. Swarm is a separate opt-in
+gate; enabling Code Mode alone does not expose the `agents.*` API.
+
 ## Technical tour
 
 The rest of this page covers the runtime contract and implementation details,
@@ -177487,6 +177473,7 @@ Docs-only changes to this page should still run `pnpm check:docs`.
 
 ## Related
 
+- [Swarm](/tools/swarm) for fan-out agent orchestration from Code Mode scripts
 - [Tool Search](/tools/tool-search)
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Exec tool](/tools/exec)
@@ -181112,6 +181099,7 @@ only when the agent should see fewer tools or needs explicit host access.
 | Add a new integration or runtime surface     | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins)                                                                                |
 | Run work later or in the background          | [Automation](/automation)                      | [Automation overview](/automation)                                                                                                                     |
 | Coordinate multiple agents or harnesses      | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)                                                                                    |
+| Orchestrate concurrent agents from code      | [Swarm](/tools/swarm)                          | [Code Mode](/tools/code-mode) and [Sub-agents](/tools/subagents)                                                                                       |
 | Search a large OpenClaw tool catalog         | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                                                                                                      |
 | Combine several tools in one compact program | [Code Mode](/tools/code-mode)                  | [Code Mode](/tools/code-mode)                                                                                                                          |
 
@@ -181163,20 +181151,20 @@ The table lists representative tools so you can recognize the surface. It is
 not the full policy reference. For exact groups, defaults, and allow/deny
 semantics, use [Tools and custom providers](/gateway/config-tools).
 
-| Category                | Use when the agent needs to...                                                          | Representative tools                                                                                 | Read next                                                                                                              |
-| ----------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis                  | `exec`, `process`, `terminal`, `code_execution`                                                      | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
-| Files                   | Read and change workspace files                                                         | `read`, `write`, `edit`, `apply_patch`                                                               | [Apply patch](/tools/apply-patch)                                                                                      |
-| Human input             | Pause for a structured decision owned by the user                                       | `ask_user`                                                                                           | [Ask user](/tools/ask-user)                                                                                            |
-| Web                     | Search the web, search X posts, or fetch readable page content                          | `web_search`, `x_search`, `web_fetch`                                                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
-| Browser                 | Operate a browser session                                                               | `browser`                                                                                            | [Browser](/tools/browser)                                                                                              |
-| Operator UI             | Arrange connected Control UI panes, panels, and navigation                              | `screen`                                                                                             | [Screen](/tools/screen)                                                                                                |
-| Messaging and channels  | Send replies or channel actions                                                         | `message`                                                                                            | [Agent send](/tools/agent-send)                                                                                        |
-| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status                    | `sessions_*`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)                            |
-| Automation              | Schedule work or respond to background events                                           | `cron`, `heartbeat_respond`                                                                          | [Automation](/automation)                                                                                              |
-| Gateway and nodes       | Inspect Gateway state or paired target devices                                          | `gateway`, `nodes`                                                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
-| Media                   | Analyze, generate, or speak media                                                       | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                 | [Media overview](/tools/media-overview)                                                                                |
-| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                   | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
+| Category                | Use when the agent needs to...                                                               | Representative tools                                                                                                | Read next                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis                       | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
+| Files                   | Read and change workspace files                                                              | `read`, `write`, `edit`, `apply_patch`                                                                              | [Apply patch](/tools/apply-patch)                                                                                      |
+| Human input             | Pause for a structured decision owned by the user                                            | `ask_user`                                                                                                          | [Ask user](/tools/ask-user)                                                                                            |
+| Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
+| Browser                 | Operate a browser session                                                                    | `browser`                                                                                                           | [Browser](/tools/browser)                                                                                              |
+| Operator UI             | Arrange connected Control UI panes, panels, and navigation                                   | `screen`                                                                                                            | [Screen](/tools/screen)                                                                                                |
+| Messaging and channels  | Send replies or channel actions                                                              | `message`                                                                                                           | [Agent send](/tools/agent-send)                                                                                        |
+| Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)     |
+| Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                              |
+| Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
+| Media                   | Analyze, generate, or speak media                                                            | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                | [Media overview](/tools/media-overview)                                                                                |
+| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
 
 <Note>
 Code Mode and Tool Search are experimental OpenClaw agent surfaces. Codex
@@ -181275,6 +181263,7 @@ the current turn:
   discovery
 - [Code Mode](/tools/code-mode) for compact JavaScript or TypeScript workflows
   over a hidden OpenClaw tool catalog
+- [Swarm](/tools/swarm) for structured fan-out and collection from Code Mode
 
 
 
@@ -181345,8 +181334,8 @@ also prompts for:
 `tools.web.search.provider` is auto-detected from available API keys when omitted;
 set it to `kimi` explicitly if multiple search credentials are configured.
 
-Equivalent scoped form under `tools.web.search.kimi` (`apiKey`, `baseUrl`, `model`)
-also works; both shapes merge into the same resolved config.
+Configure Kimi-specific `apiKey`, `baseUrl`, and `model` values under
+`plugins.entries.moonshot.config.webSearch`.
 
 Defaults: `baseUrl` defaults to `https://api.moonshot.ai/v1` when omitted, `model`
 defaults to `kimi-k2.6`.
@@ -181939,11 +181928,11 @@ not.
 # Section: tools/loop-detection.md
 
 ---
-summary: "How to enable and tune guardrails that detect repetitive tool-call loops"
+summary: "How to enable guardrails that detect repetitive tool-call loops"
 title: "Tool-loop detection"
 read_when:
   - A user reports agents getting stuck repeating tool calls
-  - You need to tune repetitive-call protection
+  - You need to control repetitive-call protection
   - You are editing agent tool/runtime policies
   - You hit `compaction_loop_persisted` aborts after a context-overflow retry
 ---
@@ -181953,7 +181942,7 @@ both configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
-2. **Post-compaction guard** (`postCompactionGuard`) - enabled whenever
+2. **Post-compaction guard** - enabled whenever
    `enabled` is not explicitly `false`. Arms after every compaction-retry and
    aborts the run if the agent repeats the same `(tool, args, result)` triple
    within the window.
@@ -181971,26 +181960,13 @@ Set `tools.loopDetection.enabled: false` to silence both guardrails.
 
 ## Configuration block
 
-Global defaults, with every documented field shown:
+Global setting:
 
 ```json5
 {
   tools: {
     loopDetection: {
       enabled: false, // master switch for the rolling-history detectors
-      historySize: 30,
-      warningThreshold: 10,
-      criticalThreshold: 20,
-      unknownToolThreshold: 10,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-      postCompactionGuard: {
-        windowSize: 3, // armed after compaction-retry; runs unless enabled is explicitly false
-      },
     },
   },
 }
@@ -182007,8 +181983,6 @@ Per-agent override (optional, at `agents.list[].tools.loopDetection`):
         tools: {
           loopDetection: {
             enabled: true,
-            warningThreshold: 8,
-            criticalThreshold: 16,
           },
         },
       },
@@ -182017,24 +181991,13 @@ Per-agent override (optional, at `agents.list[].tools.loopDetection`):
 }
 ```
 
-Per-agent settings overlay the global block field by field (including nested
-`detectors` and `postCompactionGuard`), so an agent only needs to set the
-fields it wants to change.
+The per-agent setting overrides the global setting.
 
 ### Field behavior
 
-| Field                            | Default | Effect                                                                                                                                     |
-| -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                        | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard.                                          |
-| `historySize`                    | `30`    | Number of recent tool calls kept for analysis.                                                                                             |
-| `warningThreshold`               | `10`    | Repeat count before a pattern is classified as warning-only.                                                                               |
-| `criticalThreshold`              | `20`    | Repeat count for blocking a no-progress loop pattern. Runtime clamps this above `warningThreshold` if misconfigured.                       |
-| `unknownToolThreshold`           | `10`    | Blocks repeated calls to the same unavailable tool after this many misses. Not gated by `detectors`.                                       |
-| `globalCircuitBreakerThreshold`  | `30`    | Global no-progress breaker across all detectors. Runtime clamps this above `criticalThreshold` if misconfigured. Not gated by `detectors`. |
-| `detectors.genericRepeat`        | `true`  | Warns on repeated same-tool + same-args calls; blocks once those calls also return identical outcomes.                                     |
-| `detectors.knownPollNoProgress`  | `true`  | Detects known no-progress polling patterns (`process` with `action: "poll"`/`"log"`, `command_status`).                                    |
-| `detectors.pingPong`             | `true`  | Detects alternating no-progress ping-pong patterns between two calls.                                                                      |
-| `postCompactionGuard.windowSize` | `3`     | Attempts the guard stays armed after compaction, and the count of identical triples that aborts the run.                                   |
+| Field     | Default | Effect                                                                                            |
+| --------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
@@ -182047,19 +182010,9 @@ from earlier runs.
 
 ## Recommended setup
 
-- For smaller models, set `enabled: true` and leave thresholds at their
-  defaults. Flagship models rarely need rolling-history detection and can
+- For smaller models, set `enabled: true`. Flagship models rarely need rolling-history detection and can
   leave the master switch `false` while still benefiting from the
   post-compaction guard.
-- Keep thresholds ordered `warningThreshold < criticalThreshold <
-globalCircuitBreakerThreshold`; the runtime nudges `criticalThreshold` and
-  `globalCircuitBreakerThreshold` upward if you set them at or below the
-  threshold they must exceed.
-- If false positives occur:
-  - Raise `warningThreshold` and/or `criticalThreshold`.
-  - Optionally raise `globalCircuitBreakerThreshold`.
-  - Disable only the specific detector causing issues (`detectors.<name>: false`).
-  - Reduce `historySize` for a shorter historical window.
 - To disable everything, including the post-compaction guard, set
   `tools.loopDetection.enabled: false` explicitly.
 
@@ -182067,8 +182020,7 @@ globalCircuitBreakerThreshold`; the runtime nudges `criticalThreshold` and
 
 After a compaction-retry following a context-overflow, the runner arms a
 short-window guard on the next few tool calls. If the agent emits the same
-`(toolName, argsHash, resultHash)` triple `postCompactionGuard.windowSize`
-times within that window, the guard concludes compaction did not break the
+`(toolName, argsHash, resultHash)` triple enough times within that window, the guard concludes compaction did not break the
 loop and aborts the run with a `compaction_loop_persisted` error.
 
 The guard is gated by the master `tools.loopDetection.enabled` flag with one
@@ -182083,16 +182035,11 @@ so a no-config user still gets the protection.
     loopDetection: {
       // master switch; set false to disable the guard along with the rolling detectors
       enabled: true,
-      postCompactionGuard: {
-        windowSize: 3, // default
-      },
     },
   },
 }
 ```
 
-- Lower `windowSize` is stricter (fewer attempts before abort).
-- Higher `windowSize` gives the agent more recovery attempts.
 - The guard never aborts while results are changing; only byte-identical
   results across the window trigger it.
 - It only arms in the immediate aftermath of a compaction-retry, not at other
@@ -182394,7 +182341,7 @@ MiniMax Search uses these endpoints:
 If `plugins.entries.minimax.config.webSearch.region` is unset, OpenClaw resolves
 the region in this order:
 
-1. `tools.web.search.minimax.region` / plugin-owned `webSearch.region`
+1. Plugin-owned `webSearch.region`
 2. `MINIMAX_API_HOST`
 3. `models.providers.minimax.baseUrl`
 4. `models.providers.minimax-portal.baseUrl`
@@ -185084,6 +185031,8 @@ read_when:
 
 When the agent calls `show_widget`, OpenClaw core wraps `widget_code` in a minimal HTML document, stores it as a Canvas document, and returns a preview handle. The Control UI renders that handle as a sandboxed iframe directly under the tool call, while native apps use an isolated web view. Both restore the widget after history reload.
 
+In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinning reuses the exact hosted document; it does not fetch widget HTML through the browser.
+
 For browser embedding, the wrapper document injects four small host bridges around the widget code:
 
 - A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
@@ -185156,7 +185105,15 @@ Both implementations use the same required fields:
 
 Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
 
-The core result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Discord returns the stored widget and posted-message identifiers.
+The core Canvas tool accepts these optional dashboard placement fields:
+
+- `pin`: also place the widget on the session dashboard.
+- `name`: stable widget name; defaults to a slug of `title`.
+- `tab`: destination tab slug.
+- `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
+- `after`: sibling widget name after which to place the widget.
+
+The core result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Pinned results also retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload. Discord returns the stored widget and posted-message identifiers.
 
 `discord_widget` remains registered as a deprecated alias for one release. New agent calls should use `show_widget`.
 
@@ -187605,6 +187562,7 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 <ParamField path="mode" type='"run" | "session"' default="run">
   If `thread: true` and `mode` is omitted, default becomes `session`. `mode: "session"` requires `thread: true`.
   If thread binding is unavailable for the requester channel, use `mode: "run"` instead.
+  With `visible: true`, omit `mode`; visible sessions are persistent and do not support `mode: "run"`.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
@@ -187635,7 +187593,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, light bootstrap context, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is also rejected when inherited tool restrictions cannot be carried into the dashboard session. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is rejected when the requester was itself spawned with an inherited tool allowlist or denylist; that restriction is fixed at spawn time and has no config override. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -188067,6 +188025,445 @@ still need normal device approval for scope upgrades.
 - [Agent send](/tools/agent-send)
 - [Background tasks](/automation/tasks)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+
+
+
+# Section: tools/swarm.md
+
+---
+summary: "Orchestrate concurrent sub-agents from Code Mode scripts with structured results, bounded fan-out, and live progress"
+title: "Swarm"
+sidebarTitle: "Swarm"
+read_when:
+  - You want a Code Mode script to fan out work across several agents
+  - You need structured child results, decision gates, or first-completion pipelines
+  - You are enabling or tuning tools.swarm limits
+  - You want to observe collector children in the session dashboard
+---
+
+Swarm is an experimental, opt-in way to orchestrate many sub-agents from a
+[Code Mode](/tools/code-mode) script. Use normal JavaScript or TypeScript
+control flow such as `Promise.all`, `while`, and `if` to fan out work, collect
+results, and make decisions.
+
+There is no graph DSL and no separate workflow format. The program is the
+orchestration. Swarm adds awaitable collector children, structured results,
+bounded concurrency, and progress reporting to that program.
+
+## Enable Swarm
+
+The recommended path is **Settings → Labs → Swarm** in the Control UI. The
+toggle takes effect immediately and writes `tools.swarm.enabled` to your
+configuration.
+
+You can also enable Swarm directly in `openclaw.json`:
+
+```json5
+{
+  tools: {
+    swarm: {
+      enabled: true,
+      maxConcurrent: 8,
+      maxChildrenPerGroup: 50,
+      maxTotalPerGroup: 200,
+      waitTimeoutSecondsMax: 600,
+      defaultAgentId: "",
+    },
+  },
+}
+```
+
+Boolean shorthand enables or disables the feature with all other values at
+their defaults:
+
+```json5
+{
+  tools: {
+    swarm: true,
+  },
+}
+```
+
+| Field                   | Default | Description                                                                                                                    |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`               | `false` | Exposes collector-mode spawn options, `agents_wait`, and the Code Mode `agents.*` guest API.                                   |
+| `maxConcurrent`         | `8`     | Maximum collector children running concurrently in one swarm group. Additional accepted children queue in FIFO order.          |
+| `maxChildrenPerGroup`   | `50`    | Maximum live collector children in one group.                                                                                  |
+| `maxTotalPerGroup`      | `200`   | Maximum collector children a group may spawn over its lifetime. This is the runaway-spawn backstop.                            |
+| `waitTimeoutSecondsMax` | `600`   | Maximum timeout accepted by one `agents_wait` call. The call default is 30 seconds.                                            |
+| `defaultAgentId`        | `""`    | Target agent used when a spawn omits `agentId`. An empty value uses the requesting agent. Existing sub-agent allowlists apply. |
+
+Numeric values must be positive integers. OpenClaw bounds
+`maxConcurrent` to `1`–`1000`, `maxChildrenPerGroup` to `1`–`10000`,
+`maxTotalPerGroup` to `1`–`100000`, and `waitTimeoutSecondsMax` to
+`1`–`86400`.
+
+You can override Swarm for one configured agent with
+`agents.list[].tools.swarm`. The per-agent object merges over the top-level
+`tools.swarm` object.
+
+## Requirements
+
+The `agents.run`, `phase`, and `log` guest globals require both Swarm and
+OpenClaw Code Mode:
+
+```json5
+{
+  tools: {
+    codeMode: true,
+    swarm: true,
+  },
+}
+```
+
+Code Mode must also have effective access to `sessions_spawn`. Tool profiles,
+allow/deny policy, provider rules, and sandbox policy can remove that tool.
+See [Code Mode activation](/tools/code-mode#activation) and
+[Sub-agents](/tools/subagents) if a script reports that `sessions_spawn` is
+unavailable.
+
+`defaultAgentId` and per-run `agentId` values must name a configured target
+permitted by the requester's `subagents.allowAgents` policy. OpenClaw rejects
+an unknown or disallowed target instead of falling back to another agent.
+
+## Write a Swarm script
+
+When Swarm is enabled, Code Mode exposes this guest API:
+
+```typescript
+type AgentRunOptions = {
+  label?: string;
+  model?: string;
+  thinking?: string;
+  fastMode?: boolean | "auto";
+  agentId?: string;
+  schema?: Record<string, unknown>;
+  phase?: string;
+};
+
+agents.run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
+agents.run<T>(prompt: string, options: AgentRunOptions & { schema: Record<string, unknown> }): Promise<T>;
+phase(title: string): void;
+log(message: string): void;
+```
+
+Without `schema`, `agents.run()` resolves to the child's final text. With a
+JSON Schema, it resolves to the value submitted through the child's
+`structured_output` tool. A failed, killed, timed-out, or schema-invalid child
+rejects the promise with a `SwarmAgentError`. Read the exact generated
+declarations and short orchestration idioms from `API.read("agents.d.ts")`
+inside Code Mode.
+
+Use `label` for a recognizable child name in the dashboard and sidebar. Use
+`phase` in the options to publish a phase immediately before that child
+starts, or call `phase()` when several children belong to the same stage.
+`log()` publishes a short progress note. Progress calls are fire-and-forget;
+they do not delay the script if the UI is unavailable.
+
+### Fan out in parallel with structured results
+
+This example launches one researcher per topic, waits for all of them, then
+asks a final child to synthesize their structured reports:
+
+```javascript
+const reportSchema = {
+  type: "object",
+  properties: {
+    finding: { type: "string" },
+    evidence: { type: "array", items: { type: "string" } },
+    confidence: { type: "number" },
+  },
+  required: ["finding", "evidence", "confidence"],
+  additionalProperties: false,
+};
+
+const topics = ["authentication", "storage", "recovery"];
+phase("Independent review");
+
+const reports = await Promise.all(
+  topics.map((topic) =>
+    agents.run(`Review the ${topic} path. Return one finding with evidence.`, {
+      label: `review-${topic}`,
+      thinking: "high",
+      fastMode: "auto",
+      schema: reportSchema,
+    }),
+  ),
+);
+
+phase("Synthesis");
+log(`Collected ${reports.length} independent reports.`);
+
+return await agents.run(
+  `Reconcile these reports and explain disagreements:\n${JSON.stringify(reports)}`,
+  { label: "synthesis" },
+);
+```
+
+`Promise.all` is the fan-out and fan-in boundary. OpenClaw starts up to
+`maxConcurrent` children for the group and queues the rest in submission
+order.
+
+### Loop on a decision gate
+
+Use a bounded `while` loop when each pass decides whether another pass is
+needed:
+
+```javascript
+const gateSchema = {
+  type: "object",
+  properties: {
+    ready: { type: "boolean" },
+    reason: { type: "string" },
+    nextAction: { type: "string" },
+  },
+  required: ["ready", "reason", "nextAction"],
+  additionalProperties: false,
+};
+
+let pass = 0;
+let decision = { ready: false, reason: "Not checked", nextAction: "Review" };
+
+while (!decision.ready && pass < 4) {
+  pass += 1;
+  phase(`Decision pass ${pass}`);
+  decision = await agents.run(
+    `Check whether the release evidence is complete. Previous decision: ${JSON.stringify(decision)}`,
+    {
+      label: `release-gate-${pass}`,
+      schema: gateSchema,
+    },
+  );
+  log(decision.reason);
+}
+
+if (!decision.ready) {
+  throw new Error(`Gate still closed after ${pass} passes: ${decision.nextAction}`);
+}
+
+return decision;
+```
+
+Always bound decision loops. `maxTotalPerGroup` is the final safety backstop,
+not a substitute for a clear stopping condition.
+
+### Process the first child that finishes
+
+`agents.run()` returns an ordinary promise, so `Promise.race` can react to the
+first Code Mode child. For harnesses that call the lower-level tools,
+`agents_wait` provides the same first-completion boundary: it returns as soon
+as at least one requested run completes, or when the bounded timeout expires.
+See [Use Swarm from other harnesses](#use-swarm-from-other-harnesses) for the
+complete drain loop.
+
+## How collector children behave
+
+Collector children are ordinary isolated sub-agent sessions with a different
+completion path. They write a durable collector result for the parent to
+await instead of announcing or steering a reply back into the parent session.
+
+The target agent resolves in this order:
+
+1. `agentId` on the spawn or `agents.run()` call.
+2. `tools.swarm.defaultAgentId`.
+3. The requesting agent.
+
+A dedicated, lean worker agent is useful when swarm children need a smaller
+tool surface, cheaper model, or tighter sandbox policy. OpenClaw does not ship
+a built-in `worker` agent id; configure one before naming it as the default.
+Harden that worker with `tools.swarm: false` in its per-agent configuration so
+it can be spawned but cannot start swarms from its own top-level sessions:
+
+```json5
+{
+  tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        subagents: { allowAgents: ["worker"] },
+      },
+      { id: "worker", tools: { swarm: false } },
+    ],
+  },
+}
+```
+
+Collector approvals fail closed. A child never opens an operator approval
+prompt. A tool action that would require approval is denied, and the child can
+report that denial in its result so the script can decide what to do next.
+
+For structured output, OpenClaw adds a synthetic `structured_output` tool to
+the child and validates its payload against the supplied JSON Schema. An
+invalid or missing payload gets one corrective nudge. If the retry still does
+not validate, the collector completion keeps the child's raw text, leaves
+`structured` unset, and includes `schemaError`. The low-level `agents_wait`
+result exposes those fields for explicit recovery logic.
+
+### Children are leaves
+
+Swarm children are leaves by default. The universal
+`agents.defaults.subagents.maxSpawnDepth` guard prevents a child from spawning
+its own children at the default depth of `1`. The usual orchestration idiom is
+to return work to the parent, not spawn more work from a child:
+
+```javascript
+const plan = await agents.run("Plan this job as independent tasks.", {
+  schema: {
+    type: "object",
+    properties: { tasks: { type: "array", items: { type: "string" } } },
+    required: ["tasks"],
+    additionalProperties: false,
+  },
+});
+return await Promise.all(plan.tasks.map((task) => agents.run(task)));
+```
+
+Nested sub-agents are an operator opt-in through
+`agents.defaults.subagents.maxSpawnDepth` and are discouraged for Swarm.
+Group caps, budgets, and observability all assume flat collector groups.
+
+Every child has one admission owner. Announce and interactive children use
+`agents.defaults.subagents.maxChildrenPerAgent` (default `5`) and do not count
+collector children. Collector children use only `maxChildrenPerGroup` and
+`maxTotalPerGroup`; they do not consume the per-session child budget. The spawn
+depth guard still applies to both modes.
+
+After admission, children above `maxConcurrent` queue FIFO within their swarm
+group, nested inside the global sub-agent lane. These concurrency layers queue
+work rather than rejecting it. A collector spawn that exceeds either group cap
+is rejected with the relevant config key in the error.
+
+## Observe a Swarm
+
+Open the parent session's dashboard in the Control UI while a swarm is active.
+The Swarm widget renders each active collector group as one dot per child with
+queued, running, done, or failed state. Labels appear in dot tooltips, so short
+stable labels make larger swarms easier to read.
+
+The session sidebar keeps the normal parent/child tree. Expand the parent row
+to inspect a collector child or open its transcript without losing the swarm
+hierarchy.
+
+Collector results remain waitable until their group is archived. After every
+member reaches its retention deadline, OpenClaw archives the group's children
+as a batch so completed swarms do not remain in the live session tree.
+
+## Use Swarm from other harnesses
+
+You can use Swarm without OpenClaw Code Mode. Its core tools are
+harness-independent: start collector children with
+`sessions_spawn({ collect: true })` and drain them with bounded `agents_wait`
+calls.
+
+Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
+`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
+`agents_wait` calls support the full 600-second timeout. Use this pattern:
+
+```javascript
+const tasks = [
+  "Check the authentication path.",
+  "Check the storage path.",
+  "Check the recovery path.",
+];
+
+const launches = await Promise.all(
+  tasks.map((task, index) =>
+    tools.sessions_spawn({
+      task,
+      collect: true,
+      label: `review-${index + 1}`,
+    }),
+  ),
+);
+
+for (const launch of launches) {
+  if (launch.status !== "accepted") {
+    throw new Error(launch.error ?? "Collector spawn was not accepted.");
+  }
+}
+
+const pending = new Set(launches.map((launch) => launch.runId));
+const completed = [];
+
+while (pending.size > 0) {
+  const ids = [...pending].slice(0, 1000);
+  const batch = await tools.agents_wait({
+    ids,
+    timeoutSeconds: 30,
+  });
+
+  // Rotate this bounded window behind ids that have not been checked yet.
+  for (const runId of ids) {
+    if (pending.delete(runId)) pending.add(runId);
+  }
+
+  for (const item of batch.completed) {
+    pending.delete(item.runId);
+    if (item.status !== "done") {
+      throw new Error(item.schemaError ?? item.result ?? `${item.runId}: ${item.status}`);
+    }
+    completed.push(item); // Process each result as soon as it finishes.
+  }
+
+  for (const failure of batch.errors ?? []) {
+    pending.delete(failure.runId);
+    throw new Error(`${failure.runId}: ${failure.error}`);
+  }
+}
+
+return completed;
+```
+
+Each `agents_wait` call accepts 1–1000 run ids. It returns:
+
+```typescript
+type AgentsWaitResult = {
+  completed: Array<{
+    runId: string;
+    status: "done" | "failed" | "killed" | "timeout";
+    result: string;
+    structured?: unknown;
+    schemaError?: string;
+    sessionKey: string;
+    label?: string;
+    usage?: { inputTokens: number; outputTokens: number };
+  }>;
+  pending: string[];
+  errors?: Array<{
+    runId: string;
+    error: "not_found" | "not_owner";
+  }>;
+};
+```
+
+The call returns immediately when any requested child is already complete,
+when at least one pending child completes, when no valid pending ids remain,
+or when its timeout expires. Completed records are idempotent, so passing an
+already-completed run id returns its result again. Only the spawning session
+or its authorized parent chain can wait on a collector.
+
+This is bounded long polling, not a busy status loop. Keep passing only the
+remaining run ids until `pending` is empty. Collector mode supports native
+OpenClaw sub-agents; it does not support ACP runtime, thread binding, visible
+sessions, or persistent session mode.
+
+## Limits and roadmap
+
+Swarm v1 runs one-shot collector children; the planned `agents.session()` API
+will add stateful multi-turn workers. Children currently run on the local
+Gateway's sub-agent lane; cloud placement is planned as an explicit spawn
+option. Saved workflow definitions and a graph DSL are not part of Swarm's
+current direction.
+
+## Related
+
+- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
+- [Tools overview](/tools) for tool profiles and policy routing
 
 
 
@@ -191391,8 +191788,7 @@ every provider. xAI credentials are always required.
 `x_search` posts to `<baseUrl>/responses` when
 `plugins.entries.xai.config.xSearch.baseUrl` is set. If that field is omitted,
 it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
-legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint
-(`https://api.x.ai/v1`).
+public xAI endpoint (`https://api.x.ai/v1`).
 
 ### x_search parameters
 
@@ -191596,7 +191992,7 @@ Theme, theme mode, text size, language, and chat display preferences sync throug
 
 ## OpenClaw system care
 
-Open **OpenClaw** in the sidebar to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Manage plugins
 
@@ -191669,13 +192065,13 @@ and [Linux](/platforms/linux) desktop apps, the
 
 ## Sidebar navigation
 
-The sidebar organizes everything around the agent. The identity row at the top is the active agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Usage**, **Automations**, and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Threads** for the agent's chat sessions (the main session stays behind Home; sessions it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and the Codex/Claude CLI catalogs. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Threads, and assigning a session to a custom group always wins over the automatic zone classification. The Threads header holds the sort control (Created or Last updated, plus a Group by toggle) and the **+** that opens the New session page. Opening a session moves the selection highlight without reordering rows. Parent sessions with recent child runs show a disclosure and child count; expand it to inspect nested child sessions, live or terminal status, and runtime without leaving the sidebar. Selecting a child opens its chat and automatically reveals its ancestor path. Child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Threads.
+The sidebar organizes everything around the agent. The identity row at the top is the active agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Usage**, **Automations**, and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Threads** for the agent's chat sessions (the main session stays behind Home; sessions it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and the Codex/Claude CLI catalogs. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Threads, and assigning a session to a custom group always wins over the automatic zone classification. The Threads header holds the sort control (Created or Last updated, plus a Group by toggle) and the **+** that opens the New session page. Opening a session moves the selection highlight without reordering rows. Parent sessions with recent child runs show a disclosure and child count; expand it to inspect nested child sessions, live or terminal status, and runtime without leaving the sidebar. Selecting a child opens its chat and automatically reveals its ancestor path. Child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names and their order live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Threads.
 
 ## New session page
 
 The **+** in the sidebar session-list header opens a full-page draft at `/new`: nothing is created until you send the first message. A target row above the message box picks where the session works: the agent (multi-agent setups), where exec runs (**Gateway · local** or a paired node that exposes `system.run`; requires `operator.admin`), the folder (defaults to the agent workspace; other absolute Gateway paths require `operator.admin` and a worktree), and an optional **Worktree** toggle with a base-branch picker (backed by `worktrees.branches`, so no fetch happens) and an optional worktree name (the branch becomes `openclaw/<name>`). The composer footer chooses the new session's model and reasoning level, and cloud starts persist both choices before dispatching the session to its worker. The folder chip's browse button opens an inline directory picker backed by the admin-only `fs.listDir` method. Its top level shows the Gateway and every known node; offline nodes and nodes without directory-browsing support stay visible but disabled. Selecting the Gateway starts from the current folder or Gateway home. Selecting a capable node browses that node's host filesystem, binds exec to it, and uses the selected absolute node path directly (managed worktrees remain Gateway-only). Submitting calls `sessions.create` with the first message, so the run starts in the same round-trip and the UI jumps to the new session's chat. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
 
-Inside **Settings**, the dedicated sidebar starts with a **Search settings** field for quickly finding settings sections.
+Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
 
 A **Search** field at the top of the sidebar opens the command palette (⌘K). Clicking the agent identity row at the top of the sidebar opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity row shows the agent's avatar (identity image or emoji), name, connection dot, and a live subtitle. Clicking it opens the agent menu: an agent switcher (multi-agent setups), "What can this agent do?", **Agent settings**, **Settings**, mobile pairing, **Docs**, the build chip, and the color-mode toggle. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own `?agent=` selection and does not follow the shared page scope. The footer bar holds the product logo, the build chip, a gateway connection dot, and a Settings shortcut. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma opens **Settings** without overriding the browser's Command-Comma shortcut. The sidebar header also holds the collapse toggle (⌘B); collapsing hides the sidebar entirely for a full-width workspace, and a floating expand control (or ⌘B) brings it back; the macOS app hosts that toggle natively in the titlebar instead. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
 
@@ -191700,7 +192096,7 @@ select it to open the owning Approvals page.
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and label partial snapshots when a probe or audit exceeds its UI budget.
     - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Threads page's archived view and keep their transcripts. Rows show an unread dot for sessions with activity since their last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
-    - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI.
+    - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI. Claude Desktop rows also retain their local custom-group label when present; OpenClaw reads that mapping from Desktop's local store and never writes it.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
     - Import Memory (`/memory-import`, reached from the Agents page's Memory tab): preview and copy local Claude Code auto-memory, Codex consolidated memory, or Hermes memory files into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
@@ -191718,7 +192114,7 @@ select it to open the owning Approvals page.
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
-    - Settings navigation groups pages by attention: General, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Devices); Agents & Tools (Agents, AI & Agents, Model Providers, MCP, Automation, Labs); Privacy & Security (Security, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). General is a slim hub with model defaults, language, and gateway host stats; every other setting lives on exactly one page.
+    - Settings navigation starts with Ask OpenClaw, then groups pages by attention: General, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Devices); Agents & Tools (Agents, AI & Agents, Model Providers, MCP, Automation, Labs); Privacy & Security (Security, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). General is a slim hub with model defaults, language, and gateway host stats; every other setting lives on exactly one page.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Approvals includes newest-first, 30-day history for resolved exec, plugin, and system-agent requests. Filter by kind or page through older rows to review the decision, reason, source session, and resolver attribution recorded by the Gateway.
     - Labs exposes shipped experimental switches. Code Mode is the current entry and saves `tools.codeMode.enabled` immediately; unshipped experiments do not appear or write speculative config keys.
@@ -191868,7 +192264,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Thread search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Threads page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch archive/delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
