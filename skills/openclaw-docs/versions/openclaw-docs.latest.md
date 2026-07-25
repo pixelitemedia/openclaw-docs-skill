@@ -5306,6 +5306,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: What the audit checks (high level)
   - H3: Priority order when triaging findings
   - H2: Hardened baseline in 60 seconds
+  - H3: Requester-scoped controls and prompt context
   - H2: Trust boundary matrix
   - H2: Not vulnerabilities by design
   - H2: Gateway and node trust
@@ -8857,6 +8858,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Published channel setup compatibility
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
+  - H3: Media legacy projection
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
@@ -9141,7 +9143,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Claude sessions across computers
-  - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+  - H2: Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists
   - H3: How it works
@@ -14292,11 +14294,11 @@ conversation) and for `session:compact:before` / `session:compact:after`
 
 **Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
 
-**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
+**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, and `context.media`. `context.mediaPath` and `context.mediaType` remain deprecated aliases for the first fact.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
 
@@ -18039,6 +18041,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   agents: {
     entries: {
       codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -20032,6 +20035,7 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
   agents: {
     entries: {
       main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@?openclaw", "\\+?15555550123"],
         },
@@ -20207,6 +20211,8 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
 Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -20433,6 +20439,7 @@ Each fact defaults to enabled when the channel produces it. Set the correspondin
   agents: {
     entries: {
       main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
@@ -35128,7 +35135,7 @@ The repository contains one directory per committed snapshot. Each snapshot dire
 - `manifest.json`
 - `database.sqlite`
 
-Snapshot creation verifies the live database before reading it, uses SQLite `VACUUM INTO` to capture committed WAL state into a compact database, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove transient delivery queue rows and compact again so deleted queue payloads are not retained in free pages.
+Snapshot creation verifies the live database before reading it, uses SQLite's online backup API to capture committed WAL state without holding one long read transaction, closes the live database, compacts the private copy with `VACUUM`, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove transient delivery queue rows before compaction so deleted queue payloads are not retained in free pages.
 
 Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
 
@@ -35145,7 +35152,7 @@ Verification checks the strict manifest shape, artifact size and SHA-256, SQLite
 
 Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
 
-Snapshot creation applies the same owner, ACL, ancestor, and path-identity checks to the repository before staging or publishing database bytes.
+Snapshot creation applies the same owner, ACL, ancestor, and path-identity checks to the repository before staging or publishing database bytes. Newly created directory edges and final publication metadata are synchronized through the shared `fs-safe` durability boundary before success is reported on supported filesystems.
 
 Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. The target parent has the same path-security requirements as verification scratch. Activating a restored database remains an explicit offline operator step.
 
@@ -35180,7 +35187,7 @@ During archive creation, OpenClaw excludes known live-mutation paths before `tar
 
 These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted.
 
-SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
+SQLite databases under the state directory are captured with SQLite's online backup API and compacted offline with `VACUUM` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a direct file copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
@@ -35201,7 +35208,9 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 - Available space for the temporary archive write plus the final archive
 - Time to walk large workspace trees and compress them into a `.tar.gz`
 - Time to rescan the archive with `--verify` or `openclaw backup verify`
-- Destination filesystem behavior: OpenClaw prefers a no-overwrite hard-link publish step and falls back to exclusive copy when hard links are unsupported
+- Destination filesystem behavior: OpenClaw requires no-overwrite hard-link publication so a final archive path never exposes an in-progress copy; unsupported filesystems fail with an actionable error
+
+If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
 
@@ -35743,8 +35752,9 @@ title: "Claws"
 # `openclaw claws`
 
 A Claw is a versioned setup for one new OpenClaw agent. It can describe the
-agent configuration, workspace files, skills, plugins, MCP servers, and cron
-jobs that agent needs. A Claw does not replace or modify an existing agent.
+agent's portable identity, workspace files, skills, plugins, MCP servers, and
+cron jobs. Harness-specific agent settings may be carried in a referenced
+package profile. A Claw does not replace or modify an existing agent.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
 Enable the command surface explicitly:
@@ -35759,8 +35769,8 @@ separate registry track and are not part of this command surface yet.
 
 ## Create a Claw package
 
-A package contains `package.json`, a `CLAW.md` manifest, and any workspace
-sidecars referenced by the manifest:
+A package contains `package.json`, a `CLAW.md` manifest, and any profiles or
+workspace sidecars referenced by that manifest:
 
 ```json
 {
@@ -35780,8 +35790,8 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
-  tools:
-    deny: [exec]
+metadata:
+  openclaw.config: profiles/openclaw.yml
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -35794,9 +35804,50 @@ cronJobs: []
 Creates one agent for reviewing and routing incidents.
 ```
 
+`metadata` is a string-to-string map for portable consumer hints. OpenClaw's
+`openclaw.config` key points to an optional, package-relative YAML profile. The
+exported default is `profiles/openclaw.yml`; the pointer is normative, so a
+package may choose another safe relative `.yml` or `.yaml` path.
+
+```yaml
+schemaVersion: 1
+agent:
+  tools:
+    profile: coding
+    alsoAllow: [cron]
+    deny: [exec]
+    fs:
+      workspaceOnly: true
+  memory:
+    search:
+      enabled: true
+      rememberAcrossConversations: true
+      sources: [memory, sessions]
+```
+
+This profile exists only inside the Claw package. OpenClaw validates and uses it
+while inspecting, adding, updating, and exporting that Claw; it is not copied
+to the user's normal OpenClaw configuration path. Other harnesses can ignore
+the namespaced metadata key and consume the portable manifest fields.
+
 The same strict version 1 schema continues to accept grouped JSON manifests.
-The remaining schema fragments on this page use JSON, with equivalent keys
-available in `CLAW.md` frontmatter.
+Grouped JSON uses the same `metadata.openclaw.config` pointer rather than
+embedding a second copy of the OpenClaw profile. The remaining schema fragments
+on this page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
+
+The OpenClaw package profile may select any built-in tool profile registered by
+the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
+weaken host filesystem confinement. `tools.allow` remains available as an
+explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+`memory.search.enabled`, choose the portable `memory` and `sessions` sources,
+and opt into cross-conversation memory with `rememberAcrossConversations`.
+Declaring the `sessions` source requires that opt-in.
+Host policy still constrains these settings, and Claws do not carry custom
+profile definitions, providers, credentials, bindings, or local memory paths.
+The referenced profile is limited to 256 KiB, must be JSON-compatible YAML, may
+not use aliases, anchors, tags, or merge keys, and must be a regular,
+non-symlinked, non-hardlinked file inside the package.
 
 Package and workspace paths must remain inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace sources enforce
@@ -44221,6 +44272,25 @@ hosted snapshot or bundled fallback result without failing the command. Pinned
 refreshes fail unless they accept a fresh hosted payload, and successful hosted
 refreshes fail if OpenClaw cannot persist the validated snapshot.
 
+The built-in `clawhub-public` profile expects payload identity
+`clawhub-official`. OpenClaw will bundle ClawHub's production public key after
+ClawHub generates and hands off that key. Until then, the built-in profile does
+not grant signed-feed install authority. Public keys must come from a trusted
+release or operator channel, not from a key endpoint on the feed host.
+
+OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
+requires the decoded payload ID to match it. The built-in `clawhub-public`
+profile always declares its identity, preventing a valid document for another
+feed from being replayed through that profile.
+
+During the staged rollout, existing custom signed profiles that omit `feedId`
+retain signature verification without payload-identity binding. New custom
+profiles should declare `feedId`. The feed-profile configuration surface is
+landing separately with the presentation metadata needed by Control UI; its
+Doctor diagnostic must ask the operator to supply a missing identity and must
+not infer one from the feed URL. This trust binding does not restore the retired
+root `marketplaces` key.
+
 ## Related
 
 - [Building plugins](/plugins/building-plugins)
@@ -49536,7 +49606,7 @@ Two runtime families:
   built-in `openclaw` runtime, plus registered plugin harnesses such as
   `codex` and `copilot`.
 - **CLI backends** run a local CLI process while keeping the model ref
-  canonical. For example, `anthropic/claude-opus-4-8` with a model-scoped
+  canonical. For example, `anthropic/claude-opus-5` with a model-scoped
   `agentRuntime.id: "claude-cli"` means "select the Anthropic model, execute
   through Claude CLI." `claude-cli` is not an embedded harness id and must not
   be passed to AgentHarness selection.
@@ -49662,9 +49732,9 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -55245,11 +55315,11 @@ existing explicit primary model; `models auth login --set-default` and
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
-- Example model: `anthropic/claude-opus-4-6`
+- Example model: `anthropic/claude-opus-5`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
 - Preferred Claude CLI config keeps the model ref canonical and selects the CLI
-  backend separately: `anthropic/claude-opus-4-8` with
+  backend separately: `anthropic/claude-opus-5` with
   model-scoped `agentRuntime.id: "claude-cli"`. Legacy
   `claude-cli/claude-opus-4-7` refs still work for compatibility.
 
@@ -55259,7 +55329,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
 }
 ```
 
@@ -62983,9 +63053,9 @@ the model ref canonical and select the CLI runtime per model:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -64061,7 +64131,7 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       model: "openai/gpt-5.6-sol",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
         "vllm/*": {
@@ -64079,15 +64149,15 @@ Time format in system prompt. Default: `auto` (OS preference).
 - Runtime precedence is exact model policy first (`agents.entries.*.models["provider/model"]`, `agents.defaults.models["provider/model"]`, or `models.providers.<provider>.models[]`), then `agents.entries.*` / `agents.defaults.models["provider/*"]`, then provider-wide policy at `models.providers.<provider>.agentRuntime`.
 - Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.entries.*.agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
 - Eligible exact official HTTPS OpenAI Responses/ChatGPT routes with no authored request override may use the Codex harness implicitly. Provider/model `agentRuntime.id: "codex"` makes Codex a fail-closed requirement but does not make an incompatible route compatible.
-- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-8"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/<model>` refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
+- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-5"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/<model>` refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
 - This only controls text agent-turn execution. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
 | Alias               | Model                           |
 | ------------------- | ------------------------------- |
-| `opus`              | `anthropic/claude-opus-4-8`     |
-| `sonnet`            | `anthropic/claude-sonnet-4-6`   |
+| `opus`              | `anthropic/claude-opus-5`       |
+| `sonnet`            | `anthropic/claude-sonnet-5`     |
 | `gpt`               | `openai/gpt-5.4`                |
 | `gpt-mini`          | `openai/gpt-5.4-mini`           |
 | `gpt-nano`          | `openai/gpt-5.4-nano`           |
@@ -66225,7 +66295,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### `tools.toolsBySender`
 
-Restricts tools for a specific requester identity. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text.
+Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ```json5
 {
@@ -66349,7 +66419,7 @@ Configures inbound media understanding (image/audio/video):
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           capabilities: ["audio"],
         },
         { provider: "ollama", model: "gemma4:26b", capabilities: ["image"] },
@@ -66376,7 +66446,7 @@ Configures inbound media understanding (image/audio/video):
     **CLI entry** (`type: "cli"`):
 
     - `command`: executable to run
-    - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{MediaPath}}`)
+    - `args`: templated args (supports `{{AttachmentPath}}`, `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{AttachmentPath}}`). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` aliases remain available during their compatibility window but are deprecated.
 
     **Common fields:**
 
@@ -68311,7 +68381,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 ```
 
 - `enabled`: enables TLS termination at the gateway listener (HTTPS/WSS) (default: `false`).
-- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only.
+- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only. Generated files are published without overwriting existing paths and their parent directories are synchronized when the filesystem supports it; unsupported directory flushing emits a structured degraded-durability warning.
 - `certPath`: filesystem path to the TLS certificate file.
 - `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
 - `caPath`: optional CA bundle path for client verification or custom trust chains.
@@ -69075,28 +69145,34 @@ See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as 
 
 Template placeholders expanded in `tools.media.models[].args`:
 
-| Variable           | Description                                       |
-| ------------------ | ------------------------------------------------- |
-| `{{Body}}`         | Full inbound message body                         |
-| `{{RawBody}}`      | Raw body (no history/sender wrappers)             |
-| `{{BodyStripped}}` | Body with group mentions stripped                 |
-| `{{From}}`         | Sender identifier                                 |
-| `{{To}}`           | Destination identifier                            |
-| `{{MessageSid}}`   | Channel message id                                |
-| `{{SessionId}}`    | Current session UUID                              |
-| `{{IsNewSession}}` | `"true"` when new session created                 |
-| `{{MediaUrl}}`     | Inbound media pseudo-URL                          |
-| `{{MediaPath}}`    | Local media path                                  |
-| `{{MediaType}}`    | Media type (image/audio/document/…)               |
-| `{{Transcript}}`   | Audio transcript                                  |
-| `{{Prompt}}`       | Resolved media prompt for CLI entries             |
-| `{{MaxChars}}`     | Resolved max output chars for CLI entries         |
-| `{{ChatType}}`     | `"direct"` or `"group"`                           |
-| `{{GroupSubject}}` | Group subject (best effort)                       |
-| `{{GroupMembers}}` | Group members preview (best effort)               |
-| `{{SenderName}}`   | Sender display name (best effort)                 |
-| `{{SenderE164}}`   | Sender phone number (best effort)                 |
-| `{{Provider}}`     | Provider hint (whatsapp, telegram, discord, etc.) |
+| Variable                    | Description                                       |
+| --------------------------- | ------------------------------------------------- |
+| `{{Body}}`                  | Full inbound message body                         |
+| `{{RawBody}}`               | Raw body (no history/sender wrappers)             |
+| `{{BodyStripped}}`          | Body with group mentions stripped                 |
+| `{{From}}`                  | Sender identifier                                 |
+| `{{To}}`                    | Destination identifier                            |
+| `{{MessageSid}}`            | Channel message id                                |
+| `{{SessionId}}`             | Current session UUID                              |
+| `{{IsNewSession}}`          | `"true"` when new session created                 |
+| `{{AttachmentUrl}}`         | Current attachment URL or provider reference      |
+| `{{AttachmentPath}}`        | Current attachment local path                     |
+| `{{AttachmentContentType}}` | Current attachment MIME content type              |
+| `{{AttachmentDir}}`         | Directory containing `AttachmentPath`             |
+| `{{AttachmentIndex}}`       | Zero-based source fact index                      |
+| `{{Transcript}}`            | Audio transcript                                  |
+| `{{Prompt}}`                | Resolved media prompt for CLI entries             |
+| `{{MaxChars}}`              | Resolved max output chars for CLI entries         |
+| `{{ChatType}}`              | `"direct"` or `"group"`                           |
+| `{{GroupSubject}}`          | Group subject (best effort)                       |
+| `{{GroupMembers}}`          | Group members preview (best effort)               |
+| `{{SenderName}}`            | Sender display name (best effort)                 |
+| `{{SenderE164}}`            | Sender phone number (best effort)                 |
+| `{{Provider}}`              | Provider hint (whatsapp, telegram, discord, etc.) |
+
+The legacy `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}`
+names remain available during the plugin SDK compatibility window but are
+deprecated. New configuration should use the `Attachment*` variables.
 
 ---
 
@@ -71782,7 +71858,7 @@ Writes are compare-and-swap guarded: pass `--expected-revision <n>` to fail inst
 The agent can also update its own scratch: during a heartbeat turn, `heartbeat_respond` accepts an optional `scratch` string that fully replaces the monitor's scratch for future heartbeats.
 
 <Note>
-**Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, converts any valid legacy `tasks:` entries into cron jobs, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. For one stable upgrade window, an unmigrated legacy file remains a read-only fallback when no scratch revision exists, with a Gateway warning directing you to Doctor; new workspaces and completed migrations use database scratch only.
+**Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, converts any valid legacy `tasks:` entries into cron jobs, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. Runtime heartbeat instructions come from database scratch only; the runtime never reads `HEARTBEAT.md`.
 </Note>
 
 If scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If no scratch exists, the heartbeat still runs and the model decides what to do.
@@ -75907,7 +75983,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session.
+    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
@@ -80501,6 +80577,7 @@ exhaustive):
 | `plugins.<pluginId>.security_audit_failed`                      | warn               | A plugin-owned security audit collector threw an error                                  | that plugin's security-audit collector                                                                  | no       |
 | `skills.code_safety`                                            | warn/critical      | Skill installer metadata/code contains suspicious or dangerous patterns (`--deep` only) | skill install source                                                                                    | no       |
 | `skills.code_safety.scan_failed`                                | warn               | Skill code scan could not complete (`--deep` only)                                      | skill scan environment                                                                                  | no       |
+| `channels.discord.allowlisted_groups.broad_members`             | warn               | Allowlisted Discord guild/channel targets have no member or role restriction            | `channels.discord.guilds.*.users/roles`, per-channel `users/roles`                                      | no       |
 | `security.exposure.open_channels_with_exec`                     | warn/critical      | Shared/public rooms can reach exec-enabled agents                                       | `channels.*.dmPolicy`, `channels.*.groupPolicy`, `tools.exec.*`, `agents.entries.*.tools.exec.*`        | no       |
 | `security.exposure.open_groups_with_elevated`                   | critical           | Open DMs/groups + elevated tools create high-impact prompt-injection paths              | top-level or nested DM policy paths, account overrides, `channels.*.groupPolicy`                        | no       |
 | `security.exposure.open_groups_with_runtime_or_fs`              | critical/warn      | Open DMs/groups can reach command/file tools without sandbox/workspace guards           | DM/group policy paths, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode`          | no       |
@@ -80857,6 +80934,12 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
 Keeps the Gateway local-only, isolates DMs, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
 
 Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools regardless of config.
+
+### Requester-scoped controls and prompt context
+
+`tools.toolsBySender`, sender ownership, and owner-only tool inventories are evaluated against the current turn's originating requester. They do not authenticate or sanitize other content in that model prompt, including quoted text, prior shared-room history, forwarded content, fetched content, attachments, tool results, or other prompt inputs. Content from another person can therefore influence an owner-triggered turn when it is included in that turn's context.
+
+Treat these controls as defense in depth that reduces direct capability for a requester, not as hostile multi-user isolation. Use `contextVisibility` to filter supported channel-supplied context, restrict tools and sandbox the agent, and use separate gateways and ideally separate OS users or hosts when participants are mutually adversarial.
 
 ## Trust boundary matrix
 
@@ -83634,8 +83717,8 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     | Alias | Resolves to |
     | --- | --- |
-    | `opus` | `anthropic/claude-opus-4-8` |
-    | `sonnet` | `anthropic/claude-sonnet-4-6` |
+    | `opus` | `anthropic/claude-opus-5` |
+    | `sonnet` | `anthropic/claude-sonnet-5` |
     | `gpt` | `openai/gpt-5.4` |
     | `gpt-mini` | `openai/gpt-5.4-mini` |
     | `gpt-nano` | `openai/gpt-5.4-nano` |
@@ -86152,6 +86235,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                | Notes      |
 | --------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5`                     |            |
 | `anthropic/claude-opus-4-8`                   |            |
 | `anthropic/claude-sonnet-5`                   |            |
 | `anthropic/claude-sonnet-4-6`                 |            |
@@ -103157,7 +103241,7 @@ The provider inventory reports the local fallback winner separately from global 
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           timeoutSeconds: 45,
           capabilities: ["audio"],
         },
@@ -103244,7 +103328,7 @@ The provider inventory reports the local fallback winner separately from global 
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
 - CLI stdout is capped at 5MB; keep CLI output concise.
-- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`).
+- CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
 
 ### Resident local STT
@@ -103666,9 +103750,13 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 ## Inbound Media To Commands
 
 - When inbound web messages include media, OpenClaw downloads it to a temp file and exposes templating variables:
-  - `{{MediaUrl}}` — pseudo-URL for the inbound media.
-  - `{{MediaPath}}` — local temp path written before running the command.
-- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+  - `{{AttachmentUrl}}` — original URL or provider reference for the current attachment.
+  - `{{AttachmentPath}}` — local temp path written before running the command.
+  - `{{AttachmentContentType}}` — MIME content type.
+  - `{{AttachmentDir}}` — directory containing the local path.
+  - `{{AttachmentIndex}}` — zero-based source fact index.
+- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and the attachment path/reference is rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases during the plugin SDK migration window.
 - Media understanding (configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
@@ -104636,7 +104724,7 @@ Vendor plugins register capability metadata (which provider supports which media
 
 <Steps>
   <Step title="Collect attachments">
-    Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
+    Collect ordered inbound media facts (`path`, `url`, `contentType`, and `kind`).
   </Step>
   <Step title="Select per capability">
     For each enabled capability (image/audio/video), select attachments per the `attachments` policy (default: first attachment only).
@@ -104722,7 +104810,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
         "gemini-3-flash",
         "--allowed-tools",
         "read_file",
-        "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+        "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
       ],
       maxChars: 500,
       maxBytes: 52428800,
@@ -104731,7 +104819,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{MediaDir}}` (directory containing the media file), `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension).
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
 
   </Tab>
 </Tabs>
@@ -104909,7 +104997,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                 "gemini-3-flash",
                 "--allowed-tools",
                 "read_file",
-                "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
               ],
               capabilities: ["image", "video"],
             },
@@ -104937,7 +105025,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
               {
                 type: "cli",
                 command: "whisper",
-                args: ["--model", "base", "{{MediaPath}}"],
+                args: ["--model", "base", "{{AttachmentPath}}"],
               },
             ],
           },
@@ -104954,7 +105042,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                   "gemini-3-flash",
                   "--allowed-tools",
                   "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
                 ],
               },
             ],
@@ -104975,7 +105063,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
             maxChars: 500,
             models: [
               { provider: "openai", model: "gpt-5.6-sol" },
-              { provider: "anthropic", model: "claude-opus-4-8" },
+              { provider: "anthropic", model: "claude-opus-5" },
               {
                 type: "cli",
                 command: "gemini",
@@ -104984,7 +105072,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                   "gemini-3-flash",
                   "--allowed-tools",
                   "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
                 ],
               },
             ],
@@ -113204,13 +113292,19 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
 With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
-re-enable the plugin and reload MCP servers. On macOS, when no matching
+re-enable the plugin and reload MCP servers. Before starting an isolated
+Codex app-server on macOS, auto-install also copies the official signed
+Computer Use service app from the selected desktop app bundle into that
+Codex home's `computer-use` directory when the native client is missing.
+On macOS, when no matching
 marketplace is registered and a standard desktop app bundle exists, OpenClaw
 also tries to register the bundled Codex marketplace from
 `/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled`, with
 `/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` retained
 as a fallback for legacy standalone installs. If setup still cannot make the
 MCP server available, the turn fails before the thread starts.
+Strict readiness failures are harness preflight failures, so model fallback
+does not repeat the same local readiness sequence for every model candidate.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -113352,7 +113446,7 @@ remote install is unsupported, run install with a local source or path:
 | Field                           | Default        | Meaning                                                                        |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------ |
 | `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
-| `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
+| `autoInstall`                   | false          | Provision the native client and install or re-enable the plugin at turn start. |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
 | `toolCallTimeoutMs`             | 60000          | Timeout for the Computer Use `list_apps` readiness tool call.                  |
@@ -116711,6 +116805,8 @@ Plugin compatibility contracts are tracked in the core registry at
 - owner: `sdk`, `config`, `setup`, `channel`, `provider`, `plugin-execution`,
   `agent-runtime`, or `core`
 - introduction and deprecation dates when applicable
+- an exact removal date once the owning maintainer approves it; an omitted
+  `removeAfter` keeps a deprecated surface ineligible for removal
 - replacement guidance
 - docs, diagnostics, and tests that cover the old and new behavior
 
@@ -119355,7 +119451,8 @@ runtime generation.
 Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
-  `messageId`, `senderId`, optional run/session correlation, and metadata.
+  `messageId`, `senderId`, optional run/session correlation, ordered `media`,
+  and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
@@ -119381,6 +119478,20 @@ first-class fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
+
+Inbound claim and message-received events expose `media?:
+PluginHookMediaFact[]` as the canonical attachment API. Each fact can carry
+`path`, `url`, `contentType`, `kind`, `transcribed`, `messageId`, and
+`workspaceDir`; array position is attachment identity. When a remote attachment
+has not been staged locally yet, `media` is omitted,
+`mediaStagingPending: true`, and `originalMedia` contains the provider-side
+facts. Do not treat `originalMedia.path` as locally readable until a later
+staged event supplies `media`.
+
+The singular/plural `mediaPath`, `mediaUrl`, `mediaType`, `mediaPaths`,
+`mediaUrls`, `mediaTypes`, and matching `originalMedia*` metadata properties are
+deprecated compatibility aliases. New hooks should use the typed top-level
+arrays.
 
 Decision rules:
 
@@ -125014,9 +125125,9 @@ model entry:
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-8",
+      "model": "anthropic/claude-opus-5",
       "models": {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           "agentRuntime": {
             "id": "claude-cli"
           }
@@ -125265,6 +125376,24 @@ type, then path or URL extension; undownloaded native attachments should still
 contribute one type-only fact each. Do not use the formatter to synthesize the
 primary inbound body.
 
+Normalize plugin-owned attachment records with `toInboundMediaFacts(...)`, then
+pass the resulting ordered array through the context's `media` field:
+
+```ts
+const media = toInboundMediaFacts([
+  { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
+]);
+
+const ctx = finalizeInboundContext({ Body: caption, media });
+```
+
+Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
+`workspaceDir` replace the legacy parallel index/workspace fields. The
+`MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, `MediaTypes`,
+`MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` context fields,
+plus `buildChannelInboundMediaPayload(...)`, remain available only as deprecated
+compatibility. New plugins should not construct or read them.
+
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
 importing this subpath directly:
@@ -125289,9 +125418,32 @@ paths should use message adapters and durable message helpers from
 ## Delivery settlement contract
 
 `ChannelInboundTurnPlan.delivery` owns the native send for each logical reply
-payload. Core owns outbound hook ordering and, when the adapter opts in,
-terminal `message_sent` observation. Keep those responsibilities separate so
-one payload cannot produce duplicate terminal events.
+payload. On the routed API, core runs `reply_payload_sending`, calls
+`preparePayload`, and then assigns exactly one `message_sending` owner:
+
+- a declared `durable` branch runs the hook inside shared durable delivery;
+- a direct `deliver` branch runs the hook in core before the native adapter;
+- an exceptional provider funnel can use
+  `deliverWithProviderMessageSending` when it must choose durable delivery or
+  native finalization inside that funnel.
+
+Do not apply `message_sending` again inside a normal `deliver` callback. Use
+the provider-owned callback only when the branch cannot be declared before
+entering the provider funnel; it is mutually exclusive with `deliver` and
+`durable`. Existing direct and durable plans keep using
+`ChannelInboundTurnPlan`; explicitly type the exceptional funnel as
+`ChannelInboundTurnPlan<"provider_message_sending">`. Caller-assembled
+`dispatchChannelInboundReply(...)` remains the
+compatibility boundary and keeps its caller-provided dispatcher ownership.
+
+`preparePayload` may return `null` when channel policy intentionally suppresses the
+logical payload. Core records a typed non-visible result and skips durable selection,
+`message_sending`, and native delivery, so a later modifying hook cannot resurrect
+content the channel rejected.
+
+Core also owns terminal `message_sent` observation when the adapter opts in.
+Keep these responsibilities separate so one payload cannot produce duplicate
+modifier or terminal events.
 
 The delivery result fields have these meanings:
 
@@ -125300,6 +125452,7 @@ The delivery result fields have these meanings:
 | `content`                | Provider-accepted visible text for the logical payload after native formatting or finalization. Omit it to use the prepared payload text for terminal observation. Media-only sends can omit it.                             |
 | `messageIds` / `receipt` | Actual provider identities for the visible send. Prefer a `MessageReceipt`; core uses its primary provider id for `message_sent`.                                                                                            |
 | `visibleReplySent`       | Set to `false` only when the provider produced no visible preview or final message. Core does not emit a successful `message_sent` for that result.                                                                          |
+| `suppression`            | Typed intentional no-send reason after a modifying hook or payload policy settles. Hook cancellation can also include `cancelReason` and metadata. Core never calls the direct native adapter for a core-owned suppression.  |
 | `finalization`           | A promise for delayed native settlement of the same logical payload, such as closing or editing an in-place streaming card. Its resolved fields override the immediate result before terminal observation and `onDelivered`. |
 
 Set the delivery adapter's `observeMessageSent` option to `true` when core
@@ -125315,6 +125468,11 @@ cannot become unhandled; core still awaits the original promise after reply
 dispatch settles. It then emits at most one terminal observation per payload
 with the finalized content and provider id. `onDelivered`, when present,
 receives the settled result after that observation.
+
+`onDelivered` also receives settled suppressed results. A suppressed result
+has `visibleReplySent: false`, does not emit `message_sent`, and does not count
+as a visible queued reply. This lets plugins distinguish hook cancellation
+from provider failure without inventing a native message identity.
 
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from
@@ -125997,6 +126155,15 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
+
+Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
+channel records with `toInboundMediaFacts(...)` from
+`openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
+inbound context. When a plugin must authorize local media reads, import
+`getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from the focused
+`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`agent-media-payload` builder/root facade is deprecated compatibility.
 
 ### Native payload shaping
 
@@ -127112,11 +127279,12 @@ unconfigured, or when deferred loading is enabled. See
 
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 
-| Import                              | Use for                                                                                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/setup-runtime` | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-| `openclaw/plugin-sdk/channel-setup` | Optional-install setup surfaces                                                                                                                                                    |
-| `openclaw/plugin-sdk/setup-tools`   | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| Import                                  | Use for                                                                                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/setup-runtime`     | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+| `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
+| `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
+| `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.
@@ -127414,13 +127582,54 @@ Audit the current migration queue with `pnpm plugins:boundary-report`:
 | `--fail-on-eligible-compat`                             | Exit non-zero when a deprecated compat record's `removeAfter` date has passed. |
 | `--fail-on-unclassified-unused-reserved`                | Exit non-zero on unused reserved SDK shims.                                    |
 
-`pnpm plugins:boundary-report:ci` runs with all three fail flags. Each
-compatibility record has an explicit `removeAfter` date (not a vague "next
-major release") - the report groups deprecated records by that date, counts
-local code/doc references, surfaces cross-owner reserved SDK imports, and
-summarizes the private memory-host SDK bridge. Reserved SDK subpaths must have
-tracked owner usage; unused reserved exports should be removed from the public
-SDK.
+`pnpm plugins:boundary-report:ci` runs with all three fail flags. Deprecated
+records normally have an explicit `removeAfter` date rather than a vague "next
+major release". A record whose owner has not approved a date leaves
+`removeAfter` absent, appears as `no-date`, and is never eligible for removal.
+The report groups deprecated records by date, counts local code/doc references,
+surfaces cross-owner reserved SDK imports, and summarizes the private
+memory-host SDK bridge. Reserved SDK subpaths must have tracked owner usage;
+unused reserved exports should be removed from the public SDK.
+
+### Media legacy projection
+
+The `media-legacy-projection` compatibility record covers the old parallel
+media fields, payload builders, hook metadata aliases, and media template
+names. Its approved `removeAfter` date is **2026-10-01** (two release trains
+after the facts-first replacements shipped). Removal additionally requires a
+clean published-plugin artifact sweep at that time; migrate before the date.
+
+For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
+`MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,
+`MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` with ordered
+facts:
+
+```ts
+import { toInboundMediaFacts } from "openclaw/plugin-sdk/channel-inbound";
+
+const media = toInboundMediaFacts([
+  { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
+]);
+
+const ctx = finalizeInboundContext({ Body: caption, media });
+```
+
+Use `event.media` in `inbound_claim` and `message_received` hooks. If remote
+media is not locally staged, use `event.originalMedia` for identity/diagnostics
+and wait for `event.media`; `event.mediaStagingPending` distinguishes that
+state. Do not read the deprecated singular/plural properties from
+`event.metadata`.
+
+For CLI media models, replace `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`,
+and `{{MediaDir}}` with `{{AttachmentPath}}`, `{{AttachmentUrl}}`,
+`{{AttachmentContentType}}`, and `{{AttachmentDir}}`. Use
+`{{AttachmentIndex}}` when attachment position matters.
+
+For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from
+`openclaw/plugin-sdk/media-local-roots`. The
+`openclaw/plugin-sdk/agent-media-payload` facade and its
+`buildAgentMediaPayload(...)` projection are deprecated.
 
 ## How to migrate
 
@@ -128202,18 +128411,20 @@ apps own device capture/playback UX.
 | When                                        | What happens                                                                                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Now**                                     | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins. |
+| **Pending owner decision**                  | Date-less records remain deprecated and ineligible for removal until their owner publishes a `removeAfter` date.                          |
 | **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.    |
-| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                          |
+| **Next major release**                      | Dated surfaces may be removed only after their `removeAfter` date; date-less records still require owner approval and a published date.   |
 
 The remaining public SDK subpaths below have registry-backed removal windows.
 The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
 
-| `removeAfter` | Tier                               | SDK subpaths                                                                                                                                                           |
-| ------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-08-15`  | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod` |
-| `2026-09-01`  | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                    |
+| `removeAfter` | Tier                               | SDK subpaths                                                                                                                                                                        |
+| ------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-08-15`  | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod`              |
+| `2026-09-01`  | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
+| `2026-10-01`  | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which
@@ -130381,6 +130592,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `readSessionTranscriptRawDelta(...)`, `readSessionTranscriptVisibleMessageDelta(...)`, `readVisibleSessionTranscriptMessageEntries(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read raw events or visible branch-safe message entries, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths. `readVisibleSessionTranscriptMessageEntries(...)` returns ordered read metadata; its `seq` field is not a resumable cursor.
 
+    `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+
     `readSessionTranscriptRawDelta(...)` returns a bounded `page`, `reset`, or `missing` result. Pass the opaque `page.cursor` into the next call. Pure appends preserve the cursor, while transcript replacement returns `reset` with a new bootstrap cursor. Pages default to 1,000 events and 1,000,000 serialized bytes; callers may request up to 10,000 events and 64 MiB. When the next event alone exceeds `maxBytes`, the page is empty and reports `requiredBytes`; retry with at least that byte limit when it is no greater than 64 MiB. Larger individual events require the complete-read API. A cursor identifies position only and never grants access to another session.
 
     `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
@@ -131844,6 +132057,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
     | `plugin-sdk/json-schema-runtime` | Private-local after July 2026; Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `defineChannelSetupContract`, channel-owned setup field/input types, `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
+    | `plugin-sdk/channel-dm-policy` | `createChannelDmPolicy` for account-aware setup policy descriptors |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `defineChannelSetupContract`, `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
@@ -131869,7 +132083,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Private-local after July 2026; Thread-binding lifecycle and adapter helpers |
-    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for agent media payload roots and loaders. New channel plugins use typed outbound payload planning from `plugin-sdk/channel-outbound`; operator-supplied local-media loading still uses the retained facade until a focused public local-roots seam exists. |
+    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for legacy `Media*` payload projection. Pass ordered facts through `MsgContext.media` / `toInboundMediaFacts(...)`; import local-root policy from `plugin-sdk/media-local-roots`. |
     | `plugin-sdk/conversation-runtime` | Deprecated broad barrel for conversation/thread binding, pairing, and configured-binding helpers; prefer focused binding subpaths such as `plugin-sdk/thread-bindings-runtime` and `plugin-sdk/session-binding-runtime` |
     | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
     | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
@@ -131960,7 +132174,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
     | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization and command-surface helpers |
-    | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
+    | `plugin-sdk/allow-from` | Allow-from parsing, normalization, resolution, and matching helpers |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Private-local after July 2026; Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
@@ -132052,7 +132266,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
-    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file and media-source path helpers |
+    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, temp-root, media-source path, and directory-durability helpers |
     | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
@@ -132085,6 +132299,7 @@ usage endpoint failed or returned no usable usage data.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/media-runtime` | Deprecated broad media barrel including `saveRemoteMedia`, `saveResponseMedia`, `readRemoteMediaBuffer`, and deprecated `fetchRemoteMedia`; prefer `plugin-sdk/media-store`, `plugin-sdk/media-mime`, `plugin-sdk/outbound-media`, and capability runtime subpaths, and prefer store helpers before buffer reads when a URL should become OpenClaw media |
+    | `plugin-sdk/media-local-roots` | Focused `getAgentScopedMediaLocalRoots(...)` and policy-aware `getAgentScopedMediaLocalRootsForSources(...)` helpers for plugin-owned local media reads |
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Private-local after July 2026; Shared media-generation failover helpers, candidate selection, and missing-model messaging |
@@ -136628,7 +136843,7 @@ OpenClaw Google Meet participant plugin for joining calls through Chrome or Twil
 
 ## Surface
 
-contracts: `tools`
+contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -138714,7 +138929,7 @@ Join Microsoft Teams meetings as a Chrome browser guest.
 
 ## Surface
 
-contracts: `tools`
+contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -139403,7 +139618,7 @@ Join Zoom meetings as a Chrome browser guest.
 
 ## Surface
 
-contracts: `tools`
+contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -139658,7 +139873,7 @@ OpenClaw release:
     ```json5
     {
       env: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" },
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
     }
     ```
 
@@ -139725,9 +139940,9 @@ OpenClaw release:
     {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-8" },
+          model: { primary: "anthropic/claude-opus-5" },
           models: {
-            "anthropic/claude-opus-4-8": {
+            "anthropic/claude-opus-5": {
               agentRuntime: { id: "claude-cli" },
             },
           },
@@ -139859,15 +140074,26 @@ remain read-only even on a continuation-enabled node.
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
-## Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 
-`anthropic/claude-sonnet-5` uses adaptive thinking at `high` effort by default.
+Bare family aliases are rolling: `opus` tracks the current supported Claude
+Opus generation and today resolves to `anthropic/claude-opus-5`, the same way
+`sonnet` tracks the current Sonnet. Upgrading OpenClaw can therefore move a
+config that says `opus` onto a newer model generation. Pin a version to opt
+out — versioned aliases such as `opus-4.8` keep resolving to their own model,
+and configs that already name `claude-opus-4-8` are never rewritten.
+
+`anthropic/claude-opus-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
 higher native effort levels. OpenClaw omits manual thinking budgets, custom
-sampling parameters, assistant prefills, and Priority Tier for Sonnet 5 because
-Anthropic does not support those request features on this model.
-The catalog uses Anthropic's introductory `$2/$10` input/output pricing through
-August 31, 2026; standard `$3/$15` pricing begins September 1, 2026.
+sampling parameters, assistant prefills, and Priority Tier for Opus 5 because
+Anthropic does not support those request features on this model. The catalog
+publishes its 1,000,000-token context window, 128,000-token output limit, image
+input, and `$5/$25` input/output pricing.
+
+`anthropic/claude-sonnet-5` uses the same adaptive-thinking defaults and request
+restrictions. The catalog uses Anthropic's introductory `$2/$10` input/output
+pricing through August 31, 2026; standard `$3/$15` pricing begins September 1, 2026.
 
 `anthropic/claude-fable-5` always uses adaptive thinking and defaults to `high`
 effort. Anthropic does not allow thinking to be disabled for this model, so
@@ -139893,7 +140119,7 @@ Override per-message with `/think:<level>` or in model params:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           params: { thinking: "high" },
         },
       },
@@ -140072,6 +140298,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     <Note>
     - Only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests and proxy routes never get a `service_tier` field.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
+    - Claude Opus 5 and Sonnet 5 do not support Priority Tier, so OpenClaw omits `service_tier` for those models.
     - On accounts without Priority Tier capacity, `service_tier: "auto"` may resolve to `standard`.
 
     </Note>
@@ -140085,7 +140312,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     | Property        | Value                 |
     | --------------- | --------------------- |
-    | Default model   | `claude-opus-4-8`     |
+    | Default model   | `claude-opus-5`       |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically
@@ -140094,9 +140321,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Sonnet 5, Mythos 5, and Fable 5 have an exact 1,000,000-token input
-    window and support up to 128,000 output tokens. Anthropic's 1M context
-    window is also GA on Claude 4.x models with adaptive thinking: Opus 4.8,
+    Claude Opus 5, Sonnet 5, Mythos 5, and Fable 5 have an exact
+    1,000,000-token input window and support up to 128,000 output tokens.
+    Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
+    thinking: Opus 4.8,
     Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes these models
     automatically, no `params.context1m` needed:
 
@@ -140105,6 +140333,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
       agents: {
         defaults: {
           models: {
+            "anthropic/claude-opus-5": {},
             "anthropic/claude-sonnet-5": {},
             "anthropic/claude-mythos-5": {},
             "anthropic/claude-opus-4-6": {},
@@ -140130,8 +140359,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
-  <Accordion title="Claude Opus 4.8 1M context">
-    `anthropic/claude-opus-4-8` and its `claude-cli` variant have a 1M context
+  <Accordion title="Claude Opus 5 1M context">
+    `anthropic/claude-opus-5` and its `claude-cli` variant have a 1M context
     window by default; no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>
@@ -140643,7 +140872,7 @@ summary: "Use Amazon Bedrock Mantle OpenAI-compatible and Claude Messages models
 read_when:
   - You want to use Bedrock Mantle hosted OSS models with OpenClaw
   - You need the Mantle OpenAI-compatible endpoint for GPT-OSS, Qwen, Kimi, or GLM
-  - You want to use Claude Sonnet 5 or Mythos 5 through Amazon Bedrock Mantle
+  - You want to use Claude Opus 5, Sonnet 5, or Mythos 5 through Amazon Bedrock Mantle
 title: "Amazon Bedrock Mantle"
 ---
 
@@ -140802,8 +141031,9 @@ want to use.
   </Accordion>
 
   <Accordion title="Claude via the Anthropic Messages route">
-    When automatic discovery owns the model list, OpenClaw appends four Claude
+    When automatic discovery owns the model list, OpenClaw appends five Claude
     models after a successful lookup, regardless of what `/v1/models` returns:
+    `amazon-bedrock-mantle/anthropic.claude-opus-5` (Claude Opus 5),
     `amazon-bedrock-mantle/anthropic.claude-sonnet-5` (Claude Sonnet 5),
     `amazon-bedrock-mantle/anthropic.claude-opus-4-7` (Claude Opus 4.7), and
     `amazon-bedrock-mantle/anthropic.claude-mythos-5` (Claude Mythos 5), plus
@@ -140812,6 +141042,12 @@ want to use.
     the same bearer-authenticated Anthropic-compatible endpoint
     (`<mantle-base>/anthropic`), so the AWS bearer token is not treated like an
     Anthropic API key.
+
+    Claude Opus 5 publishes a 1,000,000-token context window, 128,000-token
+    output limit, image input, and `$5/$25` input/output pricing. Adaptive
+    thinking defaults to `high`; `/think off` disables thinking, and
+    `/think xhigh|max` uses the model's native effort levels. OpenClaw omits
+    caller-selected sampling parameters.
 
     Claude Sonnet 5 always uses adaptive thinking and defaults to `high`
     effort. `/think off` and `/think minimal` map to `low` because the Mantle
@@ -141179,7 +141415,7 @@ openclaw models list
     ```
 
     Valid values are `default`, `flex`, `priority`, and `reserved`. Claude
-    Fable 5 and Sonnet 5 only support the `default` tier; OpenClaw warns and
+    Fable 5, Opus 5, and Sonnet 5 only support the `default` tier; OpenClaw warns and
     ignores `flex`, `priority`, or `reserved` requested for those models. For
     other models, not every model supports every tier -- an unsupported tier
     returns a Bedrock validation error, and the error message can be
@@ -141189,15 +141425,29 @@ openclaw models list
 
   </Accordion>
 
-  <Accordion title="Claude Opus 4.7 and 4.8 temperature">
-    Bedrock rejects the `temperature` parameter for Claude Opus 4.7 and Opus
-    4.8. OpenClaw omits `temperature` automatically for any matching Bedrock
+  <Accordion title="Claude Opus 5, 4.8, and 4.7 temperature">
+    Bedrock rejects the `temperature` parameter for Claude Opus 5, Opus 4.8,
+    and Opus 4.7. OpenClaw omits `temperature` automatically for any matching Bedrock
     ref, including foundation model ids, named inference profiles, application
-    inference profiles whose underlying model resolves to Opus 4.7/4.8 via
+    inference profiles whose underlying model resolves to Opus 5/4.8/4.7 via
     `bedrock:GetInferenceProfile`, and dotted `opus-4.7`/`opus-4.8` variants
     with optional region prefixes (`us.`, `eu.`, `ap.`, `apac.`, `au.`, `jp.`,
     `global.`). No config knob is required, and the omission applies to both
     the request options object and the `inferenceConfig` payload field.
+  </Accordion>
+
+  <Accordion title="Claude Opus 5">
+    Use `amazon-bedrock/anthropic.claude-opus-5` on the Messages-API Bedrock
+    endpoint, or a regional/global inference profile such as
+    `global.anthropic.claude-opus-5` when it appears in Bedrock discovery.
+    OpenClaw applies the 1,000,000-token context window, 128,000-token output
+    limit, image input, prompt caching, refusal-safe streaming, and native
+    `xhigh`/`max` effort levels.
+
+    Adaptive thinking defaults to `high`. `/think off` disables thinking, while
+    `/think xhigh|max` keeps adaptive thinking enabled. OpenClaw omits custom
+    sampling parameters and unsupported non-default service tiers.
+
   </Accordion>
 
   <Accordion title="Claude Fable 5">
@@ -158265,7 +158515,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshots databases with online backup plus offline `VACUUM`, omits live WAL/SHM sidecars, records
   snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
@@ -158746,7 +158996,7 @@ The migration imports old JSONL files once, records counts/hashes in
 Backups remain one archive file:
 
 - Checkpoint every global and agent database.
-- Snapshot each DB with SQLite backup semantics or `VACUUM INTO`.
+- Snapshot each DB with SQLite online backup followed by offline `VACUUM`.
 - Archive compact DB snapshots, config, external credentials, and requested
   workspace exports.
 - Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
@@ -158787,9 +159037,10 @@ doctor input or support/export output:
 Backups should be one archive file, but database capture should be
 SQLite-native:
 
-1. Stop long-running write activity or enter a short backup barrier.
-2. For every global and agent database, run a checkpoint.
-3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+1. Keep write transactions bounded so online backup can make forward progress.
+2. Verify every live global and agent database before capture.
+3. Capture each database with SQLite online backup into a temporary backup
+   directory, then close the live connection and `VACUUM` the private copy.
    Plugin schemas that require owner-defined SQLite capabilities fail closed
    until the owner provides a safe snapshot contract.
 4. Archive the database snapshots, config file, credentials directory, selected
@@ -158912,8 +159163,8 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global, agent, and plugin databases with
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+   - Teach backup to snapshot global, agent, and plugin databases with online
+     backup followed by offline `VACUUM`. Done for discovered `*.sqlite` files under the state asset;
      plugin schemas requiring unavailable owner capabilities fail closed.
    - Add backup verification for canonical SQLite integrity and schema identity,
      plus generic file-shape validation for dedicated plugin snapshots. Done for
@@ -171811,7 +172062,7 @@ Example:
   logging: { level: "info" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-8" },
+      model: { primary: "anthropic/claude-opus-5" },
       workspace: "~/.openclaw/workspace",
       thinkingDefault: "high",
       timeoutSeconds: 1800,
@@ -171882,9 +172133,15 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists liv
 
 Inbound attachments (images/audio/docs) can be surfaced to your command via templates:
 
-- `{{MediaPath}}` (local temp file path)
-- `{{MediaUrl}}` (pseudo-URL)
+- `{{AttachmentPath}}` (local temp file path)
+- `{{AttachmentUrl}}` (original URL or provider reference)
+- `{{AttachmentContentType}}` (MIME content type)
+- `{{AttachmentDir}}` (directory containing the local path)
+- `{{AttachmentIndex}}` (zero-based source fact index)
 - `{{Transcript}}` (if audio transcription is enabled)
+
+The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}`
+names remain available as deprecated compatibility aliases.
 
 Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 
@@ -180530,10 +180787,13 @@ Example schema:
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
+          "argPattern": "sha256:argv:...",
           "source": "allow-always",
           "lastUsedAt": 1737150000000,
-          "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
+        },
+        {
+          "pattern": "~/Projects/**/bin/git"
         }
       ]
     }
@@ -180806,18 +181066,22 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
+Generated `allow-always` entries are argv-bound. New generated entries include
+`argPattern`; older generated path-only entries are ignored and need a fresh
+approval. For a manual path-only rule, omit both `source` and `argPattern`.
+
 Each allowlist entry supports:
 
-| Field              | Meaning                                              |
-| ------------------ | ---------------------------------------------------- |
-| `pattern`          | Resolved binary path glob or bare command-name glob  |
-| `argPattern`       | Optional ECMAScript argv regex; omitted is path-only |
-| `id`               | Stable opaque ID; generated as a UUID when absent    |
-| `source`           | Entry source, such as `allow-always`                 |
-| `commandText`      | Legacy plaintext input; discarded during load        |
-| `lastUsedAt`       | Last-used timestamp                                  |
-| `lastUsedCommand`  | Last command that matched                            |
-| `lastResolvedPath` | Last resolved binary path                            |
+| Field              | Meaning                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `pattern`          | Resolved binary path glob or bare command-name glob                      |
+| `argPattern`       | ECMAScript argv regex or generated exact-argv hash; omitted is path-only |
+| `id`               | Stable opaque ID; generated as a UUID when absent                        |
+| `source`           | Generated entry source, such as `allow-always`; omit for manual entries  |
+| `commandText`      | Legacy plaintext input; discarded during load                            |
+| `lastUsedAt`       | Last-used timestamp                                                      |
+| `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
+| `lastResolvedPath` | Last resolved binary path                                                |
 
 ## Auto-allow skill CLIs
 
@@ -193660,11 +193924,11 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
 
   </Accordion>
   <Accordion title="Stop and abort">
-    - Click **Stop** (calls `chat.abort`).
+    - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. Steering rejection also falls back to that queue. Click **Steer** on a queued message to inject it manually.
     - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
-    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
+    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session. The Control UI uses `sessions.abort` when it has no local run ID.
 
   </Accordion>
   <Accordion title="Abort partial retention">
@@ -193684,7 +193948,8 @@ realtime/session actions pause until the connection returns; **Retry now** in th
 immediate attempt. Chat remains editable: ordinary text and attachment sends are kept in the
 current tab's gateway/session-scoped browser storage, shown as waiting for reconnect, and sent
 automatically when the Gateway returns. Live controls and slash commands remain unavailable while
-offline.
+offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
+is not replayed because newer work may start in that session before the connection returns.
 
 When this browser already holds credentials (a configured token/password or an approved device
 token), first opens and reloads show a small animated OpenClaw mark while the connection is
