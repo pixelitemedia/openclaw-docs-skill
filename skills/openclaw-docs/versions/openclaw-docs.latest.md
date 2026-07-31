@@ -642,6 +642,12 @@ intentionally want the broad advisory provider/media matrix. Stable and full
 release checks always run the exhaustive live/E2E and Docker release-path soak;
 the beta profile can opt in with `run_release_soak=true`.
 
+`fail_fast` defaults to `false`: the umbrella waits for each dispatched child
+workflow and reports its independent failures together. Set `fail_fast=true`
+only when cancelling a child after its first failed job is more useful than the
+complete failure inventory. In Release Checks, this also enables the Matrix QA
+CLI's own first-scenario cancellation.
+
 - `beta` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
 - `full` runs the broad advisory provider/media matrix.
@@ -1329,7 +1335,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation/cron-jobs
 - Headings:
   - H2: Quick start
-  - H2: How cron works
+  - H2: How automations work
   - H2: Schedule types
   - H3: Heartbeat task migration
   - H3: Stream sources
@@ -1409,9 +1415,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation
 - Headings:
   - H2: Quick decision guide
-  - H3: Scheduled Tasks (Cron) vs Heartbeat
+  - H3: Automations vs Heartbeat
   - H2: Core concepts
-  - H3: Scheduled tasks (cron)
+  - H3: Automations
   - H3: Tasks
   - H3: Task Flow
   - H3: Standing orders
@@ -1433,7 +1439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why standing orders
   - H2: How they work
   - H2: Anatomy of a standing order
-  - H2: Standing orders plus cron jobs
+  - H2: Standing orders plus automations
   - H2: Examples
   - H3: Example 1: content and social media (weekly cycle)
   - H3: Example 2: finance operations (event-triggered)
@@ -1578,6 +1584,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Manual configuration
   - H3: Bot key storage
   - H2: Verify the connection
+  - H3: QA Lab round trip
   - H2: Rotate the bot identity
   - H2: Current limits and roadmap
   - H2: Troubleshooting
@@ -1617,6 +1624,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
+  - H2: Group mention gating
+  - H3: Mention detection
+  - H3: Configuration example
+  - H3: Migration warning
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
@@ -2741,7 +2752,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /cli/cron
 - Headings:
-  - H1: openclaw cron
+  - H1: openclaw automations
   - H2: Create jobs quickly
   - H2: Sessions
   - H2: Delivery
@@ -2752,7 +2763,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Recurring jobs
   - H3: Manual runs
   - H2: Models
-  - H3: Isolated cron model precedence
+  - H3: Isolated automation model precedence
   - H3: Fast mode
   - H3: Live model switch retries
   - H2: Run output and denials
@@ -4216,8 +4227,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
   - H2: Canonical scenario coverage
-  - H2: Discord, Slack, Telegram, and WhatsApp QA reference
+  - H2: Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
+  - H3: Buzz QA
   - H3: Telegram QA
   - H3: Discord QA
   - H3: Slack QA
@@ -4826,7 +4838,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Wizard
   - H2: Identity
   - H2: Bridge (legacy, removed)
-  - H2: Cron
+  - H2: Automations (cron)
   - H3: cron.failureAlert
   - H2: Media model template variables
   - H2: Config includes ($include)
@@ -4959,7 +4971,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
   - H2: Monitor scratch (optional)
-  - H3: Schedule recurring checks with cron
+  - H3: Schedule recurring checks with automations
   - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
   - H2: Cost awareness
@@ -8893,6 +8905,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Verified setup runtime artifacts
   - H3: Request-transport contract
   - H2: Register a harness
+  - H3: Isolated completion
   - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
@@ -11876,6 +11889,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills
+  - H2: Reference a skill in a prompt
   - H2: Skill Workshop
   - H2: Installing from ClawHub
   - H2: Security
@@ -13601,67 +13615,69 @@ ClawFlow was renamed to [Task Flow](/automation/taskflow). Use that page for dur
 # Section: automation/cron-jobs.md
 
 ---
-summary: "Scheduled jobs, webhooks, and Gmail PubSub triggers for the Gateway scheduler"
+summary: "Automations: scheduled jobs, webhooks, and Gmail PubSub triggers for the Gateway scheduler"
 read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
-  - Deciding between heartbeat and cron for scheduled tasks
-title: "Scheduled tasks"
-sidebarTitle: "Scheduled tasks"
+  - Deciding between heartbeat and automations for scheduled work
+title: "Automations"
+sidebarTitle: "Automations"
 ---
 
-Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel, a webhook, or nowhere.
+Automations are OpenClaw's built-in scheduler. The scheduler persists jobs, wakes the agent at the right time, and can deliver output to a chat channel, a webhook, or nowhere.
+
+Manage automations with the `openclaw automations` CLI; `openclaw cron` remains an alias for the same commands.
 
 ## Quick start
 
 <Steps>
   <Step title="Add a one-shot reminder">
     ```bash
-    openclaw cron create "2027-02-01T16:00:00Z" \
+    openclaw automations create "2027-02-01T16:00:00Z" \
       --name "Reminder" \
       --session main \
-      --system-event "Reminder: check the cron docs draft" \
+      --system-event "Reminder: check the automations docs draft" \
       --wake now \
       --delete-after-run
     ```
   </Step>
   <Step title="Check your jobs">
     ```bash
-    openclaw cron list
-    openclaw cron get <job-id>
-    openclaw cron show <job-id>
+    openclaw automations list
+    openclaw automations get <job-id>
+    openclaw automations show <job-id>
     ```
   </Step>
   <Step title="See run history">
     ```bash
-    openclaw cron runs --id <job-id>
+    openclaw automations runs --id <job-id>
     ```
   </Step>
 </Steps>
 
-## How cron works
+## How automations work
 
-- Cron runs **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
+- Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
-- Every cron execution creates a [background task](/automation/tasks) record.
+- Every automation run creates a [background task](/automation/tasks) record.
 - One-shot jobs (`--at`) auto-delete after success by default; pass `--keep-after-run` to keep them.
-- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by cron's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
+- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled instead of replayed immediately, keeping model/tool bootstrap work out of the channel-connect window.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; `--local` runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
 
 <AccordionGroup>
   <Accordion title="Isolated run hardening">
-    - Isolated runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session on completion, and dispose any bundled MCP runtime instances created for the job through the same shared teardown path used by main-session and custom-session runs. Cleanup failures are ignored so the cron result still wins.
-    - Isolated runs with the narrow cron self-cleanup grant can read scheduler status, a self-filtered list containing only their own job, and that job's run history, and may remove only their own job.
+    - Isolated runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session on completion, and dispose any bundled MCP runtime instances created for the job through the same shared teardown path used by main-session and custom-session runs. Cleanup failures are ignored so the run result still wins.
+    - Isolated runs with the narrow automation self-cleanup grant can read scheduler status, a self-filtered list containing only their own job, and that job's run history, and may remove only their own job.
     - Isolated runs guard against stale acknowledgement replies: if the first result is only an interim status update (`on it`, `pulling everything together`, and similar hints) and no descendant subagent is still responsible for the final answer, OpenClaw re-prompts once for the actual result before delivery.
     - Structured execution-denial metadata (including node-host `UNAVAILABLE` wrappers whose nested error starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) is recognized so a blocked command is not reported as a green run, while ordinary assistant prose is not mistaken for a denial.
     - Run-level agent failures count as job errors even with no reply payload, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
-    - When a job hits `timeoutSeconds`, cron aborts the run and gives it a short cleanup window. If it does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not stuck behind a stale processing session.
+    - When a job hits `timeoutSeconds`, the scheduler aborts the run and gives it a short cleanup window. If it does not drain, Gateway-owned cleanup force-clears that run's session ownership before the scheduler records the timeout, so queued chat work is not stuck behind a stale processing session.
     - Setup/startup stalls get a phase-specific timeout (for example `cron: isolated agent setup timed out before runner start` or `cron: isolated agent run stalled before execution start (last phase: context-engine)`). These watchdogs cover embedded and CLI-backed providers even before their external CLI process starts, and are capped independently of long `timeoutSeconds` values so cold-start/auth/context failures surface quickly.
 
   </Accordion>
   <Accordion title="Task reconciliation">
-    Cron task reconciliation is runtime-owned first, durable-history-backed second: an active cron task stays live while the cron runtime still tracks that job as running, even if an old child session row still exists. Once the runtime stops owning the job and a 5-minute grace window expires, maintenance checks persisted run logs and job state for the matching `cron:<jobId>:<startedAt>` run. A terminal result there finalizes the task ledger; otherwise Gateway-owned maintenance can mark the task `lost`. Offline CLI audit can recover from durable history, but its own empty in-process active-job set is not proof a Gateway-owned run is gone.
+    Automation task reconciliation is runtime-owned first, durable-history-backed second: an active automation task stays live while the automations runtime still tracks that job as running, even if an old child session row still exists. Once the runtime stops owning the job and a 5-minute grace window expires, maintenance checks persisted run logs and job state for the matching `cron:<jobId>:<startedAt>` run. A terminal result there finalizes the task ledger; otherwise Gateway-owned maintenance can mark the task `lost`. Offline CLI audit can recover from durable history, but its own empty in-process active-job set is not proof a Gateway-owned run is gone.
   </Accordion>
 </AccordionGroup>
 
@@ -13681,18 +13697,18 @@ Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are au
 
 ### Heartbeat task migration
 
-Older heartbeat scratch supported a structured `tasks:` block. Run `openclaw doctor --fix` after upgrading to convert each entry into an ordinary editable main-session cron job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
+Older heartbeat scratch supported a structured `tasks:` block. Run `openclaw doctor --fix` after upgrading to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
 
-These migrated jobs carry public `systemEvent` payloads, so `openclaw cron list`, `get`, `edit`, and `remove` plus the cron tool manage them like other jobs. Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while cron owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
+These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
 
-Heartbeat scratch is now monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work with cron.
+Heartbeat scratch is now monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
 
 ### Stream sources
 
-A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and require `cron.triggers.enabled: true` because the long-lived command has the same unattended trust class as trigger scripts. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with cron's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
+A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and require `cron.triggers.enabled: true` because the long-lived command has the same unattended trust class as trigger scripts. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name "Build event stream" \
   --stream-command '["node","scripts/build-events.mjs"]' \
   --stream-mode match \
@@ -13710,9 +13726,9 @@ When a stream job also has `trigger.script`, the gate runs once per closed batch
 
 ### Dynamic cadence (pacing)
 
-Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `cron add|edit` (`--clear-pacing` removes both bounds).
+Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `automations add|edit` (`--clear-pacing` removes both bounds).
 
-During an agent-turn run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
 
 Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
@@ -13734,7 +13750,7 @@ This fires roughly 5-6 times a month instead of 0-1 times a month. To require bo
 
 ## Event triggers (condition watchers)
 
-An event trigger adds a headless condition script to an `every`, `cron`, or `stream` schedule. Time schedules evaluate it when due; stream schedules evaluate it for each closed batch. Cron runs the normal payload only when the script returns `fire: true`:
+An event trigger adds a headless condition script to an `every`, `cron`, or `stream` schedule. Time schedules evaluate it when due; stream schedules evaluate it for each closed batch. The scheduler runs the normal payload only when the script returns `fire: true`:
 
 ```json5
 {
@@ -13748,20 +13764,20 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
 }
 ```
 
-The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, cron appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
+The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
-Enabling `cron.triggers.enabled` permits both condition-trigger scripts and `script` payloads to run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
+Enabling `cron.triggers.enabled` permits both condition-trigger scripts and `script` payloads to run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create automation jobs is trusted accordingly.
 </Warning>
 
 Create a watcher from a local script file (`-` reads the script from stdin):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name "PR CI watcher" \
   --every 30s \
   --trigger-script ./watch-pr-ci.js \
@@ -13780,7 +13796,7 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `cron list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When cron is disabled, the monitor does not tick and no fallback heartbeat timer runs.
+One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `automations list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When automations are disabled, the monitor does not tick and no fallback heartbeat timer runs.
 
 ### Agent-turn options
 
@@ -13794,16 +13810,16 @@ One additional payload kind, `heartbeat`, is system-owned: the gateway converges
   Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
-  On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
+  On `automations edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
 </ParamField>
 <ParamField path="--clear-model" type="boolean">
-  On `cron edit`, removes the per-job model override so the job follows normal cron model precedence (stored cron-session override, else agent/default model). Cannot combine with `--model`.
+  On `automations edit`, removes the per-job model override so the job follows normal automation model precedence (stored automation-session override, else agent/default model). Cannot combine with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
-  On `cron edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
+  On `automations edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
 </ParamField>
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
@@ -13815,7 +13831,7 @@ One additional payload kind, `heartbeat`, is system-owned: the gateway converges
 New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
 are capped to the tools available to that creating turn, and the agent cannot widen the
 stored list. Jobs created by an authenticated operator without `--tools` store an
-unrestricted `*` policy; `cron edit --clear-tools` restores that explicit unrestricted
+unrestricted `*` policy; `automations edit --clear-tools` restores that explicit unrestricted
 policy. Existing jobs that predate an explicit tool policy retain their current behavior
 until their tool policy is explicitly edited or the job is recreated.
 
@@ -13825,25 +13841,25 @@ Model-selection precedence for isolated jobs, highest first:
 
 1. Per-job payload `model` (explicit config; a disallowed model fails the run)
 2. Gmail hook model override (only when the run came from Gmail and that override is allowed)
-3. User-selected stored cron-session model override
+3. User-selected stored automation-session model override
 4. Agent/default model selection
 
-Fast mode follows the resolved live selection. If the selected model config has `params.fastMode`, isolated cron uses it by default; a stored session `fastMode` override (then an agent `fastModeDefault`) still wins over model config either direction. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
+Fast mode follows the resolved live selection. If the selected model config has `params.fastMode`, isolated automation runs use it by default; a stored session `fastMode` override (then an agent `fastModeDefault`) still wins over model config either direction. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
 
-If a run hits a live model-switch handoff, cron retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping.
+If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one probe instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
 
 ### Command payloads
 
-Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in cron history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
+Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
 
 <Note>
-Command cron is an operator-admin Gateway automation surface, not an agent `tools.exec` call. Creating, updating, removing, or manually running cron jobs requires `operator.admin`; scheduled command runs later execute inside the Gateway process as that admin-authored automation. Agent exec policy (`tools.exec.mode`, approval prompts, per-agent tool allowlists) governs model-visible exec tools, not command cron payloads.
+Command payloads are an operator-admin Gateway automation surface, not an agent `tools.exec` call. Creating, updating, removing, or manually running automation jobs requires `operator.admin`; scheduled command runs later execute inside the Gateway process as that admin-authored automation. Agent exec policy (`tools.exec.mode`, approval prompts, per-agent tool allowlists) governs model-visible exec tools, not command payloads.
 </Note>
 
 ```bash
-openclaw cron create "*/15 * * * *" \
+openclaw automations create "*/15 * * * *" \
   --name "Queue depth probe" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
@@ -13854,14 +13870,14 @@ openclaw cron create "*/15 * * * *" \
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
 
-Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, cron sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, the scheduler sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal automation silent-token suppression and posts nothing back to chat.
 
 ### Script payloads
 
 Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. Enable `cron.triggers.enabled` before creating or running them; this dangerous-automation gate covers both trigger scripts and script payloads. Script jobs support only `main` and `isolated` session targets.
 
 ```bash
-openclaw cron create "0 * * * *" \
+openclaw automations create "0 * * * *" \
   --name "Hourly queue check" \
   --script ./automation/check-queue.js \
   --script-timeout-seconds 300 \
@@ -13879,37 +13895,37 @@ The script may return an object with these optional fields:
 - `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
-Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal cron run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
 
 ## Execution styles
 
-| Style           | `--session` value   | Runs in                  | Best for                        |
-| --------------- | ------------------- | ------------------------ | ------------------------------- |
-| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
-| Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
+| Style           | `--session` value   | Runs in                   | Best for                        |
+| --------------- | ------------------- | ------------------------- | ------------------------------- |
+| Main session    | `main`              | Dedicated automation lane | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`  | Reports, background chores      |
+| Current session | `current`           | Bound at creation time    | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session  | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into a scheduler-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine automation turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    Main-session cron events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the cron event text if a reminder should consult that context.
+    Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
-    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated cron and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; cron owns retry and failure-alert policy.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated cron runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.
 
     For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 
@@ -13926,7 +13942,7 @@ Agent-turn jobs default to the creating conversation when the create request car
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before cron falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
+When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
@@ -13942,17 +13958,17 @@ Failure notifications follow a separate destination path:
 - `job.delivery.failureDestination` overrides that per job.
 - If neither is set and the job already delivers via `announce`, failure notifications fall back to that primary announce target.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
-- `failureAlert.includeSkipped: true` opts a job or global cron alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
-- `openclaw cron edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
+- `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
+- `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
 
 ### Output language
 
-Cron jobs do not infer a reply language from channel, locale, or previous messages. Put the language rule in the scheduled message or template:
+Automation jobs do not infer a reply language from channel, locale, or previous messages. Put the language rule in the scheduled message or template:
 
 ```bash
-openclaw cron edit <jobId> \
+openclaw automations edit <jobId> \
   --message "Summarize the updates. Respond in Chinese; keep URLs, code, and product names unchanged."
 ```
 
@@ -13963,7 +13979,7 @@ For template files, keep the language instruction in the rendered prompt and ver
 <Tabs>
   <Tab title="One-shot reminder">
     ```bash
-    openclaw cron add \
+    openclaw automations add \
       --name "Calendar check" \
       --at "20m" \
       --session main \
@@ -13973,7 +13989,7 @@ For template files, keep the language instruction in the rendered prompt and ver
   </Tab>
   <Tab title="Recurring isolated job">
     ```bash
-    openclaw cron create "0 7 * * *" \
+    openclaw automations create "0 7 * * *" \
       "Summarize overnight updates." \
       --name "Morning brief" \
       --tz "America/Los_Angeles" \
@@ -13985,7 +14001,7 @@ For template files, keep the language instruction in the rendered prompt and ver
   </Tab>
   <Tab title="Model and thinking override">
     ```bash
-    openclaw cron add \
+    openclaw automations add \
       --name "Deep analysis" \
       --cron "0 6 * * 1" \
       --tz "America/Los_Angeles" \
@@ -13998,7 +14014,7 @@ For template files, keep the language instruction in the rendered prompt and ver
   </Tab>
   <Tab title="Webhook output">
     ```bash
-    openclaw cron create "0 18 * * 1-5" \
+    openclaw automations create "0 18 * * 1-5" \
       "Summarize today's deploys as JSON." \
       --name "Deploy digest" \
       --webhook "https://example.invalid/openclaw/cron"
@@ -14006,7 +14022,7 @@ For template files, keep the language instruction in the rendered prompt and ver
   </Tab>
   <Tab title="Command output">
     ```bash
-    openclaw cron create "*/15 * * * *" \
+    openclaw automations create "*/15 * * * *" \
       --name "Queue depth probe" \
       --command "scripts/check-queue.sh" \
       --command-cwd "/srv/app" \
@@ -14021,65 +14037,65 @@ For template files, keep the language instruction in the rendered prompt and ver
 
 ```bash
 # List enabled jobs
-openclaw cron list
+openclaw automations list
 
 # Include disabled jobs
-openclaw cron list --all
+openclaw automations list --all
 
 # Get one stored job as JSON
-openclaw cron get <jobId>
+openclaw automations get <jobId>
 
 # Show one job, including resolved delivery route
-openclaw cron show <jobId>
+openclaw automations show <jobId>
 
 # Enable/disable without deleting
-openclaw cron enable <jobId>
-openclaw cron disable <jobId>
+openclaw automations enable <jobId>
+openclaw automations disable <jobId>
 
 # Edit a job
-openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
+openclaw automations edit <jobId> --message "Updated prompt" --model "opus"
 
 # Force run a job now
-openclaw cron run <jobId>
+openclaw automations run <jobId>
 
 # Force run a job now and wait for its terminal status
-openclaw cron run <jobId> --wait --wait-timeout 10m --poll-interval 2s
+openclaw automations run <jobId> --wait --wait-timeout 10m --poll-interval 2s
 
 # Run only if due
-openclaw cron run <jobId> --due
+openclaw automations run <jobId> --due
 
 # View run history
-openclaw cron runs --id <jobId> --limit 50
+openclaw automations runs --id <jobId> --limit 50
 
 # View one exact run
-openclaw cron runs --id <jobId> --run-id <runId>
+openclaw automations runs --id <jobId> --run-id <runId>
 
 # Delete a job
-openclaw cron remove <jobId>
+openclaw automations remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session isolated --agent ops
-openclaw cron edit <jobId> --clear-agent
+openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session isolated --agent ops
+openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled cron job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw cron enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
-`openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
+`openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
 
-The agent `cron` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `cron(action: "list")`; use `cron(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
+The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
 
-`openclaw cron create` is an alias for `openclaw cron add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `cron edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.
+`openclaw automations create` is an alias for `openclaw automations add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `automations add|create` or `automations edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `automations edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.
 
 <Note>
 Model override note:
 
-- `openclaw cron add|edit --model ...` changes the job's selected model.
+- `openclaw automations add|edit --model ...` changes the job's selected model.
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
-- If it is not allowed or cannot be resolved, cron fails the run with an explicit validation error.
+- If it is not allowed or cannot be resolved, the scheduler fails the run with an explicit validation error.
 - API `cron.update` payload patches can set `model: null` to clear a stored job model override.
-- `openclaw cron edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot combine with `--model`.
-- Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
-- `openclaw cron add|edit --fallbacks ...` sets payload `fallbacks`, replacing configured fallbacks for that job; `--fallbacks ""` disables fallback and makes the run strict. `openclaw cron edit <job-id> --clear-fallbacks` clears the per-job override.
+- `openclaw automations edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot combine with `--model`.
+- Configured fallback chains still apply because the automation `--model` is a job primary, not a session `/model` override.
+- `openclaw automations add|edit --fallbacks ...` sets payload `fallbacks`, replacing configured fallbacks for that job; `--fallbacks ""` disables fallback and makes the run strict. `openclaw automations edit <job-id> --clear-fallbacks` clears the per-job override.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
 
 </Note>
@@ -14349,13 +14365,13 @@ Use the latest-generation, best-tier model available from your provider for untr
 }
 ```
 
-`webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
+`webhookToken` is sent as `Authorization: Bearer <token>` on automation webhook POSTs.
 Webhook URLs must not include embedded username/password credentials; use
 `webhookToken` when the receiver supports bearer authentication.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 
-Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
+Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
@@ -14379,23 +14395,23 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 ```bash
 openclaw status
 openclaw gateway status
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs --id <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 openclaw doctor
 ```
 
 <AccordionGroup>
-  <Accordion title="Cron not firing">
+  <Accordion title="Automations not firing">
     - Check `cron.enabled` and the `OPENCLAW_SKIP_CRON` env var.
     - Confirm the Gateway is running continuously.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-    - `reason: not-due` in run output means the manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
+    - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
 
   </Accordion>
-  <Accordion title="Cron fired but no delivery">
+  <Accordion title="Job fired but no delivery">
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
     - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.
@@ -14404,14 +14420,14 @@ openclaw doctor
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
   </Accordion>
-  <Accordion title="Cron or heartbeat appears to prevent /new-style rollover">
+  <Accordion title="Automations or heartbeat appear to prevent /new-style rollover">
     - Daily and idle reset freshness is not based on `updatedAt`; see [Session management](/concepts/session#session-lifecycle).
-    - Cron wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may update the session row for routing/status, but they do not extend `sessionStartedAt` or `lastInteractionAt`.
+    - Automation wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may update the session row for routing/status, but they do not extend `sessionStartedAt` or `lastInteractionAt`.
     - For legacy rows created before those fields existed, OpenClaw can recover `sessionStartedAt` from the transcript JSONL session header when the file is still available. Legacy idle rows without `lastInteractionAt` use that recovered start time as their idle baseline.
 
   </Accordion>
   <Accordion title="Timezone gotchas">
-    - Cron without `--tz` uses the gateway host timezone.
+    - Cron expressions without `--tz` use the gateway host timezone.
     - `at` schedules without timezone are treated as UTC.
     - Heartbeat `activeHours` uses configured timezone resolution.
 
@@ -14421,7 +14437,7 @@ openclaw doctor
 ## Related
 
 - [Automation](/automation) — all automation mechanisms at a glance
-- [Background Tasks](/automation/tasks) — task ledger for cron executions
+- [Background Tasks](/automation/tasks) — task ledger for automation runs
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration
 
@@ -14434,11 +14450,11 @@ summary: "Redirect to /automation"
 title: "Cron vs heartbeat"
 ---
 
-This page moved. See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the decision table.
+This page moved. See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the decision table.
 
 ## Related
 
-- [Scheduled tasks](/automation/cron-jobs)
+- [Automations](/automation/cron-jobs)
 - [Heartbeat](/gateway/heartbeat)
 - [Background tasks](/automation/tasks)
 
@@ -14879,10 +14895,10 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 ---
 doc-schema-version: 1
-summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and Task Flow"
+summary: "Overview of automation mechanisms: tasks, automations, hooks, standing orders, and Task Flow"
 read_when:
   - Deciding how to automate work with OpenClaw
-  - Choosing between heartbeat, cron, hooks, and standing orders
+  - Choosing between heartbeat, automations, hooks, and standing orders
   - Looking for the right automation entry point
 title: "Automation"
 ---
@@ -14901,7 +14917,7 @@ flowchart TD
     START --> Q5{Give the agent persistent instructions?}
 
     Q1 -->|Yes| Q1a{Exact timing or flexible?}
-    Q1a -->|Exact| CRON["Scheduled Tasks (Cron)"]
+    Q1a -->|Exact| CRON["Automations"]
     Q1a -->|Flexible| HEARTBEAT[Heartbeat]
 
     Q2 -->|Yes| TASKS[Background Tasks]
@@ -14910,23 +14926,23 @@ flowchart TD
     Q5 -->|Yes| SO[Standing Orders]
 ```
 
-| Use case                                | Recommended            | Why                                              |
-| --------------------------------------- | ---------------------- | ------------------------------------------------ |
-| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
-| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
-| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
-| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
-| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
-| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
-| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
-| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
-| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
-| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+| Use case                                | Recommended      | Why                                              |
+| --------------------------------------- | ---------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp         | Automations      | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                 | Automations      | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                | Automations      | Standalone task, can use different model         |
+| Check inbox every 30 min                | Heartbeat        | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events    | Heartbeat        | Natural fit for periodic awareness               |
+| Inspect status of a subagent or ACP run | Background Tasks | Tasks ledger tracks all detached work            |
+| Audit what ran and when                 | Background Tasks | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize      | Task Flow        | Durable orchestration with revision tracking     |
+| Run a script on session reset           | Hooks            | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call         | Plugin hooks     | In-process hooks can intercept tool calls        |
+| Always check compliance before replying | Standing Orders  | Injected into every session automatically        |
 
-### Scheduled Tasks (Cron) vs Heartbeat
+### Automations vs Heartbeat
 
-| Dimension       | Scheduled Tasks (Cron)              | Heartbeat                             |
+| Dimension       | Automations                         | Heartbeat                             |
 | --------------- | ----------------------------------- | ------------------------------------- |
 | Timing          | Exact (cron expressions, one-shot)  | Approximate (default every 30 min)    |
 | Session context | Fresh (isolated) or shared          | Full main-session context             |
@@ -14934,19 +14950,19 @@ flowchart TD
 | Delivery        | Channel, webhook, or silent         | Inline in main session                |
 | Best for        | Reports, reminders, background jobs | Inbox checks, calendar, notifications |
 
-Use Scheduled Tasks (Cron) when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
+Use Automations when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
 
 ## Core concepts
 
-### Scheduled tasks (cron)
+### Automations
 
-Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook endpoint. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
+Automations are OpenClaw's built-in scheduler for precise timing. The scheduler persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook endpoint. Supports one-shot reminders, recurring cron expressions, and inbound webhook triggers.
 
-See [Scheduled Tasks](/automation/cron-jobs).
+See [Automations](/automation/cron-jobs).
 
 ### Tasks
 
-The background task ledger tracks all detached work: ACP runs, subagent spawns, isolated cron executions, and CLI operations. Tasks are records, not schedulers. Use `openclaw tasks list` and `openclaw tasks audit` to inspect them.
+The background task ledger tracks all detached work: ACP runs, subagent spawns, isolated automation runs, and CLI operations. Tasks are records, not schedulers. Use `openclaw tasks list` and `openclaw tasks audit` to inspect them.
 
 See [Background Tasks](/automation/tasks).
 
@@ -14958,7 +14974,7 @@ See [Task Flow](/automation/taskflow).
 
 ### Standing orders
 
-Standing orders grant the agent permanent operating authority for defined programs. They live in workspace files (typically `AGENTS.md`) and are injected into every session. Combine with cron for time-based enforcement.
+Standing orders grant the agent permanent operating authority for defined programs. They live in workspace files (typically `AGENTS.md`) and are injected into every session. Combine with automations for time-based enforcement.
 
 See [Standing Orders](/automation/standing-orders).
 
@@ -14974,14 +14990,14 @@ See [Hooks](/automation/hooks).
 
 ### Heartbeat
 
-Heartbeat is a periodic main-session turn (default every 30 minutes). It batches checklist-style monitoring (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records and do not extend daily/idle session reset freshness. Heartbeat monitor scratch is small prompt context; schedule recurring work as cron jobs. Empty scratch skips as `empty-heartbeat-file`. Scheduled heartbeats automatically defer while the main queue or cron work is busy, another reply or embedded run for the same agent is active, or the resolved target session has active or queued work.
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches checklist-style monitoring (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records and do not extend daily/idle session reset freshness. Heartbeat monitor scratch is small prompt context; schedule recurring work as automation jobs. Empty scratch skips as `empty-heartbeat-file`. Scheduled heartbeats automatically defer while the main queue or automation work is busy, another reply or embedded run for the same agent is active, or the resolved target session has active or queued work.
 
 See [Heartbeat](/gateway/heartbeat).
 
 ## How they work together
 
-- **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
-- **Heartbeat** handles one batched monitoring checklist every 30 minutes; cron owns checks that need independent cadences.
+- **Automations** handle precise schedules (daily reports, weekly reviews) and one-shot reminders. All automation runs create task records.
+- **Heartbeat** handles one batched monitoring checklist every 30 minutes; automations own checks that need independent cadences.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
@@ -14989,7 +15005,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## Related
 
-- [Scheduled Tasks](/automation/cron-jobs) — precise scheduling and one-shot reminders
+- [Automations](/automation/cron-jobs) — precise scheduling and one-shot reminders
 - [Background Tasks](/automation/tasks) — task ledger for all detached work
 - [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
@@ -15049,7 +15065,7 @@ Each program specifies:
 3. **Approval gates** - what requires human sign-off before acting
 4. **Escalation rules** - when to stop and ask for help
 
-The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
+The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [automations](/automation/cron-jobs) for time-based enforcement.
 
 <Tip>
 Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md` - but not arbitrary files in subdirectories.
@@ -15061,7 +15077,7 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 ## Program: Weekly Status Report
 
 **Authority:** Compile data, generate report, deliver to stakeholders
-**Trigger:** Every Friday at 4 PM (enforced via cron job)
+**Trigger:** Every Friday at 4 PM (enforced via automation job)
 **Approval gate:** None for standard reports. Flag anomalies for human review.
 **Escalation:** If data source is unavailable or metrics look unusual (>2σ from norm)
 
@@ -15080,22 +15096,22 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 - Do not skip delivery if metrics look bad - report accurately
 ```
 
-## Standing orders plus cron jobs
+## Standing orders plus automations
 
-Standing orders define **what** the agent is authorized to do. [Cron jobs](/automation/cron-jobs) define **when** it happens. They work together:
+Standing orders define **what** the agent is authorized to do. [Automations](/automation/cron-jobs) define **when** it happens. They work together:
 
 ```text
 Standing Order: "You own the daily inbox triage"
     ↓
-Cron Job (8 AM daily): "Execute inbox triage per standing orders"
+Automation (8 AM daily): "Execute inbox triage per standing orders"
     ↓
 Agent: Reads standing orders → executes steps → reports results
 ```
 
-The cron job prompt should reference the standing order rather than duplicating it:
+The automation job prompt should reference the standing order rather than duplicating it (`openclaw automations`; `openclaw cron` remains an alias):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \
@@ -15240,7 +15256,7 @@ Each program should have:
 - Start with narrow authority and expand as trust builds
 - Define explicit approval gates for high-risk actions
 - Include "What NOT to do" sections - boundaries matter as much as permissions
-- Combine with cron jobs for reliable time-based execution
+- Combine with automations for reliable time-based execution
 - Review agent logs weekly to verify standing orders are being followed
 - Update standing orders as your needs evolve - they're living documents
 
@@ -15250,12 +15266,12 @@ Each program should have:
 - Skip escalation rules - every program needs a "when to stop and ask" clause
 - Assume the agent will remember verbal instructions - put everything in the file
 - Mix concerns in a single program - separate programs for separate domains
-- Forget to enforce with cron jobs - standing orders without triggers become suggestions
+- Forget to enforce with automations - standing orders without triggers become suggestions
 
 ## Related
 
 - [Automation](/automation): all automation mechanisms at a glance.
-- [Cron jobs](/automation/cron-jobs): schedule enforcement for standing orders.
+- [Automations](/automation/cron-jobs): schedule enforcement for standing orders.
 - [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
 - [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.
 - [Agent workspace](/concepts/agent-workspace): where standing orders live, including the full list of auto-injected bootstrap files (`AGENTS.md`, `SOUL.md`, etc.).
@@ -15282,7 +15298,7 @@ Task Flow is the orchestration layer above [background tasks](/automation/tasks)
 | Single background job                     | Plain task                                  |
 | Multi-step pipeline driven by plugin code | Task Flow (managed)                         |
 | Detached ACP or subagent spawn            | Task Flow (mirrored, created automatically) |
-| One-shot reminder                         | Cron job                                    |
+| One-shot reminder                         | Automation job                              |
 
 ## Sync modes
 
@@ -15354,15 +15370,15 @@ Flows are also covered by `openclaw tasks audit` (stale or broken flow findings)
 
 For recurring workflows such as market intelligence briefings, treat the schedule, orchestration, and reliability checks as separate layers:
 
-1. Use [Scheduled Tasks](/automation/cron-jobs) for timing.
-2. Use a persistent cron session when the workflow should build on prior context.
+1. Use [Automations](/automation/cron-jobs) for timing.
+2. Use a persistent automation session when the workflow should build on prior context.
 3. Use [Lobster](/tools/lobster) for deterministic steps, approval gates, and resume tokens.
 4. Use Task Flow to track the multi-step run across child tasks, waits, retries, and gateway restarts.
 
-Example cron shape:
+Example automation job (`openclaw automations`; `openclaw cron` remains an alias):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name "Market intelligence brief" \
   --cron "0 7 * * 1-5" \
   --tz "America/New_York" \
@@ -15404,7 +15420,7 @@ Recommended preflight checks:
 - API credentials and quota for each source.
 - Network reachability for required endpoints.
 - Required tools enabled for the agent, such as `lobster`, `browser`, and `llm-task`.
-- Failure destination configured for cron so preflight failures are visible. See [Scheduled Tasks](/automation/cron-jobs#delivery-and-output).
+- Failure destination configured for the automation so preflight failures are visible. See [Automations](/automation/cron-jobs#delivery-and-output).
 
 Recommended data provenance fields for every collected item:
 
@@ -15431,18 +15447,18 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [Background Tasks](/automation/tasks) - the detached work ledger that flows coordinate
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
-- [Cron Jobs](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows
 
 
 
 # Section: automation/tasks.md
 
 ---
-summary: "Background task tracking for ACP runs, subagents, cron executions, and CLI operations"
+summary: "Background task tracking for ACP runs, subagents, automation runs, and CLI operations"
 read_when:
   - Inspecting background work in progress or recently completed
   - Debugging delivery failures for detached agent runs
-  - Understanding how background runs relate to sessions, cron, and heartbeat
+  - Understanding how background runs relate to sessions, automations, and heartbeat
 title: "Background tasks"
 sidebarTitle: "Background tasks"
 ---
@@ -15451,25 +15467,25 @@ sidebarTitle: "Background tasks"
 Looking for scheduling? See [Automation](/automation) for choosing the right mechanism. This page is the activity ledger for background work, not the scheduler.
 </Note>
 
-Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, cron job executions, and CLI-initiated operations.
+Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, automation job runs, and CLI-initiated operations.
 
-Tasks do **not** replace sessions, cron jobs, or heartbeats - they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
+Tasks do **not** replace sessions, automations, or heartbeats - they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
 For a strict, ephemeral one-shot agent run in CI or a script, use [`openclaw agent exec`](/cli/agent#agent-exec) instead of managed background work.
 
 <Note>
-Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All cron executions, ACP spawns, subagent spawns, gateway-dispatched CLI agent commands, and agent-started background `exec` commands do.
+Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All automation runs, ACP spawns, subagent spawns, gateway-dispatched CLI agent commands, and agent-started background `exec` commands do.
 </Note>
 
 ## TL;DR
 
-- Tasks are **records**, not schedulers - cron and heartbeat decide _when_ work runs, tasks track _what happened_.
-- ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
+- Tasks are **records**, not schedulers - automations and heartbeat decide _when_ work runs, tasks track _what happened_.
+- ACP, subagents, all automation jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
-- Cron tasks stay live while the cron runtime still owns the job; if the in-memory runtime state is gone, task maintenance first checks durable cron run history before marking a task lost.
+- Automation tasks stay live while the automations runtime still owns the job; if the in-memory runtime state is gone, task maintenance first checks durable automation run history before marking a task lost.
 - Completion is push-driven: detached work can notify directly or wake the requester session/heartbeat when it finishes, so status polling loops are usually the wrong shape.
-- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
-- Isolated cron delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
+- Isolated automation runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
+- Isolated automation delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
 - Terminal records are kept for 7 days (`lost` records for 24 hours), then automatically pruned.
@@ -15527,17 +15543,17 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                                          | Default notify policy |
-| ---------------------- | ------------ | ---------------------------------------------------------------------- | --------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                                           | `done_only`           |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                               | `done_only`           |
-| Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)                       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
-| Agent media jobs       | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
+| Source                      | Runtime type | When a task record is created                                          | Default notify policy |
+| --------------------------- | ------------ | ---------------------------------------------------------------------- | --------------------- |
+| ACP background runs         | `acp`        | Spawning a child ACP session                                           | `done_only`           |
+| Subagent orchestration      | `subagent`   | Spawning a subagent via `sessions_spawn`                               | `done_only`           |
+| Automation jobs (all types) | `cron`       | Every automation run (main-session and isolated)                       | `silent`              |
+| CLI operations              | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
+| Agent media jobs            | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
 
 <AccordionGroup>
-  <Accordion title="Notify defaults for cron and media">
-    Cron tasks (main-session and isolated) use `silent` notify policy - they create records for tracking but do not generate task notifications of their own; cron owns its delivery path.
+  <Accordion title="Notify defaults for automations and media">
+    Automation tasks (main-session and isolated) use `silent` notify policy - they create records for tracking but do not generate task notifications of their own; the scheduler owns its delivery path.
 
     Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. The requester agent follows its normal visible-reply contract: automatic final reply when configured, or `message(action="send")` plus `NO_REPLY` when the session requires message-tool replies. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
 
@@ -15586,7 +15602,7 @@ Agent run completion is authoritative for active task records. A successful deta
 
 - ACP tasks: only a live in-process ACP turn in the Gateway proves the run is alive; persisted session metadata alone does not. Offline CLI audit stays conservative and never reclaims ACP tasks.
 - Subagent tasks: backing child session disappeared from the target agent store (or carries a restart-recovery tombstone).
-- Cron tasks: the cron runtime no longer tracks the job as active and durable cron run history does not show a terminal result for that run. Offline CLI audit does not treat its own empty in-process cron runtime state as authority.
+- Automation tasks: the automations runtime no longer tracks the job as active and durable run history does not show a terminal result for that run. Offline CLI audit does not treat its own empty in-process automations runtime state as authority.
 - CLI tasks: tasks with a run id/source id use the live run context, so lingering child-session or chat-session rows do not keep them alive after the gateway-owned run disappears. Legacy CLI tasks without run identity still fall back to the child session. Gateway-backed `openclaw agent` runs also finalize from their run result, so completed runs do not sit active until the sweeper marks them `lost`.
 
 ## Delivery and notifications
@@ -15607,11 +15623,11 @@ That means the usual workflow is push-based: start detached work once, then let 
 
 Control how much you hear about each task:
 
-| Policy                | What is delivered                                       |
-| --------------------- | ------------------------------------------------------- |
-| `done_only` (default) | Only terminal state (succeeded, failed, etc.)           |
-| `state_changes`       | Every state transition and progress update              |
-| `silent`              | Nothing at all (default for cron, CLI, and media tasks) |
+| Policy                | What is delivered                                             |
+| --------------------- | ------------------------------------------------------------- |
+| `done_only` (default) | Only terminal state (succeeded, failed, etc.)                 |
+| `state_changes`       | Every state transition and progress update                    |
+| `silent`              | Nothing at all (default for automation, CLI, and media tasks) |
 
 Change the policy while a task is running:
 
@@ -15643,7 +15659,7 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks cancel <lookup>
     ```
 
-    For ACP and subagent tasks, this kills the child session; ACP and cron cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
 
   </Accordion>
   <Accordion title="tasks notify">
@@ -15688,24 +15704,24 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks maintenance --apply [--json]
     ```
 
-    Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale cron run session registry rows.
+    Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale automation run session registry rows.
 
     Reconciliation is runtime-aware:
 
     - ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
-    - Cron tasks check whether the cron runtime still owns the job, then recover terminal status from persisted cron run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory cron active-job set; offline CLI audit uses durable history but does not mark a cron task lost solely because that local set is empty.
+    - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
     - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
 
     Completion cleanup is also runtime-aware:
 
     - Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
-    - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
-    - Isolated cron delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
+    - Isolated automation completion best-effort closes tracked browser tabs/processes for the run's session before the run fully tears down.
+    - Isolated automation delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
     - Subagent completion delivery uses the child's latest visible assistant text only. Tool/toolResult output is not promoted into child result text. Terminal failed runs announce failure status without replaying captured reply text.
     - Cleanup failures do not mask the real task outcome.
 
-    When applying maintenance, OpenClaw also removes stale `cron:<jobId>:run:<runId>` session registry rows older than 7 days, while preserving rows for currently running cron jobs and leaving non-cron session rows untouched.
+    When applying maintenance, OpenClaw also removes stale `cron:<jobId>:run:<runId>` session registry rows older than 7 days, while preserving rows for currently running automation jobs and leaving other session rows untouched.
 
   </Accordion>
   <Accordion title="tasks flow list | show | cancel">
@@ -15770,7 +15786,7 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
 
 <Steps>
   <Step title="Reconciliation">
-    Checks whether active tasks still have authoritative runtime backing. ACP tasks require a live in-process turn, subagent tasks use child-session state, cron tasks use active-job ownership plus durable run history, and CLI tasks with run identity use the owning run context. If backing state is gone for more than 5 minutes (30 minutes for childless native subagent tasks), the task is marked `lost`.
+    Checks whether active tasks still have authoritative runtime backing. ACP tasks require a live in-process turn, subagent tasks use child-session state, automation tasks use active-job ownership plus durable run history, and CLI tasks with run identity use the owning run context. If backing state is gone for more than 5 minutes (30 minutes for childless native subagent tasks), the task is marked `lost`.
   </Step>
   <Step title="ACP session repair">
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
@@ -15794,10 +15810,10 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
     [Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
   </Accordion>
-  <Accordion title="Tasks and cron">
-    Cron job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** cron execution creates a task record - both main-session and isolated - with `silent` notify policy, so cron runs are tracked without generating task notifications of their own.
+  <Accordion title="Tasks and automations">
+    Automation job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** automation run creates a task record - both main-session and isolated - with `silent` notify policy, so automation runs are tracked without generating task notifications of their own.
 
-    See [Cron Jobs](/automation/cron-jobs).
+    See [Automations](/automation/cron-jobs).
 
   </Accordion>
   <Accordion title="Tasks and heartbeat">
@@ -15819,7 +15835,7 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
 - [Automation](/automation) - all automation mechanisms at a glance
 - [CLI: Tasks](/cli/tasks) - CLI command reference
 - [Heartbeat](/gateway/heartbeat) - periodic main-session turns
-- [Scheduled Tasks](/automation/cron-jobs) - scheduling background work
+- [Automations](/automation/cron-jobs) - scheduling background work
 - [Task Flow](/automation/taskflow) - flow orchestration above tasks
 
 
@@ -17140,6 +17156,32 @@ openclaw message send \
 For a full round trip, have an allowed Buzz user mention the bot and confirm that
 OpenClaw replies in the room.
 
+### QA Lab round trip
+
+Source checkouts can exercise the production Buzz channel path with two
+dedicated test identities:
+
+```bash
+pnpm openclaw qa buzz \
+  --credential-file /secure/path/buzz-qa-credentials.json \
+  --provider-mode mock-openai
+```
+
+The command runs a real relay canary and mention-gating check while using the
+deterministic mock model. The private JSON credential
+file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
+optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
+public keys must be room members, and the SUT public key must have the **Bot**
+role. A closed relay may require both public keys to be enrolled separately.
+Use `--credential-source convex` for pooled QA credentials.
+
+Use `wss://` for hosted relays. Plaintext `ws://` credential URLs are accepted
+only for loopback development relays.
+
+Never use a human owner or admin private key. Private keys and optional
+authorization values are parent-harness secrets and must not appear in logs,
+artifacts, screenshots, shell history, or source control.
+
 ## Rotate the bot identity
 
 Bot identity rotation requires admin approval for the new public key:
@@ -17480,23 +17522,26 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 ### Account config keys
 
-| Key                     | Default             | Notes                                                                                   |
-| ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                    |
-| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.             |
-| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
-| `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
-| `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
-| `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions. |
-| `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                      |
-| `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                 |
-| `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                        |
-| `agentId`               | route default       | Pin this account's inbound messages to one agent.                                       |
-| `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                     |
-| `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
-| `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
-| `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
-| `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).  |
+| Key                     | Default             | Notes                                                                                                                 |
+| ----------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                                                  |
+| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.                                           |
+| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).                                      |
+| `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                                              |
+| `workspace`             | none (required)     | Workspace id, slug, or name.                                                                                          |
+| `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions.                               |
+| `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                                                    |
+| `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
+| `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
+| `agentId`               | route default       | Pin this account's inbound messages to one agent.                                                                     |
+| `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                                                   |
+| `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                                                             |
+| `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                                                          |
+| `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                                              |
+| `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).                                |
+| `requireMention`        | `false`             | Require a direct mention before dispatching group messages. See [Group mention gating](#group-mention-gating).        |
+| `mentionPatterns`       | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
+| `groups`                | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
 
 ### Keep an auth-gated public hostname
 
@@ -17786,6 +17831,56 @@ Requirements and behavior:
 - **Best-effort degradation.** If the token lacks `agent_activity:write` or the server rejects activity writes, failures are logged and the final reply still delivers normally; no activity rows appear.
 - Rows are grouped per turn (`turn_id`), coalesced so one logical step is one row, and tool rows use the same progress formatting as Discord/Slack/Telegram (tool name plus command detail).
 - **Attribution metadata.** Agent-authored posts (activity rows and the final reply) carry `author_model` and `author_thinking` fields resolved from the actual model used for the turn (including after fallback). Servers that do not define these columns ignore the unknown JSON fields; servers that persist them can answer "which model said this line, at which thinking level" per message.
+
+## Group mention gating
+
+By default, every group message in ClickClack dispatches to every enabled ClickClack account in the same workspace. This behavior is backward compatible. Add `requireMention: true` to an account to require a direct mention before the agent pipeline runs.
+
+The effective policy is resolved in this order:
+
+1. Exact channel entry in `groups` (keyed by ClickClack channel ID).
+2. Wildcard `"*"` entry in `groups`.
+3. Account-level `requireMention` / `mentionPatterns`.
+4. Backward-compatible default (`{ requireMention: false, mentionPatterns: [] }`).
+
+DMs are never gated by `requireMention`. When a DM arrives, the mention gate is skipped entirely.
+
+### Mention detection
+
+ClickClack mentions are detected when:
+
+- The message body matches any pattern in `mentionPatterns` (each pattern is a regular expression).
+- The message contains the bot's ClickClack `@handle`. The gateway reads the handle from the authenticated bot identity at startup.
+
+Plain display names (e.g. `Blackbird`) are **not** treated as mentions unless they are explicitly configured as a pattern.
+
+### Configuration example
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      requireMention: true,
+      mentionPatterns: ["\\bBlackbird\\b"],
+      groups: {
+        "*": { requireMention: true },
+        chn_command_and_control: { requireMention: false },
+      },
+    },
+  },
+}
+```
+
+Multiple accounts in the same workspace evaluate the same message independently. Accounts with `requireMention: true` reject an unmentioned message while an account with `requireMention: false` may process it.
+
+### Migration warning
+
+ClickClack channel IDs (e.g. `chn_...`) are not automatically Discord channel IDs. Configuring per-channel rules requires the actual ClickClack channel identifier. Do not reuse Discord IDs unless the ClickClack server explicitly stores them as `external_ref` and the adapter has a documented translation layer.
+
+Adding `requireMention: true` without also restricting `allowFrom` will not silently change existing sender allowlist behavior for group messages; the mention gate is an additional guard on top of the existing sender policy.
 
 ## Targets
 
@@ -35233,7 +35328,7 @@ Config is layered in three parts, entirely in memory: exec composes the run conf
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command.
 
-The state directory is also where installed plugins live, so the default ephemeral one cannot discover plugins you installed with `openclaw plugins install`. If your config selects a provider, channel, or harness from a non-bundled plugin, point the run at your real state directory with `--state-dir ~/.openclaw`.
+When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
 
 For reproducible runs, pin the config instead of inheriting it. `--config <path>` runs against exactly that config file, read through the normal loader so JSON5 syntax and `$include` resolve relative to it; a missing or invalid file fails the run rather than falling back to defaults, as does an ambient config that exists but cannot be parsed. `--isolated` ignores the ambient config entirely and uses only the exec defaults above. Both are the right choice for CI, where inheriting operator state would make runs machine-dependent.
 
@@ -37812,31 +37907,31 @@ This page moved to [OpenClaw setup and repair](/cli/openclaw).
 # Section: cli/cron.md
 
 ---
-summary: "CLI reference for `openclaw cron` (schedule and run background jobs)"
+summary: "CLI reference for `openclaw automations` (schedule and run background jobs)"
 read_when:
   - You want scheduled jobs and wakeups
-  - You are debugging cron execution and logs
-title: "Cron"
+  - You are debugging automation execution and logs
+title: "Automations (cron)"
 ---
 
-# `openclaw cron`
+# `openclaw automations`
 
-Manage cron jobs for the Gateway scheduler.
+Manage automation jobs for the Gateway scheduler. `openclaw automations` is the primary command; `openclaw cron` remains an alias, and every subcommand below works with either spelling.
 
 <Tip>
-Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automation/cron-jobs) for the conceptual guide.
+Run `openclaw automations --help` for the full command surface. See [Automations](/automation/cron-jobs) for the conceptual guide.
 </Tip>
 
 <Note>
-All cron mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
+All automation mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 
 ## Create jobs quickly
 
-`openclaw cron create` is an alias for `openclaw cron add`. For new jobs, put the schedule first and the prompt second:
+`openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
 
 ```bash
-openclaw cron create "0 7 * * *" \
+openclaw automations create "0 7 * * *" \
   "Summarize overnight updates." \
   --name "Morning brief" \
   --agent ops
@@ -37845,16 +37940,16 @@ openclaw cron create "0 7 * * *" \
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
 ```bash
-openclaw cron create "0 18 * * 1-5" \
+openclaw automations create "0 18 * * 1-5" \
   "Summarize today's deploys as JSON." \
   --name "Deploy digest" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
-Use `--command` for deterministic shell-style jobs that run inside OpenClaw cron without starting an isolated agent/model run:
+Use `--command` for deterministic shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
 
 ```bash
-openclaw cron create "*/15 * * * *" \
+openclaw automations create "*/15 * * * *" \
   --name "Queue depth probe" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
@@ -37863,7 +37958,7 @@ openclaw cron create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal cron history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
 ## Sessions
 
@@ -37886,26 +37981,26 @@ Agent-turn jobs default to the creating conversation when session context is ava
 
 ## Delivery
 
-`openclaw cron list` and `openclaw cron show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations list` and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
 
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
 <Note>
-Isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`.
+Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`.
 </Note>
 
 ### Delivery ownership
 
-Isolated cron chat delivery is shared between the agent and the runner:
+Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
 - `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
 - `webhook` posts the finished payload to a URL.
 - `none` disables runner fallback delivery.
 
-Use `cron add|create --webhook <url>` or `cron edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
+Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
-`cron edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
+`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
 
 `--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
 
@@ -37925,11 +38020,11 @@ Main-session jobs may only use `delivery.failureDestination` when primary delive
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
 
-Isolated cron runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
+Isolated automation runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 
-Command cron jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
+Command jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
 
-If an isolated run times out before the first model request, `openclaw cron show` and `openclaw cron runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model cron failures.
+If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model automation failures.
 
 ## Scheduling
 
@@ -37945,25 +38040,25 @@ One-shot jobs delete after success by default. Use `--keep-after-run` to preserv
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
-Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw cron edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
+Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
-For isolated jobs that target a local configured model provider (base URL on loopback, a private network, or `.local`), cron runs a lightweight provider preflight before starting the agent turn: `api: "ollama"` providers are probed at `/api/tags`; other local OpenAI-compatible providers (`api: "openai-completions"`, e.g. vLLM, SGLang, LM Studio) are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; the reachability result is cached per endpoint for 5 minutes so many jobs against the same local server do not hammer it with repeated probes.
+For isolated jobs that target a local configured model provider (base URL on loopback, a private network, or `.local`), the scheduler runs a lightweight provider preflight before starting the agent turn: `api: "ollama"` providers are probed at `/api/tags`; other local OpenAI-compatible providers (`api: "openai-completions"`, e.g. vLLM, SGLang, LM Studio) are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; the reachability result is cached per endpoint for 5 minutes so many jobs against the same local server do not hammer it with repeated probes.
 
-Cron jobs, pending runtime state, and run history live in the shared SQLite state database. Legacy `jobs.json`, `<name>-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. After import, edit schedules with `openclaw cron add|edit|remove` instead of editing JSON files.
+Automation jobs, pending runtime state, and run history live in the shared SQLite state database. Legacy `jobs.json`, `<name>-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. After import, edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
 
 ### Manual runs
 
-`openclaw cron run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
+`openclaw automations run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
 
 ```bash
-openclaw cron run <job-id>
-openclaw cron runs --id <job-id> --run-id <run-id>
+openclaw automations run <job-id>
+openclaw automations runs --id <job-id> --run-id <run-id>
 ```
 
 Add `--wait` when a script should block until that exact queued run records a terminal status:
 
 ```bash
-openclaw cron run <job-id> --wait --wait-timeout 10m --poll-interval 2s
+openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
 With `--wait`, the CLI still calls `cron.run` first, then polls `cron.runs` for the returned `runId`. The command exits `0` only when the run finishes with status `ok`. It exits non-zero when the run finishes with `error` or `skipped`, when the Gateway response does not include a `runId`, or when `--wait-timeout` expires (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero.
@@ -37974,68 +38069,68 @@ Use `--due` when you want the manual command to run only if the job is currently
 
 ## Models
 
-`cron add|edit --model <ref>` selects an allowed model for the job. `cron add|edit --fallbacks <list>` sets per-job fallback models, for example `--fallbacks openrouter/gpt-4.1-mini,openai/gpt-5`; pass `--fallbacks ""` for a strict run with no fallbacks. `cron edit <job-id> --clear-fallbacks` removes the per-job fallback override. `cron edit <job-id> --clear-model` removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if present, otherwise the agent/default model); it cannot be combined with `--model`. `cron add|edit --thinking <level>` sets a per-job thinking override; `cron edit <job-id> --clear-thinking` removes it so the job follows normal cron thinking precedence, and it cannot be combined with `--thinking`.
+`automations add|edit --model <ref>` selects an allowed model for the job. `automations add|edit --fallbacks <list>` sets per-job fallback models, for example `--fallbacks openrouter/gpt-4.1-mini,openai/gpt-5`; pass `--fallbacks ""` for a strict run with no fallbacks. `automations edit <job-id> --clear-fallbacks` removes the per-job fallback override. `automations edit <job-id> --clear-model` removes the per-job model override so the job follows normal automation model-selection precedence (a stored automation-session override if present, otherwise the agent/default model); it cannot be combined with `--model`. `automations add|edit --thinking <level>` sets a per-job thinking override; `automations edit <job-id> --clear-thinking` removes it so the job follows normal automation thinking precedence, and it cannot be combined with `--thinking`.
 
 <Warning>
-If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
+If the model is not allowed or cannot be resolved, the scheduler fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
 </Warning>
 
-Cron `--model` is a **job primary**, not a chat-session `/model` override. That means:
+The automation `--model` is a **job primary**, not a chat-session `/model` override. That means:
 
 - Configured model fallbacks still apply when the selected job model fails.
 - Per-job payload `fallbacks` replaces the configured fallback list when present.
-- An empty per-job fallback list (`--fallbacks ""` or `fallbacks: []` in the job payload/API) makes the cron run strict.
+- An empty per-job fallback list (`--fallbacks ""` or `fallbacks: []` in the job payload/API) makes the run strict.
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden retry target.
-- Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`.
+- Local-provider preflight checks walk configured fallbacks before marking a run `skipped`.
 
 `openclaw doctor` reports jobs that already have `payload.model` set, including provider namespace counts and mismatches against `agents.defaults.model`. Use that check when auth, provider, or billing behavior looks different between live chat and scheduled jobs.
 
-### Isolated cron model precedence
+### Isolated automation model precedence
 
-Isolated cron resolves the active model in this order:
+Isolated automation runs resolve the active model in this order:
 
 1. Gmail-hook override.
 2. Per-job `--model`.
-3. Stored cron-session model override (when the user selected one).
+3. Stored automation-session model override (when the user selected one).
 4. Agent or default model selection.
 
 ### Fast mode
 
-Isolated cron fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
+Isolated automation fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
 
 ### Live model switch retries
 
-If an isolated run throws `LiveSessionModelSwitchError`, cron persists the switched provider and model (and switched auth profile override when present) for the active run before retrying. The outer retry loop is bounded to two switch retries after the initial attempt, then aborts instead of looping forever.
+If an isolated run throws `LiveSessionModelSwitchError`, the scheduler persists the switched provider and model (and switched auth profile override when present) for the active run before retrying. The outer retry loop is bounded to two switch retries after the initial attempt, then aborts instead of looping forever.
 
 ## Run output and denials
 
 ### Stale acknowledgement suppression
 
-Isolated cron turns suppress stale acknowledgement-only replies. If the first result is just an interim status update and no descendant subagent run is responsible for the eventual answer, cron re-prompts once for the real result before delivery.
+Isolated automation turns suppress stale acknowledgement-only replies. If the first result is just an interim status update and no descendant subagent run is responsible for the eventual answer, the scheduler re-prompts once for the real result before delivery.
 
 ### Silent token suppression
 
-If an isolated cron run returns only the silent token (`NO_REPLY` or `no_reply`), cron suppresses both direct outbound delivery and the fallback queued summary path, so nothing is posted back to chat.
+If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses both direct outbound delivery and the fallback queued summary path, so nothing is posted back to chat.
 
 ### Structured denials
 
-Isolated cron runs use structured execution-denial metadata from the embedded run (fatal exec-tool errors coded `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers around a nested structured error carrying one of those codes.
+Isolated automation runs use structured execution-denial metadata from the embedded run (fatal exec-tool errors coded `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers around a nested structured error carrying one of those codes.
 
-Cron does not classify final-output prose or approval-looking refusal phrases as denials unless the embedded run also provides structured denial metadata, so ordinary assistant text is not treated as a blocked command.
+The scheduler does not classify final-output prose or approval-looking refusal phrases as denials unless the embedded run also provides structured denial metadata, so ordinary assistant text is not treated as a blocked command.
 
-`cron list` and run history surface the denial reason instead of reporting a blocked command as `ok`.
+`automations list` and run history surface the denial reason instead of reporting a blocked command as `ok`.
 
 ## Retention
 
 Retention behavior:
 
 - `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
-- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain the standard 24-hour lost-task cleanup window.
+- Run history keeps the newest 2000 terminal rows per job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
 
 <Note>
-If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery before removing that config key. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, the inert top-level `notify` marker is removed for jobs with no migration target (the existing delivery is preserved unchanged), so `doctor --fix` no longer keeps re-warning about them.
+If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery before removing that config key. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, the inert top-level `notify` marker is removed for jobs with no migration target (the existing delivery is preserved unchanged), so `doctor --fix` no longer keeps re-warning about them.
 </Note>
 
 ## Common edits
@@ -38043,37 +38138,37 @@ If you have cron jobs from before the current delivery and store format, run `op
 Update delivery settings without changing the message:
 
 ```bash
-openclaw cron edit <job-id> --announce --channel telegram --to "123456789"
+openclaw automations edit <job-id> --announce --channel telegram --to "123456789"
 ```
 
 Disable delivery for an isolated job:
 
 ```bash
-openclaw cron edit <job-id> --no-deliver
+openclaw automations edit <job-id> --no-deliver
 ```
 
 Enable lightweight bootstrap context for an isolated job:
 
 ```bash
-openclaw cron edit <job-id> --light-context
+openclaw automations edit <job-id> --light-context
 ```
 
 Announce to a specific channel:
 
 ```bash
-openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
+openclaw automations edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
 
 Announce to a Telegram forum topic:
 
 ```bash
-openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+openclaw automations edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
 ```
 
 Create an isolated job with lightweight bootstrap context:
 
 ```bash
-openclaw cron create "0 7 * * *" \
+openclaw automations create "0 7 * * *" \
   "Summarize overnight updates." \
   --name "Lightweight morning brief" \
   --session isolated \
@@ -38081,12 +38176,12 @@ openclaw cron create "0 7 * * *" \
   --no-deliver
 ```
 
-`--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+`--light-context` applies to isolated agent-turn jobs only. For automation runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
 
 Create a command job with exact argv, cwd, env, stdin, and output limits:
 
 ```bash
-openclaw cron create "*/30 * * * *" \
+openclaw automations create "*/30 * * * *" \
   --name "Position export" \
   --command-argv '["node","scripts/export-position.mjs"]' \
   --command-cwd "/srv/app" \
@@ -38103,63 +38198,63 @@ openclaw cron create "*/30 * * * *" \
 Manual run and inspection:
 
 ```bash
-openclaw cron list
-openclaw cron list --agent ops
-openclaw cron get <job-id>
-openclaw cron show <job-id>
-openclaw cron run <job-id>
-openclaw cron run <job-id> --due
-openclaw cron run <job-id> --wait --wait-timeout 10m
-openclaw cron run <job-id> --wait --wait-timeout 10m --poll-interval 2s
-openclaw cron runs --id <job-id> --limit 50
-openclaw cron runs --id <job-id> --run-id <run-id>
+openclaw automations list
+openclaw automations list --agent ops
+openclaw automations get <job-id>
+openclaw automations show <job-id>
+openclaw automations run <job-id>
+openclaw automations run <job-id> --due
+openclaw automations run <job-id> --wait --wait-timeout 10m
+openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
+openclaw automations runs --id <job-id> --limit 50
+openclaw automations runs --id <job-id> --run-id <run-id>
 ```
 
-`openclaw cron list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+`openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
-`openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
+`openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 
-`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
+`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 
-`cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
+`automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 
 Private per-job scratch (heartbeat checklists and similar monitor context):
 
 ```bash
-openclaw cron scratch <job-id>                  # print current scratch content
-openclaw cron scratch <job-id> --json           # scratch plus revision metadata
-openclaw cron scratch <job-id> --set "text"     # replace scratch with exact text
-openclaw cron scratch <job-id> --file notes.md  # replace scratch from a file (- for stdin)
-openclaw cron scratch <job-id> --unset          # remove the scratch row
+openclaw automations scratch <job-id>                  # print current scratch content
+openclaw automations scratch <job-id> --json           # scratch plus revision metadata
+openclaw automations scratch <job-id> --set "text"     # replace scratch with exact text
+openclaw automations scratch <job-id> --file notes.md  # replace scratch from a file (- for stdin)
+openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
-Scratch is stored in the shared state database, capped at 256 KiB, and never included in `cron list`/`cron get`/`cron runs` output. Writes are compare-and-swap guarded against the revision read at command start; pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start; pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
 
 Agent and session retargeting:
 
 ```bash
-openclaw cron edit <job-id> --agent ops
-openclaw cron edit <job-id> --clear-agent
-openclaw cron edit <job-id> --session current
-openclaw cron edit <job-id> --session "session:daily-brief"
+openclaw automations edit <job-id> --agent ops
+openclaw automations edit <job-id> --clear-agent
+openclaw automations edit <job-id> --session current
+openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw cron add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
 
 Delivery tweaks:
 
 ```bash
-openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
-openclaw cron edit <job-id> --webhook "https://example.invalid/openclaw/cron"
-openclaw cron edit <job-id> --best-effort-deliver
-openclaw cron edit <job-id> --no-best-effort-deliver
-openclaw cron edit <job-id> --no-deliver
+openclaw automations edit <job-id> --announce --channel slack --to "channel:C1234567890"
+openclaw automations edit <job-id> --webhook "https://example.invalid/openclaw/cron"
+openclaw automations edit <job-id> --best-effort-deliver
+openclaw automations edit <job-id> --no-best-effort-deliver
+openclaw automations edit <job-id> --no-deliver
 ```
 
 ## Related
 
 - [CLI reference](/cli)
-- [Scheduled tasks](/automation/cron-jobs)
+- [Automations](/automation/cron-jobs)
 
 
 
@@ -41761,7 +41856,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>
@@ -49333,7 +49428,7 @@ A non-dry-run import that changes any page records an import run id, printed in 
 
 ### `wiki chatgpt rollback <run-id>`
 
-Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. No-ops (and reports `alreadyRolledBack`) if the run was already rolled back.
+Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. Pages changed after import are moved under the run's `.openclaw-wiki/import-runs/<run-id>/recovered/` directory instead of being deleted. Recovery paths remain in the command result on retries and later `alreadyRolledBack` responses. Interrupted runs remain `rolling_back` while target recovery or derived-artifact compilation is incomplete. A persisted process-restart fence separates those phases: after it, retries rebuild indexes and compiled caches without rewriting source pages or moving later pathname writes. A later normal compile may refresh machine-managed Related blocks. This covers in-process failure and process restart after ordinary filesystem calls return, not kernel or host power-loss ordering.
 
 ### `wiki obsidian ...`
 
@@ -59765,6 +59860,7 @@ script aliases; both forms work.
 | `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                                                                                              |
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
 | `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                           |
+| `qa buzz`                                           | Live transport lane against a real Buzz relay room with dedicated driver and SUT identities.                                                                                                                                                                        |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                   |
 | `qa matrix`                                         | QA Lab Matrix catalog scenarios against a disposable Tuwunel homeserver. See [Matrix live lane](#matrix-live-lane).                                                                                                                                                 |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                           |
@@ -59931,12 +60027,19 @@ explicit subset, including portable scenarios with no channel restriction.
 Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
-The adapter provisions a disposable Tuwunel homeserver in Docker (default
-image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`,
-port `28008`), registers temporary driver, SUT, and observer users, seeds the
-required rooms, and records the redacted request/response boundary. It then
-runs the real Matrix plugin inside a child QA gateway scoped to that transport
-(no `qa-channel`) and tears the environment down.
+The adapter provisions a disposable Tuwunel homeserver in Docker (default image
+`ghcr.io/matrix-construct/tuwunel:v1.8.2`, pinned to its multi-architecture OCI
+index digest; server name `matrix-qa.test`, port `28008`), registers temporary
+driver, SUT, and observer users, seeds the required rooms, and records the
+redacted request/response boundary. It then runs the real Matrix plugin inside
+a child QA gateway scoped to that transport (no `qa-channel`) and tears the
+environment down.
+
+The v1.8.2 GHCR index resolves to
+`sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78`.
+`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.2`
+reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
+`linux/amd64/v3`.
 
 Common options:
 
@@ -60002,6 +60105,7 @@ decision still comes from the Discord REST oracle.
 For the other transport-real smoke lanes:
 
 ```bash
+pnpm openclaw qa buzz
 pnpm openclaw qa discord
 pnpm openclaw qa slack
 pnpm openclaw qa telegram
@@ -60010,8 +60114,8 @@ pnpm openclaw qa whatsapp
 
 They target a pre-existing real channel with two bots or accounts (driver +
 SUT). Required env vars, scenario lists, output artifacts, and the Convex
-credential pool for those four transports are documented in
-[Discord, Slack, Telegram, and WhatsApp QA reference](#discord-slack-telegram-and-whatsapp-qa-reference)
+credential pool for those five transports are documented in
+[Buzz, Discord, Slack, Telegram, and WhatsApp QA reference](#buzz-discord-slack-telegram-and-whatsapp-qa-reference)
 below.
 
 ### Mantis Slack desktop and visual-task runners
@@ -60164,16 +60268,16 @@ guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the
 guest can write back through the mounted workspace.
 
-## Discord, Slack, Telegram, and WhatsApp QA reference
+## Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
 
 The Matrix adapter uses the disposable Docker-backed lane documented above.
-Discord, Slack, Telegram, and WhatsApp run against pre-existing real
+Buzz, Discord, Slack, Telegram, and WhatsApp run against pre-existing real
 transports, so their reference lives here.
 
 ### Shared CLI flags
 
-These lanes register through
-`extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and
+These lanes register through the shared QA runner CLI contract. Transport
+plugins may own the registration while QA Lab remains the suite host. They
 accept the same flags:
 
 | Flag                                  | Default                                            | Description                                                                                                                                     |
@@ -60182,17 +60286,52 @@ accept the same flags:
 | `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
 | `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
 | `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
+| `--provider-mode <mode>`              | `live-frontier` (Buzz: `mock-openai`)              | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
 | `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
 | `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
-| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-source <source>`        | `env` (Buzz: `file`)                               | Existing lanes use `env` or `convex`; Buzz uses `file` or `convex`. See [Convex credential pool](#convex-credential-pool).                      |
 | `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
+| `--credential-file <path>`            | -                                                  | Buzz-only JSON credential file for local runs.                                                                                                  |
 | `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
 `--list-scenarios` to print available scenario ids and exit; the other lanes
 do not expose that flag.
+
+### Buzz QA
+
+```bash
+pnpm openclaw qa buzz \
+  --credential-file /secure/path/buzz-qa-credentials.json
+```
+
+Targets one real Buzz room with two dedicated Nostr identities. The driver
+publishes inbound room events; the SUT identity is configured in the child
+OpenClaw Gateway and its outbound events are observed from the relay. The
+default `mock-openai` provider proves the real Buzz transport without requiring
+a model-provider credential.
+
+Local runs use `--credential-file <path>` with a private JSON file containing
+`relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`. Closed relays may
+also need `driverAuthTag` and `sutAuthTag`. Relative paths resolve from
+`--repo-root`. Hosted relays must use `wss://`; plaintext `ws://` is accepted
+only for loopback development relays.
+
+Both identities must be members of the dedicated room, and the SUT public key
+must have the **Bot** role. A hosted closed relay may also require both public
+keys to be enrolled as relay members. Use dedicated QA identities only; never
+use a human owner or admin private key. Keep all private keys and authorization
+values out of logs, command lines, artifacts, screenshots, and source control.
+
+The default scenarios are:
+
+- `channel-canary`
+- `channel-mention-gating`
+
+Each run writes `qa-suite-report.md`, `qa-suite-summary.json`, and
+`qa-evidence.json` under the selected output directory. The report identifies
+the real Buzz relay path but omits credential values.
 
 ### Telegram QA
 
@@ -60211,37 +60350,17 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
 
-The `release` profile selects the maintained Telegram YAML scenarios; `all`
-adds opt-in session, usage, reply-chain, and streaming stress checks. Explicit
-`--scenario` values override the profile.
+The `release` profile selects taxonomy-owned Telegram scenarios that declare
+the channel, use the flow execution kind, and match the requested provider and
+model lane. Explicit `--scenario` values narrow that same selection instead of
+bypassing its constraints. Use `pnpm openclaw qa telegram --list-scenarios
+--provider-mode mock-openai` to print the current selection with regression
+refs. Supplying `--model` applies the same model constraint to listing and
+execution.
 
-- `channel-canary`
-- `channel-mention-gating`
-- `telegram-help-command`
-- `telegram-commands-command`
-- `telegram-tools-compact-command`
-- `telegram-whoami-command`
-- `telegram-status-command`
-- `telegram-repeated-command-authorization`
-- `telegram-other-bot-command-gating`
-- `telegram-context-command`
-- `telegram-current-session-status-tool`
-- `telegram-tool-only-usage-footer`
-- `telegram-reply-chain-exact-marker`
-- `telegram-stream-final-single-message`
-- `telegram-long-final-reuses-preview`
-- `telegram-long-final-three-chunks`
-
-The `release` profile always covers canary, mention gating, native command
-replies, command addressing, and bot-to-bot group replies. `mock-openai`
-also includes the deterministic long-final preview check.
-`telegram-current-session-status-tool` and
-`telegram-tool-only-usage-footer` remain opt-in: the former is only stable
-when threaded directly after canary, and the latter is a real-Telegram proof
-of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
---list-scenarios --provider-mode mock-openai` to print the current
-default/optional split with regression refs. Use `--profile all` for every
-Telegram live-adapter scenario.
+`telegram-startup-getme-live` is a catalog script producer, not a live-adapter
+flow. Run it through `qa suite --scenario telegram-startup-getme-live`; the
+dedicated `qa telegram` command and `--list-scenarios` intentionally omit it.
 
 Output artifacts:
 
@@ -60725,11 +60844,10 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
 - Status reactions: `whatsapp-status-reactions`,
   `whatsapp-status-reaction-lifecycle`.
 
-The catalog currently contains 52 scenarios. The `live-frontier` default lane
-is kept small at 8 scenarios for fast smoke coverage. The `mock-openai`
-default lane runs 39 scenarios deterministically through the real WhatsApp
-transport while mocking only model output; approval scenarios and a few
-heavier/blocking checks remain explicit by scenario id.
+WhatsApp defaults are derived from the selected taxonomy profile and lane
+constraints. `mock-openai` runs eligible scenarios deterministically through
+the real WhatsApp transport while mocking only model output; `live-frontier`
+excludes scenarios whose provider or model contract requires the mock lane.
 
 The WhatsApp QA driver observes structured live events (`text`, `media`,
 `location`, `reaction`, and `poll`) and can actively send media, polls,
@@ -60756,15 +60874,20 @@ Output artifacts:
 
 ### Convex credential pool
 
-Discord, Slack, Telegram, and WhatsApp lanes can lease credentials from a
+Buzz, Discord, Slack, Telegram, and WhatsApp lanes can lease credentials from a
 shared Convex pool instead of reading the env vars above. Pass
 `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`);
 QA Lab acquires an exclusive lease, heartbeats it for the duration of the
-run, and releases it on shutdown. Pool kinds are `"discord"`, `"slack"`,
-`"telegram"`, and `"whatsapp"`.
+run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
+`"slack"`, `"telegram"`, and `"whatsapp"`.
 
 Payload shapes the broker validates on `admin/add`:
 
+- Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
+driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string,
+sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
+  for loopback relays; `roomId` must be a channel UUID, and the identities must
+  be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
 driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
@@ -65444,9 +65567,12 @@ gateway` or the `openclaw onboard --gateway-auth ...` options, then let device
 pairing mint the client token:
 
 1. Persist an Ed25519 device identity in the client.
-2. Wait for `connect.challenge`, sign the challenge-bound device payload, and send
-   `connect` with the requested operator role, scopes, and the shared Gateway token
-   or password for bootstrap authentication.
+2. Wait for `connect.challenge`, use its `ts` as the device proof's `signedAt`,
+   sign the challenge-bound device payload, and send `connect` with the requested
+   operator role, scopes, and the shared Gateway token or password for bootstrap
+   authentication. A received WebSocket challenge without a non-negative integer
+   `ts` is invalid. Clients that explicitly support Gateways from before
+   `connect.challenge` existed may use local time only on their no-challenge path.
 3. If the Gateway returns structured `PAIRING_REQUIRED` details, show the request
    ID and pause or retry according to `error.details.recommendedNextStep`.
 4. On the Gateway host, review the request with `openclaw devices list`, then
@@ -67087,6 +67213,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
+- `group-mentions` acks group messages that mention the agent, including in groups with `requireMention: false`. Use `group-all` to ack every group message.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
@@ -70027,7 +70154,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
-- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
+- `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
@@ -71199,7 +71328,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 
 ---
 
-## Cron
+## Automations (`cron`)
 
 ```json5
 {
@@ -71214,11 +71343,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `enabled`: execute stored cron jobs (default: `true`). Set `false` to pause all cron execution without deleting jobs.
-- `triggers.enabled`: also run event-driven cron triggers (default: `false`).
-- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
+- `triggers.enabled`: also run event-driven automation triggers (default: `false`).
+- `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
-- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 
 The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
 `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
@@ -71250,7 +71379,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 destination for every job. The retired `cron.failureDestination` block is merged
 into it by [`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `enabled`: enable failure alerts for automation jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
@@ -71262,7 +71391,7 @@ into it by [`openclaw doctor --fix`](/cli/doctor).
 - When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
-See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
 
 ## Media model template variables
 
@@ -73619,24 +73748,24 @@ The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (pr
 summary: "Heartbeat polling messages and notification rules"
 read_when:
   - Adjusting heartbeat cadence or messaging
-  - Deciding between heartbeat and cron for scheduled tasks
+  - Deciding between heartbeat and automations for scheduled work
 title: "Heartbeat"
 sidebarTitle: "Heartbeat"
 ---
 
 <Note>
-**Heartbeat vs cron?** See [Automation](/automation) for guidance on when to use each.
+**Heartbeat vs automations?** See [Automation](/automation) for guidance on when to use each.
 </Note>
 
 Heartbeat runs **periodic agent turns** in the main session so the model can surface anything that needs attention without spamming you.
 
-Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated cron jobs).
+Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
 
-Under the hood, heartbeat cadence is owned by the cron scheduler: the gateway maintains one system-owned cron job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Heartbeat config remains the desired-state input, while the persisted monitor schedule owns the actual tick and the runner's later cooldown. The gateway writes config changes through at startup and on config reload; `openclaw doctor --fix` can materialize missing or stale monitor rows before the next gateway start. Edit `agents.*.heartbeat`, not the cron job.
+Under the hood, heartbeat cadence is owned by the Automations scheduler: the gateway maintains one system-owned automation job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Heartbeat config remains the desired-state input, while the persisted monitor schedule owns the actual tick and the runner's later cooldown. The gateway writes config changes through at startup and on config reload; `openclaw doctor --fix` can materialize missing or stale monitor rows before the next gateway start. Edit `agents.*.heartbeat`, not the automation job.
 
-Scheduled heartbeats require cron. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats; manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
+Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats; manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
 
-Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
+Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
 
@@ -73680,25 +73809,25 @@ Example config:
 ## Defaults
 
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable.
-- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
-- When heartbeats are disabled with `0m`, the monitor cron job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
-- When cron itself is disabled, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
+- When heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
+- When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
-- Scheduled heartbeats defer while the main queue or cron work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, cron, and target-session busy guards. Sibling agents do not pause each other.
+- Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
 
 ## What the heartbeat prompt is for
 
 The default prompt is intentionally narrow: follow the heartbeat monitor scratch
-context when provided, keep recurring work in cron jobs, and reply
+context when provided, keep recurring work in automation jobs, and reply
 `HEARTBEAT_OK` when nothing needs attention. It explicitly tells the agent
 **not** to infer or repeat old tasks from prior chats, so a default install stays
 quiet instead of rehashing stale conversation context.
 
 Proactive heartbeat behavior is opt-in:
 
-- **Recurring checks**: create [scheduled jobs](/automation/cron-jobs) for inbox
+- **Recurring checks**: create [automations](/automation/cron-jobs) for inbox
   review, calendar sweeps, or queued follow-ups. Each job executes its configured
   payload on its own schedule; the default heartbeat does not infer recurring
   work from prior chats.
@@ -73738,7 +73867,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "imessage")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
       },
     },
   },
@@ -73777,7 +73906,7 @@ Example: two agents, only the second agent runs heartbeats.
           target: "whatsapp",
           to: "+15551234567",
           timeoutSeconds: 45,
-          prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+          prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
     ],
@@ -73861,7 +73990,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   When true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 </ParamField>
 <ParamField path="isolatedSession" type="boolean" default="false">
-  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
+  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
 </ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.
@@ -73920,7 +74049,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
     - `session` only affects the run context; delivery is controlled by `target` and `to`.
     - To deliver to a specific channel/recipient, set `target` + `to`. With `target: "last"`, delivery uses the last external channel for that session.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
-    - Scheduled heartbeats are skipped and retried later when the main queue or cron work is busy, any reply or embedded run for the same agent is active, or the resolved target session has active or queued work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
+    - Scheduled heartbeats are skipped and retried later when the main queue or automation work is busy, any reply or embedded run for the same agent is active, or the resolved target session has active or queued work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
     - If `target` resolves to no external destination, the run still happens but no outbound message is sent.
 
   </Accordion>
@@ -74001,9 +74130,9 @@ channels:
 
 ## Monitor scratch (optional)
 
-Each heartbeat monitor cron job owns a private scratch document stored in the shared state database. Think of it as your "heartbeat checklist": small, stable, and safe to consider every 30 minutes. When scratch exists, its content is appended to the heartbeat prompt.
+Each heartbeat monitor automation job owns a private scratch document stored in the shared state database. Think of it as your "heartbeat checklist": small, stable, and safe to consider every 30 minutes. When scratch exists, its content is appended to the heartbeat prompt.
 
-Manage it with the cron CLI (the job id comes from `openclaw cron list --all`):
+Manage it with the automations CLI (the job id comes from `openclaw cron list --all`):
 
 ```bash
 openclaw cron scratch <jobId>                 # print the current scratch
@@ -74017,7 +74146,7 @@ Writes are compare-and-swap guarded: pass `--expected-revision <n>` to fail inst
 The agent can also update its own scratch: during a heartbeat turn, `heartbeat_respond` accepts an optional `scratch` string that fully replaces the monitor's scratch for future heartbeats.
 
 <Note>
-**Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, converts any valid legacy `tasks:` entries into cron jobs, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. Runtime heartbeat instructions come from database scratch only; the runtime never reads `HEARTBEAT.md`.
+**Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, converts any valid legacy `tasks:` entries into automation jobs, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. Runtime heartbeat instructions come from database scratch only; the runtime never reads `HEARTBEAT.md`.
 </Note>
 
 If scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If no scratch exists, the heartbeat still runs and the model decides what to do.
@@ -74034,17 +74163,17 @@ Example scratch:
 - If a task is blocked, write down _what is missing_ and ask Peter next time.
 ```
 
-### Schedule recurring checks with cron
+### Schedule recurring checks with automations
 
-Heartbeat scratch is prompt context, not a scheduler. Create each recurring check as a [cron job](/automation/cron-jobs) so it has its own cadence, enable/disable state, and run history. Cron jobs can still target the main session when the check should use the normal conversation context.
+Heartbeat scratch is prompt context, not a scheduler. Create each recurring check as an [automation job](/automation/cron-jobs) so it has its own cadence, enable/disable state, and run history. Automation jobs can still target the main session when the check should use the normal conversation context.
 
-Older scratch may contain a structured `tasks:` block. Run `openclaw doctor --fix` once after upgrading: Doctor converts every valid entry into an independently scheduled cron job, preserves its interval and previous last-run timing, and removes the retired block while keeping surrounding scratch prose. Runtime heartbeat turns do not parse `tasks:` text as schedules.
+Older scratch may contain a structured `tasks:` block. Run `openclaw doctor --fix` once after upgrading: Doctor converts every valid entry into an independently scheduled automation job, preserves its interval and previous last-run timing, and removes the retired block while keeping surrounding scratch prose. Runtime heartbeat turns do not parse `tasks:` text as schedules.
 
-Doctor-created heartbeat task jobs keep heartbeat active-hours, cooldown, flood, and busy guards. Jobs due together can coalesce into one heartbeat turn. An occurrence outside active hours is skipped and tried again at its next cron occurrence.
+Doctor-created heartbeat task jobs keep heartbeat active-hours, cooldown, flood, and busy guards. Jobs due together can coalesce into one heartbeat turn. An occurrence outside active hours is skipped and tried again at its next scheduled occurrence.
 
 ### Can the agent update its scratch?
 
-Yes. During a heartbeat turn, the agent can pass a `scratch` value to `heartbeat_respond` to fully replace the monitor prose for future heartbeats. You can also ask it in a normal chat to run `openclaw cron scratch <jobId> --set ...`, or edit the scratch yourself with the same command. Manage recurring schedules with cron instead of writing scheduler syntax into scratch.
+Yes. During a heartbeat turn, the agent can pass a `scratch` value to `heartbeat_respond` to fully replace the monitor prose for future heartbeats. You can also ask it in a normal chat to run `openclaw cron scratch <jobId> --set ...`, or edit the scratch yourself with the same command. Manage recurring schedules with automations instead of writing scheduler syntax into scratch.
 
 <Warning>
 Don't put secrets (API keys, phone numbers, private tokens) into monitor scratch - it becomes part of the prompt context.
@@ -75528,20 +75657,20 @@ Security note: allowlisting a hostname does not bypass private/internal IP block
 
 ### Supported request fields
 
-| Field                      | Notes                                                                                                                                         |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools`                    | Array of `{ "type": "function", "function": { ... } }`                                                                                        |
-| `tool_choice`              | `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`                                                  |
-| `messages[*].role: "tool"` | Follow-up turns                                                                                                                               |
-| `messages[*].tool_call_id` | Binds a tool result back to a prior tool call                                                                                                 |
-| `max_completion_tokens`    | Number; per-call cap on total completion tokens (reasoning tokens included). Current field name; used when both it and `max_tokens` are sent. |
-| `max_tokens`               | Number; legacy alias, ignored when `max_completion_tokens` is also present.                                                                   |
-| `temperature`              | Number 0-2; best-effort, forwarded to the upstream provider. `400 invalid_request_error` if out of range.                                     |
-| `top_p`                    | Number 0-1; best-effort. `400 invalid_request_error` if out of range.                                                                         |
-| `frequency_penalty`        | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                 |
-| `presence_penalty`         | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                 |
-| `seed`                     | Integer; best-effort. `400 invalid_request_error` for non-integer values.                                                                     |
-| `stop`                     | String or array of up to 4 strings; best-effort. `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.           |
+| Field                      | Notes                                                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tools`                    | Array of `{ "type": "function", "function": { ... } }`                                                                                                                               |
+| `tool_choice`              | `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`                                                                                         |
+| `messages[*].role: "tool"` | Follow-up turns                                                                                                                                                                      |
+| `messages[*].tool_call_id` | Binds a tool result back to a prior tool call                                                                                                                                        |
+| `max_completion_tokens`    | Positive safe integer; per-call cap on total completion tokens (reasoning tokens included). Current field name; used when both fields are non-null. Null or omitted leaves it unset. |
+| `max_tokens`               | Positive safe integer; legacy alias. It is still validated when `max_completion_tokens` is non-null, then ignored for precedence. Null or omitted leaves it unset.                   |
+| `temperature`              | Number 0-2; best-effort, forwarded to the upstream provider. `400 invalid_request_error` if out of range.                                                                            |
+| `top_p`                    | Number 0-1; best-effort. `400 invalid_request_error` if out of range.                                                                                                                |
+| `frequency_penalty`        | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                                                        |
+| `presence_penalty`         | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                                                        |
+| `seed`                     | Integer; best-effort. `400 invalid_request_error` for non-integer values.                                                                                                            |
+| `stop`                     | String or array of up to 4 strings; best-effort. `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.                                                  |
 
 All sampling and token-cap fields ride the same agent stream-param channel and are forwarded best-effort:
 
@@ -76460,10 +76589,11 @@ each request frame:
 ```
 
 The Gateway creates a child request context that preserves the upstream trace
-ID and sampling flags. Agent, harness, model-call, and provider spans created
-inside the request remain on that trace. This allows a local experiment runner
-to create one Langfuse/OpenTelemetry trace per dataset item and correlate the
-corresponding OpenClaw execution.
+ID and sampling flags. Agent, harness, model-call, provider, tool-execution, and
+exec spans created inside the request remain on that trace, including spans
+recorded after their parent run has already finished. This allows a local
+experiment runner to create one Langfuse/OpenTelemetry trace per dataset item and
+correlate the corresponding OpenClaw execution.
 
 Trace context is request-scoped, not connection-scoped. On a long-lived
 WebSocket, generate or inject the appropriate `traceparent` independently for
@@ -77783,6 +77913,12 @@ Gateway sends a pre-connect challenge:
 }
 ```
 
+Device-auth clients use the challenge `ts` as `connect.params.device.signedAt`.
+For WebSocket challenges, `ts` must be a non-negative integer. Clients that
+explicitly support Gateways from before `connect.challenge` existed may use local
+time only when no challenge arrives; a received challenge with an absent or
+malformed `ts` is invalid.
+
 Client replies with `connect`:
 
 ```json
@@ -78856,6 +78992,7 @@ Common migration failures:
 Migration target:
 
 - Always wait for `connect.challenge`.
+- Use `connect.challenge.payload.ts` as `connect.params.device.signedAt`.
 - Sign the v2 payload that includes the server nonce.
 - Send the same nonce in `connect.params.device.nonce`.
 - Preferred signature payload is `v3`
@@ -88318,7 +88455,7 @@ Notes:
 - It resolves CLI smoke metadata from the owning plugin, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `codex-cli` is no longer a bundled CLI backend; use `openai/*` with the Codex app-server runtime instead (see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke)).
 - `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because it consumes the signed-in subscription's usage limits and Anthropic can change Claude Agent SDK / `claude -p` billing and rate-limit behavior without an OpenClaw release.
-- Claude and Gemini support the same probe set (text turn, image classification, MCP `cron` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
+- Claude and Gemini support the same probe set (text turn, image classification, MCP `automations` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
 
 ## Live: APNs HTTP/2 proxy reachability
 
@@ -89595,6 +89732,18 @@ gh workflow run package-acceptance.yml --ref main \
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
+- `pnpm openclaw qa buzz`
+  - Runs the Buzz live QA lane against a real relay room using dedicated driver
+    and SUT identities.
+  - Local runs use `--credential-file <path>` with `relayUrl`, `roomId`,
+    `driverPrivateKey`, and `sutPrivateKey`. Closed relays may also need
+    `driverAuthTag` and `sutAuthTag`. Hosted relays require `wss://`; `ws://` is
+    accepted only for loopback development relays.
+  - Defaults to `mock-openai` and runs canary and mention-gating scenarios
+    through the real Buzz plugin path.
+  - Supports `--credential-source convex` with a pooled `kind: "buzz"` row.
+    Both public keys must be relay/room members, and the SUT must have the
+    **Bot** room role. Never use a human owner or admin private key.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel
     homeserver. Source-checkout only - packaged installs do not ship
@@ -89683,8 +89832,8 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Discord, Slack, and
-WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
+and WhatsApp support; the lease contract is shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
@@ -89770,6 +89919,7 @@ Payload shape for Telegram real-user kind:
 
 Broker-validated multi-channel payloads:
 
+- Buzz: `{ relayUrl: string, roomId: string, driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string, sutAuthTag?: string }`
 - Discord: `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string, voiceChannelId?: string }`
 - WhatsApp: `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }`
 
@@ -118234,6 +118384,17 @@ already running elsewhere:
 }
 ```
 
+WebSocket transport proactively establishes the app-server connection at
+gateway startup and limits the opening handshake to 10 seconds. An idle
+connection sends a WebSocket ping every 20 seconds and allows 20 seconds for its
+matching pong. A healthy app-server message or pong resets the missed-heartbeat
+count; five consecutive missed pongs close the connection. Transient failures
+reconnect automatically with bounded, jittered exponential backoff. Authentication
+failures and unsupported app-server versions stop reconnecting and report that
+operator action is required. Ping and pong frames are transport-level health
+checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
+transports do not perform these remote connection checks.
+
 Local stdio app-server sessions default to the trusted local operator
 posture: `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. If local Codex requirements disallow that
@@ -123117,22 +123278,23 @@ deleting a manually installed runtime inside the OpenClaw package directory.
 
 ## Local text inference
 
-Choose **Local model (llama.cpp)** during interactive onboarding. OpenClaw asks
-before downloading the default model:
+Choose **llama.cpp** during interactive onboarding. OpenClaw installs the
+official provider plugin, then asks before downloading the default model:
 
-`hf:bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf`
+`hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf`
 
-The Qwen3 4B Instruct 2507 Q4_K_M file is about 2.5 GB. Budget roughly 3 GB of
-RAM for model weights, plus context and OpenClaw runtime overhead. The default
-context is automatically sized with an 8,192-token cap so it remains practical
-on 8 GB machines. Configure a larger context only when the machine has enough
+The Gemma 4 E4B IT Q4_K_M file is about 5.0 GB. OpenClaw offers this default
+only on machines with at least 16 GiB of RAM, leaving room for model weights,
+context, and Gateway overhead. The default context is automatically sized with
+an 8,192-token cap. Configure a larger context only when the machine has enough
 memory.
 
 The onboarding discovery check is read-only. It offers llama.cpp automatically
 only when the default or configured GGUF file is already in the model cache; it
 never downloads during discovery. Ollama and LM Studio remain separate local
 service choices and keep their own discovery flows. Manually choosing llama.cpp
-is the path that prompts for the default model download.
+is the path that installs the runtime, prompts for the default model download,
+and verifies a real model reply before marking setup complete.
 
 The provider uses the GGUF model's embedded chat template and native
 node-llama-cpp function calling. Text streams token by token. Tool calls return
@@ -125237,8 +125399,8 @@ These plugins participate in meetings. They are separate from messaging channels
 | Platform        | Plugin                                      | Accepted meeting links                                                                                      | Installation                                    | Participation paths                                      | Platform-specific capabilities                                                                                |
 | --------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Google Meet     | [`google-meet`](/plugins/google-meet)       | `meet.google.com/...`                                                                                       | Install from npm or ClawHub; enabled by default | Local Chrome, Chrome on a paired node, or Twilio dial-in | Can create meetings through the Meet API or a signed-in browser; can read supported Meet artifacts with OAuth |
-| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
-| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
+| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Install from npm or ClawHub; enabled by default | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
+| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Install from npm or ClawHub; enabled by default | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
 
 Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or capture audio/video recordings.
 
@@ -125289,11 +125451,13 @@ The Gateway host still owns the OpenClaw agent and model credentials when Chrome
 
 ## Install or disable plugins
 
-Install Google Meet separately; it is enabled by default after installation. Teams meetings and Zoom are included with OpenClaw and enabled by default:
+Install the meeting plugins you need. Each is enabled by default after installation:
 
 ```bash
-# Google Meet only
 openclaw plugins install npm:@openclaw/google-meet
+openclaw plugins install @openclaw/teams-meetings
+openclaw plugins install @openclaw/zoom-meetings
+openclaw gateway restart
 ```
 
 Disable any meeting plugin you do not use:
@@ -125967,6 +126131,19 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
+ChatGPT import rollback records post-import edits before compile and keeps
+their recovery paths in plugin state, so an interrupted rollback can reconcile
+the recovery directory and report the same preserved pages on retry. Target
+recovery finishes before a persisted process-restart fence. After that point,
+retries rebuild derived indexes, dashboards, and compiled caches without
+rewriting source pages or moving or deleting recovery artifacts. A later normal
+compile may refresh machine-managed Related blocks. This covers in-process
+failure and process restart after ordinary filesystem calls return. It does not
+guarantee write ordering across kernel or host power loss. A pathname write
+racing fence persistence either remains after a successful fence or is
+preserved under `recovered/` by a pre-fence retry. Writes through a file
+descriptor opened before an import-owned inode is classified and unlinked are
+not guaranteed and may be lost.
 Compiled caches are rebuildable: cache rows from before publication epochs are
 treated as misses and replaced by the next compile; they are not migrated.
 
@@ -127594,7 +127771,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-71 plugins
+67 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -127615,8 +127792,6 @@ Each entry lists the package, distribution route, and description.
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
-
-- **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`. OpenClaw Cohere provider plugin.
 
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - included in OpenClaw. Adds ComfyUI model provider support to OpenClaw.
 
@@ -127662,8 +127837,6 @@ Each entry lists the package, distribution route, and description.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
-- **[meta](/plugins/reference/meta)** (`@openclaw/meta-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/meta-provider`. Adds Meta model provider support to OpenClaw.
-
 - **[microsoft](/plugins/reference/microsoft)** (`@openclaw/microsoft-speech`) - included in OpenClaw. Adds text-to-speech provider support.
 
 - **[microsoft-foundry](/plugins/reference/microsoft-foundry)** (`@openclaw/microsoft-foundry`) - included in OpenClaw. Adds Microsoft Foundry model provider support to OpenClaw.
@@ -127708,8 +127881,6 @@ Each entry lists the package, distribution route, and description.
 
 - **[synthetic](/plugins/reference/synthetic)** (`@openclaw/synthetic-provider`) - included in OpenClaw. Adds Synthetic model provider support to OpenClaw.
 
-- **[teams-meetings](/plugins/reference/teams-meetings)** (`@openclaw/teams-meetings`) - included in OpenClaw. Join Microsoft Teams meetings as a Chrome browser guest.
-
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
 - **[together](/plugins/reference/together)** (`@openclaw/together-provider`) - included in OpenClaw. Adds Together model provider support to OpenClaw.
@@ -127736,11 +127907,9 @@ Each entry lists the package, distribution route, and description.
 
 - **[xiaomi](/plugins/reference/xiaomi)** (`@openclaw/xiaomi-provider`) - included in OpenClaw. Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
-- **[zoom-meetings](/plugins/reference/zoom-meetings)** (`@openclaw/zoom-meetings`) - included in OpenClaw. Join Zoom meetings as a Chrome browser guest.
-
 ## Official external packages
 
-74 plugins
+78 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -127767,6 +127936,8 @@ Each entry lists the package, distribution route, and description.
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 - **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness and native session catalog.
+
+- **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - npm; ClawHub: `clawhub:@openclaw/cohere-provider`. OpenClaw Cohere provider plugin.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
@@ -127828,6 +127999,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[memory-lancedb](/plugins/reference/memory-lancedb)** (`@openclaw/memory-lancedb`) - npm; ClawHub. OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.
 
+- **[meta](/plugins/reference/meta)** (`@openclaw/meta-provider`) - npm; ClawHub: `clawhub:@openclaw/meta-provider`. Adds Meta model provider support to OpenClaw.
+
 - **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - npm; ClawHub: `clawhub:@openclaw/moonshot-provider`. Adds Moonshot model provider support to OpenClaw.
 
 - **[msteams](/plugins/reference/msteams)** (`@openclaw/msteams`) - npm; ClawHub. OpenClaw Microsoft Teams channel plugin for bot conversations.
@@ -127868,6 +128041,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - npm; ClawHub: `clawhub:@openclaw/tavily-plugin`. Adds agent-callable tools. Adds web search provider support.
 
+- **[teams-meetings](/plugins/reference/teams-meetings)** (`@openclaw/teams-meetings`) - npm; ClawHub: `clawhub:@openclaw/teams-meetings`. Join Microsoft Teams meetings as a Chrome browser guest.
+
 - **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 
 - **[tlon](/plugins/reference/tlon)** (`@openclaw/tlon`) - npm; ClawHub. OpenClaw Tlon/Urbit channel plugin for chat workflows.
@@ -127889,6 +128064,8 @@ Each entry lists the package, distribution route, and description.
 - **[zalo](/plugins/reference/zalo)** (`@openclaw/zalo`) - npm; ClawHub. OpenClaw Zalo channel plugin for bot and webhook chats.
 
 - **[zalouser](/plugins/reference/zalouser)** (`@openclaw/zalouser`) - npm; ClawHub. OpenClaw Zalo Personal Account plugin via native zca-js integration.
+
+- **[zoom-meetings](/plugins/reference/zoom-meetings)** (`@openclaw/zoom-meetings`) - npm; ClawHub: `clawhub:@openclaw/zoom-meetings`. Join Zoom meetings as a Chrome browser guest.
 
 ## Source checkout only
 
@@ -128285,6 +128462,29 @@ export default definePluginEntry({
 
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the contract above.
+
+### Isolated completion
+
+The optional `runIsolatedCompletion(params)` capability serves product paths
+that require one fresh prompt-only inference call with a literal empty
+model-callable tool surface. Core passes the exact prepared `model`, `auth`,
+provider, model id, system prompt, user prompt, timeout, abort signal, and stream
+parameters. The harness must not re-resolve credentials, switch routes, reuse a
+native thread, attach tools, invoke agent lifecycle hooks, or deliver output.
+
+Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
+content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
+output are rejected. If the harness cannot prove these semantics, omit the capability.
+Callers that require isolated completion then fail closed before invoking that
+harness; OpenClaw does not replay the request through another runtime.
+Plugin callers select this behavior through
+`api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
+the harness callback is the provider-side enforcement SPI, not a second caller
+API.
+
+Native agent servers often have ambient built-in tools even when OpenClaw sends
+an empty tool list. In that case, use a separate provider transport that can
+serialize a true zero-tool request, or leave the capability unsupported.
 
 ### Delegated execution
 
@@ -134091,6 +134291,38 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    `maxTokens` and `temperature` are advisory sampling hints. The selected
+    provider, CLI, or harness applies them when its transport exposes an
+    equivalent control and otherwise may ignore them. They do not weaken the
+    execution mode's isolation guarantees.
+
+    To require the configured agent runtime and a literal zero-tool model
+    surface, select isolated execution explicitly:
+
+    ```typescript
+    const result = await api.runtime.llm.complete({
+      messages: [{ role: "user", content: "Return one JSON value." }],
+      systemPrompt: "You are a JSON-only function.",
+      model: "openai/gpt-5.6-sol",
+      execution: {
+        mode: "isolated-agent-runtime",
+        authProfileId: "openai:work",
+        timeoutMs: 30_000,
+      },
+    });
+    ```
+
+    This mode accepts exactly one user message. Core derives the configured CLI
+    or harness owner, starts a fresh context, exposes no model-callable tools,
+    and never falls back to direct provider transport. Unsupported runtimes fail
+    before inference. `result.execution.owner` reports the selected owner;
+    token usage remains absent when a CLI cannot report it.
+
+    Completion failures expose a stable `code` on the thrown error. Isolated
+    callers can distinguish authorization, invalid isolated input, unsupported
+    or unavailable runtimes, aborts, timeouts, rejected output, and other
+    completion failures without matching message text.
+
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:
 
@@ -134137,7 +134369,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
-    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
     </Warning>
 
   </Accordion>
@@ -135735,6 +135967,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/reply-reference` | Private-local after July 2026; `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), repair/lifecycle helpers (`deleteSessionEntry`, `cleanupSessionLifecycleArtifacts`, `resolveSessionStoreBackupPaths`), marker helpers for transitional `sessionFile` values, bounded recent user/assistant transcript text reads by session identity, session store path/session-key helpers, and updated-at reads, without broad config writes/maintenance imports |
+    | `plugin-sdk/session-catalog` | External session catalog contracts, projections, adoption helpers, and history import |
     | `plugin-sdk/session-transcript-runtime` | Private-local after July 2026; Transcript identity, bounded raw and visible cursors, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
     | `plugin-sdk/sqlite-runtime` | Private-local after July 2026; Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Private-local after July 2026; Cron store path/load/save helpers |
@@ -135749,6 +135982,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
     | `plugin-sdk/tool-plugin` | Define a simple typed agent-tool plugin and expose static metadata for manifest generation |
     | `plugin-sdk/tool-payload` | Private-local after July 2026; Extract normalized payloads from tool result objects |
+    | `plugin-sdk/tool-results` | Typed text and JSON agent tool result builders |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
     | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
@@ -136294,13 +136528,15 @@ The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenCl
 Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
 
 ```bash
+openclaw plugins install @openclaw/teams-meetings
+openclaw gateway restart
 brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-The plugin is included and enabled by default. Add an entry only to customize it, then check setup:
+The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
 
 ```json5
 {
@@ -138928,13 +139164,15 @@ The `zoom-meetings` plugin joins Zoom meeting links as a guest through the Zoom 
 Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
 
 ```bash
+openclaw plugins install @openclaw/zoom-meetings
+openclaw gateway restart
 brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-The plugin is included and enabled by default. Add an entry only to customize it, then check setup:
+The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
 
 ```json5
 {
@@ -139705,7 +139943,7 @@ OpenClaw Cohere provider plugin.
 ## Distribution
 
 - Package: `@openclaw/cohere-provider`
-- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`
+- Install route: npm; ClawHub: `clawhub:@openclaw/cohere-provider`
 
 ## Surface
 
@@ -141172,7 +141410,7 @@ Adds Meta model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/meta-provider`
-- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/meta-provider`
+- Install route: npm; ClawHub: `clawhub:@openclaw/meta-provider`
 
 ## Surface
 
@@ -142542,7 +142780,7 @@ Join Microsoft Teams meetings as a Chrome browser guest.
 ## Distribution
 
 - Package: `@openclaw/teams-meetings`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/teams-meetings`
 
 ## Surface
 
@@ -143231,7 +143469,7 @@ Join Zoom meetings as a Chrome browser guest.
 ## Distribution
 
 - Package: `@openclaw/zoom-meetings`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/zoom-meetings`
 
 ## Surface
 
@@ -146161,19 +146399,19 @@ read_when:
   - You need the Cohere API key env var or CLI auth choice
 ---
 
-[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw bundles the Cohere provider during its externalization transition and also publishes it as an official external plugin.
+[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw provides Cohere as an official external plugin.
 
-| Property        | Value                                                |
-| --------------- | ---------------------------------------------------- |
-| Provider id     | `cohere`                                             |
-| Plugin          | bundled during transition; official external package |
-| Auth env var    | `COHERE_API_KEY`                                     |
-| Onboarding flag | `--auth-choice cohere-api-key`                       |
-| Direct CLI flag | `--cohere-api-key <key>`                             |
-| API             | OpenAI-compatible (`openai-completions`)             |
-| Base URL        | `https://api.cohere.ai/compatibility/v1`             |
-| Default model   | `cohere/command-a-plus-05-2026`                      |
-| Context window  | 128,000 tokens                                       |
+| Property        | Value                                    |
+| --------------- | ---------------------------------------- |
+| Provider id     | `cohere`                                 |
+| Plugin          | `@openclaw/cohere-provider`              |
+| Auth env var    | `COHERE_API_KEY`                         |
+| Onboarding flag | `--auth-choice cohere-api-key`           |
+| Direct CLI flag | `--cohere-api-key <key>`                 |
+| API             | OpenAI-compatible (`openai-completions`) |
+| Base URL        | `https://api.cohere.ai/compatibility/v1` |
+| Default model   | `cohere/command-a-plus-05-2026`          |
+| Context window  | 128,000 tokens                           |
 
 ## Built-in catalog
 
@@ -146189,7 +146427,7 @@ Reasoning-capable Cohere models support two Compatibility API reasoning modes. O
 
 ## Get started
 
-1. Cohere ships with current OpenClaw packages. If it is missing, install the external package and restart the Gateway:
+1. Install the official plugin and restart the Gateway:
 
 ```bash
 openclaw plugins install @openclaw/cohere-provider
@@ -148288,7 +148526,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-5
+        openclaw models set github-copilot/claude-sonnet-5
         ```
 
         Or in config:
@@ -148296,7 +148534,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-5" } },
+            defaults: { model: { primary: "github-copilot/claude-sonnet-5" } },
           },
         }
         ```
@@ -148459,6 +148697,14 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
 `tokenRef` instead of plaintext in `auth-profiles.json`.
 
+Fresh non-interactive setup validates the token before saving it. When setup
+must choose a default, it also checks the live Copilot model catalog. OpenClaw
+prefers the provider's current general-purpose model when that model is
+enabled for the account; otherwise it chooses a deterministic eligible fallback.
+Setup fails without writing a new auth profile if the account has no
+picker-visible model that supports streaming and tool calls. An explicitly
+configured default model is never replaced.
+
 <AccordionGroup>
   <Accordion title="Interactive TTY required">
     The device-login flow requires an interactive TTY. Run it directly in a
@@ -148466,8 +148712,9 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
   </Accordion>
 
   <Accordion title="Model availability depends on your plan">
-    Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-5.6-sol`). See
+    Copilot model availability depends on your GitHub plan and organization
+    policy. Interactive onboarding uses the live catalog for its model picker,
+    while non-interactive onboarding selects an eligible model automatically. See
     GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
     for the current model list.
   </Accordion>
@@ -148477,8 +148724,11 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
     OpenClaw refreshes the model catalog on demand from `${baseUrl}/models`
     (the same endpoint VS Code Copilot uses) so the runtime tracks
     per-account entitlement and accurate context windows without manifest
-    churn. Newly published Copilot models become visible without an OpenClaw
-    upgrade, and context windows reflect the real per-model limits
+    churn. The visible live catalog excludes models hidden from GitHub's picker
+    or disabled by account policy. Automatic setup defaults additionally require
+    streaming and tool-call support.
+    Newly published Copilot models become visible without an OpenClaw upgrade,
+    and context windows reflect the real per-model limits
     (e.g. 400k for the gpt-5.x series, 1M for the internal
     `claude-opus-*-1m` variants).
 
@@ -149126,6 +149376,8 @@ The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
 constrained Live API token shape used by Control UI Talk, opens the browser
 WebSocket endpoint, sends the initial setup payload plus a JPEG frame, and
 verifies a text response and `describe_view` function roundtrip.
+The OpenAI path also performs a synthesized PCM24 speech-to-response audio
+roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
 ## Advanced configuration
 
@@ -150891,13 +151143,13 @@ read_when:
 ---
 
 The **Meta API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
-for the `muse-spark-1.1` reasoning model. The provider ships as a bundled OpenClaw
-plugin.
+for the `muse-spark-1.1` reasoning model. OpenClaw provides Meta as an official
+external plugin.
 
 | Property          | Value                              |
 | ----------------- | ---------------------------------- |
 | Provider id       | `meta`                             |
-| Plugin            | bundled provider                   |
+| Plugin            | `@openclaw/meta-provider`          |
 | Auth env var      | `MODEL_API_KEY`                    |
 | Onboarding flag   | `--auth-choice meta-api-key`       |
 | Direct CLI flag   | `--meta-api-key <key>`             |
@@ -150909,6 +151161,12 @@ plugin.
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/meta-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Set the API key">
     <CodeGroup>
 
@@ -155107,9 +155365,11 @@ compatibility fallback when the shared
     Platform access; Voice Call GPT-Live uses the Platform-key backend WebSocket.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
-    the OpenAI legs verify both the backend WebSocket bridge and the browser
-    WebRTC SDP exchange without logging secrets.
-    Pass `--openai-only` to run those two legs without Google credentials.
+    the OpenAI legs verify the backend WebSocket bridge, a synthesized PCM24
+    speech-to-response audio roundtrip, and the browser WebRTC SDP exchange
+    without logging secrets. Pass `--openai-only` to run those legs without
+    Google credentials. Use `--openai-audio-cycles 3` for a short repeated
+    connect, talkback, and close soak.
     </Note>
 
   </Accordion>
@@ -165078,6 +165338,9 @@ pnpm ci:full-release \
 end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
 package versions and `stable` otherwise. Pass alternate workflow inputs with
 `-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
+`fail_fast` defaults to `false`, so dispatched child workflows finish and expose
+independent failures together. Pass `-f fail_fast=true` when the shorter
+first-failure cancellation path is preferable.
 
 The helper creates a temporary `release-ci/*` ref pinned to one trusted
 `origin/main` workflow SHA, passes the target SHA only as the candidate `ref`,
@@ -165173,7 +165436,7 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                         |
 | Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                          |
 | Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                          |
-| Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix and Telegram, plus gated advisory Discord, WhatsApp, and Slack lanes. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks; beta can opt in with `run_release_soak=true`.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle.              |
+| Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix, Buzz, and Telegram, plus gated advisory Discord, WhatsApp, and Slack lanes. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks; beta can opt in with `run_release_soak=true`.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle.       |
 | Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                              |
 | Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`. |
 | Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                                                                                 |
@@ -165224,6 +165487,7 @@ artifact when package or Docker-facing stages need it.
 | QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                             |
 | QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                     |
 | QA live Matrix           | **Job:** `Run QA Live Matrix catalog`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** catalog-derived YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment, distributed across deterministic shards.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-matrix` for a focused Matrix rerun.                                                                                                                                                                         |
+| QA live Buzz             | **Job:** `Run QA Lab live Buzz lane`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** signed canary and mention-gating round trips through the real Buzz plugin using dedicated Convex-leased identities and a hosted relay room.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-buzz` for a focused Buzz rerun.                                                                                                                                                                                      |
 | QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                                 |
 | QA live Discord          | **Job:** `Run QA Lab live Discord lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Discord QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-discord`.                                                                                                                                                                                                                                                                            |
 | QA live WhatsApp         | **Job:** `Run QA Lab live WhatsApp lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live WhatsApp QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-whatsapp`.                                                                                                                                                                                                                                                                        |
@@ -165300,7 +165564,7 @@ Use `rerun_group` to avoid repeating unrelated release boxes:
 | `package`           | Package Acceptance.                                                                             |
 | `qa`                | QA parity plus QA live lanes.                                                                   |
 | `qa-parity`         | QA parity lanes and report only.                                                                |
-| `qa-live`           | QA live Matrix/Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.             |
+| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.  |
 | `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |
 | `performance`       | Product performance evidence only.                                                              |
 
@@ -165313,8 +165577,8 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 `live-codex-harness-docker`.
 
 For a focused QA transport rerun, set `rerun_group=qa-live` and use the
-canonical selector `qa-live-matrix`, `qa-live-telegram`, `qa-live-discord`,
-`qa-live-whatsapp`, or `qa-live-slack`.
+canonical selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
+`qa-live-discord`, `qa-live-whatsapp`, or `qa-live-slack`.
 
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
 three provider shards, so it still fans out to all advisory Docker gateway jobs.
@@ -165359,8 +165623,8 @@ Useful artifacts:
 - Docker release-path artifacts under `.artifacts/docker-tests/`
 - Package Acceptance `package-under-test` and Docker acceptance artifacts
 - Cross-OS release-check artifacts for each OS and suite
-- QA parity, runtime parity, and selected Matrix, Telegram, Discord, WhatsApp,
-  or Slack artifacts
+- QA parity, runtime parity, and selected Matrix, Buzz, Telegram, Discord,
+  WhatsApp, or Slack artifacts
 
 ## Workflow files
 
@@ -169146,9 +169410,9 @@ Example placeholders (replace or remove them):
 
 ## Heartbeats - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's cron scratch; use `openclaw cron list --all` to find the monitor job, then `openclaw cron scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
 
-See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); cron is for exact timing, isolated runs, a different model, or one-shot reminders.
+See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
@@ -169183,7 +169447,7 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 ## Related
 
 - [Default AGENTS.md](/reference/AGENTS.default)
-- [Scheduled tasks vs heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat)
+- [Automations vs heartbeat](/automation#automations-vs-heartbeat)
 - [Heartbeat](/gateway/heartbeat)
 
 
@@ -169449,9 +169713,9 @@ Example placeholders (replace or remove them):
 
 ## Heartbeats - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's cron scratch; use `openclaw cron list --all` to find the monitor job, then `openclaw cron scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
 
-See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); cron is for exact timing, isolated runs, a different model, or one-shot reminders.
+See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
@@ -169486,7 +169750,7 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 ## Related
 
 - [Default AGENTS.md](/reference/AGENTS.default)
-- [Scheduled tasks vs heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat)
+- [Automations vs heartbeat](/automation#automations-vs-heartbeat)
 - [Heartbeat](/gateway/heartbeat)
 
 
@@ -176028,7 +176292,7 @@ Example:
 ## Heartbeats (proactive mode)
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
@@ -187035,11 +187299,15 @@ allowlist mode instead.
     "entries": {
       "llm-task": {
         "enabled": true,
+        "llm": {
+          "allowModelOverride": true,
+          "allowedCompletionModels": ["openai/gpt-5.6-sol"],
+          "allowAuthProfileOverride": true
+        },
         "config": {
           "defaultProvider": "openai",
           "defaultModel": "gpt-5.6-sol",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai/gpt-5.6-sol"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -187049,9 +187317,15 @@ allowlist mode instead.
 }
 ```
 
-`allowedModels` is an allowlist of `provider/model` strings; a request for any
-other model is rejected. All other keys are per-call fallbacks used when the
-tool call omits that parameter.
+The `llm` block is host-owned authorization. `allowedCompletionModels` restricts every
+completion, so include the resolved agent default as well as any override targets.
+`allowAuthProfileOverride` permits `defaultAuthProfileId` and the per-call
+`authProfileId` parameter. The `config` keys are selection defaults used when a
+tool call omits the corresponding parameter.
+
+Run `openclaw doctor --fix` once for llm-task entries created by older releases.
+Doctor grants the shipped model/profile selection permissions and moves any
+legacy `config.allowedModels` value into `llm.allowedCompletionModels` without widening it.
 
 ## Tool parameters
 
@@ -187072,6 +187346,27 @@ tool call omits that parameter.
 
 Returns `details.json` (the parsed, schema-validated JSON) plus `details.provider`
 and `details.model` naming what actually ran.
+
+Each call starts a fresh prompt-only inference operation. It does not reuse the
+calling agent's transcript or native runtime session, run agent lifecycle hooks,
+or deliver model output to a channel. OpenClaw uses the selected provider,
+model, auth profile, and runtime exactly once; it does not fall back to another
+route when that owner cannot provide a literal zero-tool call.
+
+A selected agent harness must implement isolated completion. Otherwise the call
+fails before inference with a `does not support isolated completion` error.
+This fail-closed behavior prevents a JSON task from silently becoming a normal
+tool-capable agent turn.
+
+CLI runtimes must provide the equivalent isolated preparation guarantee. The
+bundled Claude and Gemini CLI runtimes do; a different CLI runtime that has not
+adopted this internal contract fails before its process starts.
+
+Gemini CLI isolated completion supports Gemini API-key and Vertex auth. Google
+OAuth and compute/Code Assist auth are rejected because managed-account policy
+can add administrator-required tools after local CLI settings are loaded.
+Gemini prompts containing native `@path` includes or a leading `/command` also
+fail before inference because Gemini CLI has no literal raw-input mode.
 
 ## Example: Lobster workflow step
 
@@ -187118,8 +187413,11 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 
 - **JSON-only**: the model is instructed to return only a JSON value, no code
   fences, no commentary.
-- **No tools**: the underlying run has tools disabled, so the model cannot call
-  out mid-task.
+- **No tools**: the selected runtime must expose a literal empty model-callable
+  tool surface. OpenClaw rejects tool-shaped results instead of treating them as
+  task output.
+- **Isolated**: the run has no agent transcript, session reuse, lifecycle hooks,
+  channel delivery, or provider fallback.
 - Treat output as untrusted unless you validate it with `schema`.
 - Put approvals before any side-effecting step (send, post, exec) that consumes
   this output.
@@ -192075,6 +192373,34 @@ skill overrides them. Gate a plugin skill's own eligibility via
 
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
+## Reference a skill in a prompt
+
+Type `$` in the Control UI composer to search the skills available to the
+current agent. Selecting a result inserts its stable command name, for example
+`$release_notes`, without replacing the rest of your message. A prompt can
+reference more than one skill:
+
+```text
+Use $github and $release_notes to summarize this change for the release.
+```
+
+OpenClaw resolves these references against the current agent's eligible,
+user-invocable, model-visible skills and tells the model to read each referenced `SKILL.md`
+before acting. A single message can reference up to eight distinct skills;
+OpenClaw returns a visible error instead of ignoring extra references. The `$`
+form is composable prompt text; `/release_notes ...`
+remains the standalone command form and may use direct tool dispatch when the
+skill declares `command-dispatch: tool`. Common uppercase shell variables such
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase
+`$home`, `$path`, or `$editor` to reference skills with those names.
+
+Skills with `disable-model-invocation: true` stay out of the `$` picker because
+their instructions are intentionally absent from the model's prompt. Invoke
+those explicitly with their standalone slash command instead.
+
+`$` references are interpreted on WebChat/Control UI turns. Other messaging
+channels keep `$name` as ordinary text; use the skill's slash command there.
+
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
@@ -194667,7 +194993,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 - Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
 
 ## Web chat UI
@@ -198439,7 +198765,7 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
     **Video Talk** is available for OpenAI Platform Realtime WebRTC and Google Live browser sessions; GPT-Live is audio-only. Click the camera button, allow camera and microphone access, and confirm the local preview. OpenAI sends one bounded JPEG frame over its browser data channel when `describe_view` requests visual context. Google Live sends bounded JPEG frames directly from the browser to the provider at the supported maximum of one frame per second and answers `describe_view` function calls with the camera-stream state. Camera frames never pass through the Gateway. Stopping Talk closes the preview and releases both media tracks. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities#video) and [function-calling guide](https://ai.google.dev/gemini-api/docs/live-api/tools) for the provider wire contracts.
 
-    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser setup with a JPEG frame and `describe_view` function roundtrip, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
+    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, a synthesized PCM24 speech-to-response audio roundtrip, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser setup with a JPEG frame and `describe_view` function roundtrip, and the Gateway relay browser adapter with fake microphone media. Pass `--openai-audio-cycles 3` for a short repeated OpenAI connect, talkback, and close soak. The command prints provider status only and does not log secrets.
 
   </Accordion>
   <Accordion title="Stop and abort">
@@ -199068,7 +199394,7 @@ capabilities? }` — create/update by name; `pin` places it on the board.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
   `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
   `unpin`, `focus_tab`, `set_chat_dock`.
-- Existing `cron` tools cover the automation tier; no new tool needed.
+- The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The
 agent is told about user tier-1 events via session notices, e.g.
