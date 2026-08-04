@@ -9576,7 +9576,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
 | `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
 | `channels.feishu.encryptKey`                             | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.webhookPath`                            | Webhook route path                                                                   | `/feishu/events`                     |
+| `channels.feishu.webhookPath`                            | Canonical HTTP request path (must start with `/`)                                    | `/feishu/events`                     |
 | `channels.feishu.webhookHost`                            | Webhook bind host                                                                    | `127.0.0.1`                          |
 | `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
@@ -9618,6 +9618,14 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
+
+In webhook mode, both `channels.feishu.webhookPath` and
+`channels.feishu.accounts.<id>.webhookPath` must be canonical HTTP request paths
+beginning with `/`, such as `/feishu/events`. An optional query string is
+supported and must match exactly. Full URLs, relative paths, URL fragments, dot
+segments, and unencoded spaces or Unicode are rejected. If an existing
+configuration contains a noncanonical path, run `openclaw doctor --fix` to
+repair it before starting the gateway.
 
 ## Supported message types
 
@@ -9846,7 +9854,7 @@ Use these identifiers for delivery and allowlists:
     googlechat: {
       enabled: true,
       serviceAccountFile: "/path/to/service-account.json",
-      // or serviceAccountRef: { source: "file", provider: "filemain", id: "/channels/googlechat/serviceAccount" }
+      // or serviceAccount: { source: "file", provider: "filemain", id: "/channels/googlechat/serviceAccount" }
       audienceType: "app-url",
       audience: "https://gateway.example.com/googlechat",
       appPrincipal: "123456789012345678901", // add-on verification only; numeric OAuth client ID
@@ -9873,11 +9881,11 @@ Use these identifiers for delivery and allowlists:
 
 Notes:
 
-- Service account credentials: `serviceAccountFile` (path), `serviceAccount` (inline JSON string or object), or `serviceAccountRef` (env/file SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccountRef`.
+- Service account credentials: `serviceAccountFile` (path) or `serviceAccount` (inline JSON string, object, or env/file/exec SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccount` SecretRefs.
 - Default webhook path is `/googlechat` when `webhookPath` is unset; `webhookUrl` can supply the path instead.
 - Group keys must be stable space ids (`spaces/<spaceId>`). Display-name keys are deprecated and logged as such.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode); doctor warns about email entries.
-- Google Chat reaction actions are not exposed. The plugin uses service-account authentication, while Google Chat reaction endpoints require user authentication. Existing `actions.reactions` config is accepted for compatibility but has no effect.
+- Google Chat reaction actions are not exposed. The plugin uses service-account authentication, while Google Chat reaction endpoints require user authentication. Remove unsupported legacy reaction settings with `openclaw doctor --fix`.
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose text `send` only. Google Chat attachment upload requires user authentication, while this plugin uses service-account authentication, so outbound file upload is not exposed.
 - `typingIndicator`: `message` (default) posts a `_<Bot> is typing..._` placeholder and edits it into the first reply; `none` disables it; `reaction` requires user OAuth and currently falls back to `message` with a logged error under service-account auth.
@@ -11726,43 +11734,54 @@ title: "Chat channels"
 OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
 
-Telegram and the WebChat UI ship with the core install. Channels marked
-"official plugin" install with one command (`openclaw plugins install @openclaw/<id>`)
-or on demand during `openclaw onboard` / `openclaw channels add`, then need a Gateway
-restart. "External plugin" channels are maintained outside the OpenClaw repo.
+Entries marked "bundled plugin" or "included in core" ship with the core
+install. Channels marked "official plugin" install with one command
+(`openclaw plugins install @openclaw/<id>`) or on demand during
+`openclaw onboard` / `openclaw channels add`, then need a Gateway restart.
+"External plugin" channels are maintained outside the OpenClaw repo.
 
 ## Supported channels
 
-- [Buzz](/channels/buzz) - Buzz team rooms with threaded replies (official plugin).
-- [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs (official plugin).
-- [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (official plugin).
-- [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (official plugin).
-- [iMessage](/channels/imessage) - Native macOS integration via the `imsg` bridge on a signed-in Mac (or SSH wrapper when the Gateway runs elsewhere), including private API actions for replies, tapbacks, effects, attachments, and group management (official plugin).
-- [IRC](/channels/irc) - Classic IRC servers; channels + DMs with pairing/allowlist controls (official plugin).
-- [LINE](/channels/line) - LINE Messaging API bot (official plugin).
-- [Matrix](/channels/matrix) - Matrix protocol (official plugin).
-- [Mattermost](/channels/mattermost) - Bot API + WebSocket; channels, groups, DMs (official plugin).
-- [Microsoft Teams](/channels/msteams) - Bot Framework; enterprise support (official plugin).
-- [Nextcloud Talk](/channels/nextcloud-talk) - Self-hosted chat via Nextcloud Talk (official plugin).
-- [Nostr](/channels/nostr) - Decentralized DMs via NIP-04 (official plugin).
-- [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (official plugin).
-- [Reef](/channels/reef) - Guarded, end-to-end-encrypted claw-to-claw messaging between OpenClaw agents of different people (bundled plugin).
-- [Raft](/channels/raft) - Raft CLI wake bridge for human and agent collaboration (official plugin).
-- [Signal](/channels/signal) - signal-cli; privacy-focused (official plugin).
-- [Slack](/channels/slack) - Bolt SDK; workspace apps (official plugin).
-- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (official plugin).
-- [Synology Chat](/channels/synology-chat) - Synology NAS Chat via outgoing+incoming webhooks (official plugin).
-- [Telegram](/channels/telegram) - Included in core. Bot API via grammY; supports groups.
-- [Tlon](/channels/tlon) - Urbit-based messenger (official plugin).
-- [Twitch](/channels/twitch) - Twitch chat via IRC connection (official plugin).
+<!-- BEGIN GENERATED: official channel catalog -->
+<!-- Generated by `pnpm channels:catalog:gen`. Edit manifests/seed for membership and routes; edit page frontmatter for public names and summaries. -->
+
+- [Buzz](/channels/buzz) - Connect OpenClaw agents to Buzz rooms (official plugin).
+- [ClickClack](/channels/clickclack) - ClickClack bot-token channel setup and target syntax (official plugin).
+- [Discord](/channels/discord) - Discord bot setup, config keys, components, voice, and troubleshooting (official plugin).
+- [Feishu](/channels/feishu) - Feishu bot overview, features, and configuration (official plugin).
+- [Google Chat](/channels/googlechat) - Google Chat app support status, capabilities, and configuration (official plugin).
+- [iMessage](/channels/imessage) - Native iMessage support via imsg (JSON-RPC over stdio), with private API actions for replies, tapbacks, effects, polls, attachments, and group management. Preferred for new OpenClaw iMessage setups when host requirements fit (official plugin).
+- [IRC](/channels/irc) - IRC plugin setup, access controls, and troubleshooting (official plugin).
+- [LINE](/channels/line) - LINE Messaging API plugin setup, config, and usage (official plugin).
+- [Matrix](/channels/matrix) - Matrix support status, setup, and configuration examples (official plugin).
+- [Mattermost](/channels/mattermost) - Mattermost bot setup and OpenClaw config (official plugin).
+- [Microsoft Teams](/channels/msteams) - Microsoft Teams bot support status, capabilities, and configuration (official plugin).
+- [Nextcloud Talk](/channels/nextcloud-talk) - Nextcloud Talk support status, capabilities, and configuration (official plugin).
+- [Nostr](/channels/nostr) - Nostr DM channel via NIP-04 encrypted messages (official plugin).
+- [QQ bot](/channels/qqbot) - QQ Bot setup, config, and usage (official plugin).
+- [Raft](/channels/raft) - Raft External Agent support through the Raft CLI wake bridge (official plugin).
+- [Reef](/channels/reef) - Reef channel setup: guarded, end-to-end-encrypted messaging between OpenClaw agents of different people (bundled plugin).
+- [Signal](/channels/signal) - Signal support via signal-cli (native daemon or bbernhard container), setup paths, and number model (official plugin).
+- [Slack](/channels/slack) - Slack setup and runtime behavior (Socket Mode, HTTP Request URLs, and relay mode) (official plugin).
+- [SMS](/channels/sms) - Twilio SMS/MMS setup, access controls, webhooks, and delivery status (official plugin).
+- [Synology Chat](/channels/synology-chat) - Synology Chat webhook setup and OpenClaw config (official plugin).
+- [Telegram](/channels/telegram) - Telegram bot support status, capabilities, and configuration (bundled plugin).
+- [Tlon](/channels/tlon) - Tlon/Urbit support status, capabilities, and configuration (official plugin).
+- [Twitch](/channels/twitch) - Twitch chat bot: install, credentials, access control, token refresh (official plugin).
+- [WebChat](/web/webchat) - Native and Control UI WebChat usage over the Gateway WebSocket (included in core).
+- [WeChat](/channels/wechat) - WeChat channel setup through the external openclaw-weixin plugin (external plugin).
+- [WeCom](/channels/wecom) - Install the official WeCom plugin and find its versioned setup documentation (external plugin).
+- [WhatsApp](/channels/whatsapp) - WhatsApp channel support, access controls, delivery behavior, and operations (official plugin).
+- [Yuanbao](/channels/yuanbao) - Yuanbao bot overview, features, and configuration (external plugin).
+- [Zalo](/channels/zalo) - Zalo bot support status, capabilities, and configuration (official plugin).
+- [Zalo ClawBot](/channels/zaloclawbot) - Zalo ClawBot channel setup through the external openclaw-zaloclawbot plugin (external plugin).
+- [Zalo personal](/channels/zalouser) - Zalo personal account support via native zca-js (QR login), capabilities, and configuration (official plugin).
+
+<!-- END GENERATED: official channel catalog -->
+
+### Related communication plugins
+
 - [Voice Call](/plugins/voice-call) - Telephony via Plivo, Telnyx, or Twilio (official plugin).
-- [WebChat](/web/webchat) - Included in core. Gateway WebChat UI over WebSocket.
-- [WeChat](/channels/wechat) - Tencent iLink bot via QR login; private chats only (external plugin).
-- [WhatsApp](/channels/whatsapp) - Most popular; uses Baileys and requires QR pairing (official plugin).
-- [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
-- [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (official plugin).
-- [Zalo ClawBot](/channels/zaloclawbot) - Personal Zalo assistant via QR login; owner-bound (external plugin).
-- [Zalo Personal](/channels/zalouser) - Zalo personal account via QR login (official plugin).
 
 ## Delivery notes
 
@@ -16960,6 +16979,8 @@ Reef lives under `channels.reef`:
 
 ## Adding a friend
 
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
+
 The receiving side mints a short-lived code in an authenticated chat:
 
 ```text
@@ -17017,6 +17038,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 /reef review list
 /reef review approve <digest>
 ```
+
+These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
@@ -19624,16 +19647,16 @@ When a single Slack message contains multiple file attachments:
 # Section: channels/sms.md
 
 ---
-summary: "Twilio SMS channel setup, access controls, and webhook configuration"
+summary: "Twilio SMS/MMS setup, access controls, webhooks, and delivery status"
 read_when:
-  - You want to connect OpenClaw to SMS through Twilio
-  - You need SMS webhook or allowlist setup
+  - You want to connect OpenClaw to SMS or MMS through Twilio
+  - You need SMS/MMS webhook or allowlist setup
 title: "SMS"
 ---
 
-OpenClaw receives and sends SMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
+OpenClaw receives and sends SMS/MMS through a Twilio phone number or Messaging Service. The Gateway registers a webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, sends replies through Twilio's Messages API, and records outbound delivery callbacks.
 
-Status: official plugin, installed separately. Text only: no MMS/media, direct messages only.
+Status: official plugin, installed separately. SMS text and MMS attachments, direct messages only.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -19652,12 +19675,31 @@ Status: official plugin, installed separately. Text only: no MMS/media, direct m
 You need:
 
 - The official SMS plugin installed with `openclaw plugins install @openclaw/sms`.
-- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
+- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service. MMS requires an MMS-capable sender; native MMS delivery also depends on the destination country and carrier.
 - The Twilio Account SID and Auth Token.
 - A public HTTPS URL that reaches your OpenClaw Gateway.
 - A sender policy choice: `pairing` (default) for private use, `allowlist` for preapproved phone numbers, or `open` only for intentionally public SMS access.
 
 One Twilio number can serve both SMS and [Voice Call](/plugins/voice-call) if it has both capabilities. The SMS webhook and Voice webhook are configured separately in Twilio and use separate Gateway paths; this page only covers the SMS webhook.
+
+## US A2P / 10DLC delivery
+
+SMS and MMS sent by an application from a US local 10DLC number to US recipients require US A2P 10DLC registration. Toll-free numbers and short codes use separate verification processes. This is separate from OpenClaw channel setup: webhook signature validation, pairing, and outbound credentials can all be correct while carriers still block or filter delivery.
+
+Before relying on a US 10DLC sender, confirm in Twilio that:
+
+- The account is paid; Twilio trial accounts cannot register for A2P 10DLC.
+- A Primary or Secondary Compliance Profile is approved in Twilio Trust Hub.
+- The Brand and Campaign are registered and approved.
+- The Twilio phone number has A2P status `REGISTERED` and is in the Sender Pool of the Messaging Service associated with the approved Campaign, or the `messagingServiceSid` you configure here is that approved service.
+- The Campaign describes the real OpenClaw message use case and includes matching sample messages.
+- Every website, keyword, offline, paper, or QR-code opt-in path is described completely. If the flow is not publicly visible, provide publicly accessible screenshots or other evidence.
+- Messaging consent is voluntary and separate from required service terms, account creation, or purchase, with the privacy policy, terms, frequency, rates, and opt-out disclosures Twilio requires.
+- You retain proof of consent, identify the sender, honor standard one-step opt-out keywords, and do not buy, rent, sell, or transfer consent. After an opt-out, send only one confirmation unless the recipient opts in again.
+
+Use Twilio as the source of truth for current requirements: [A2P 10DLC overview](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc), [registration quickstart](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/quickstart), and [required business and campaign information](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/collect-business-info). This section is setup guidance, not legal advice.
+
+If Twilio rejects the Brand or Campaign during registration review, fix that in Twilio before using the sender with OpenClaw. [`30909`](https://www.twilio.com/docs/api/errors/30909) means the message flow or call to action is incomplete or unverifiable. [`30923`](https://www.twilio.com/docs/api/errors/30923) means messaging consent is required as a condition of service, account creation, or purchase, or is bundled with service terms. [`30893`](https://www.twilio.com/docs/api/errors/30893) means the sample messages do not match the declared use case.
 
 ## Quick Setup
 
@@ -19668,7 +19710,7 @@ One Twilio number can serve both SMS and [Voice Call](/plugins/voice-call) if it
     ```
   </Step>
   <Step title="Create or choose a Twilio sender">
-    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
+    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. To send attachments, choose one that is also MMS-capable. Save:
 
     - Account SID, for example `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
     - Auth Token
@@ -19718,7 +19760,7 @@ https://gateway.example.com/webhooks/sms
   </Step>
 
   <Step title="Expose the exact SMS webhook path">
-    Your public URL must route the SMS path to the Gateway process (default port `18789`). If you use Tailscale Funnel for local testing, expose `/webhooks/sms` explicitly:
+    Your public URL must route the SMS path to the Gateway process (default port `18789`). The same path serves inbound Twilio webhooks and short-lived, tokenized attachments when OpenClaw sends MMS. If you use Tailscale Funnel for local testing, expose `/webhooks/sms` explicitly:
 
 ```bash
 tailscale funnel --bg --set-path /webhooks/sms http://127.0.0.1:<gateway-port>/webhooks/sms
@@ -19751,21 +19793,21 @@ openclaw pairing approve sms <CODE>
 
 All keys live under `channels.sms` (and per account under `channels.sms.accounts.<id>`):
 
-| Key                                     | Default         | Purpose                                                             |
-| --------------------------------------- | --------------- | ------------------------------------------------------------------- |
-| `enabled`                               | `true`          | Enable or disable the channel/account.                              |
-| `accountSid`                            | —               | Twilio Account SID (`AC...`).                                       |
-| `authToken`                             | —               | Twilio Auth Token; plaintext string or SecretRef.                   |
-| `fromNumber`                            | —               | E.164 sender number.                                                |
-| `messagingServiceSid`                   | —               | Messaging Service SID (`MG...`) used when no `fromNumber` resolves. |
-| `defaultTo`                             | —               | Default destination when a send flow omits an explicit target.      |
-| `webhookPath`                           | `/webhooks/sms` | Gateway HTTP path for inbound Twilio webhooks.                      |
-| `publicWebhookUrl`                      | —               | Public URL configured in Twilio; required for signature validation. |
-| `dangerouslyDisableSignatureValidation` | `false`         | Skip `X-Twilio-Signature` checks; local tunnel testing only.        |
-| `dmPolicy`                              | `"pairing"`     | `pairing`, `allowlist`, `open`, or `disabled`.                      |
-| `allowFrom`                             | `[]`            | Allowed sender numbers in E.164, or `"*"` with `dmPolicy: "open"`.  |
-| `textChunkLimit`                        | `1500`          | Maximum characters per outbound SMS chunk.                          |
-| `accounts`, `defaultAccount`            | —               | Multi-account map and default account id.                           |
+| Key                                     | Default         | Purpose                                                                                |
+| --------------------------------------- | --------------- | -------------------------------------------------------------------------------------- |
+| `enabled`                               | `true`          | Enable or disable the channel/account.                                                 |
+| `accountSid`                            | —               | Twilio Account SID (`AC...`).                                                          |
+| `authToken`                             | —               | Twilio Auth Token; plaintext string or SecretRef.                                      |
+| `fromNumber`                            | —               | E.164 sender number.                                                                   |
+| `messagingServiceSid`                   | —               | Messaging Service SID (`MG...`) used when no `fromNumber` resolves.                    |
+| `defaultTo`                             | —               | Default destination when a send flow omits an explicit target.                         |
+| `webhookPath`                           | `/webhooks/sms` | Gateway HTTP path for inbound Twilio webhooks.                                         |
+| `publicWebhookUrl`                      | —               | Public Twilio webhook URL; required for signature validation and outbound MMS hosting. |
+| `dangerouslyDisableSignatureValidation` | `false`         | Skip `X-Twilio-Signature` checks; local tunnel testing only.                           |
+| `dmPolicy`                              | `"pairing"`     | `pairing`, `allowlist`, `open`, or `disabled`.                                         |
+| `allowFrom`                             | `[]`            | Allowed sender numbers in E.164, or `"*"` with `dmPolicy: "open"`.                     |
+| `textChunkLimit`                        | `1500`          | Maximum characters per outbound SMS chunk.                                             |
+| `accounts`, `defaultAccount`            | —               | Multi-account map and default account id.                                              |
 
 ### Config file
 
@@ -19930,12 +19972,38 @@ Agent replies from inbound SMS conversations automatically go back to the sender
 
 SMS output is plain text. OpenClaw strips markdown, flattens fenced code blocks, rewrites links as `label (url)`, and splits long replies into chunks of at most `textChunkLimit` characters (default 1500) before sending them through Twilio.
 
+### Sending MMS
+
+Use the normal structured media field or the CLI `--media` option:
+
+```bash
+openclaw message send \
+  --channel sms \
+  --target sms:+15551234567 \
+  --message "photo" \
+  --media ./photo.jpg
+```
+
+OpenClaw loads the attachment through the shared outbound-media policy, stores it temporarily in plugin-scoped SQLite state, and gives Twilio a tokenized HTTPS URL on the configured `publicWebhookUrl` path. Media-only sends are supported.
+
+The generated media URL is a bearer capability that expires after 10 minutes. Treat its full query string as a secret: configure reverse-proxy and access logs to omit the query string or redact every query value. OpenClaw Gateway route diagnostics record only the pathname, but cannot control upstream proxy logs.
+
+Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG, and GIF attachments at 5,000,000 bytes; other supported media types are capped at 500,000 bytes. `application/vcard` attachments must be media-only; Twilio does not accept them with a caption. Destination carriers may enforce smaller limits or reject unsupported formats. Twilio must be able to fetch the generated URL without HTTP authentication, so `publicWebhookUrl` cannot contain embedded userinfo; query-based reverse-proxy tokens are preserved.
+
+For incoming MMS, OpenClaw processes at most 10 attachments and downloads at most 5 MiB total. Any additional or unavailable attachments produce a visible unavailable-media notice instead of discarding the signed message or silently delivering an empty turn. Downloads happen only after sender authorization, with Twilio authentication and an `api.twilio.com` host restriction.
+
+### Delivery status
+
+After each successful outbound send, OpenClaw stores the initial Twilio API status when the response includes one. When `publicWebhookUrl` is valid, every outbound message also gives Twilio a derived `StatusCallback` URL that preserves its base URL and connection overrides while adding the required delivery-callback retry settings. Invalid or oversized derived URLs are omitted.
+
+Later delivery callbacks update the same plugin-scoped SQLite record. Semantic retries are deduplicated, older transitions cannot regress a terminal state, and conflicting terminal observations are reported as `conflicted` instead of choosing a false winner. Records contain message SIDs, status/error metadata, and timestamps, but not message bodies or phone-number addresses. Each record is retained for up to 30 days after its latest observation, subject to the plugin-wide 5,000-message cap and oldest-record eviction.
+
 ## Verify Setup
 
 After the Gateway starts:
 
 1. Confirm the Gateway log shows the SMS webhook route.
-2. Run a Twilio-side probe (checks the configured Twilio webhook URL/method and recent inbound errors):
+2. Run a Twilio-side probe (checks the configured Twilio webhook URL/method, recent inbound errors, and the most recent stored outbound delivery state):
 
 ```bash
 openclaw channels capabilities --channel sms
@@ -19974,14 +20042,19 @@ The webhook route also enforces, independent of signature validation:
 
 - `POST` only.
 - Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after body parsing or Twilio signature validation fails.
+- Signed delivery callbacks are classified before inbound sender quotas and commit to bounded, plugin-scoped SQLite state before HTTP 200. They do not consume inbound dispatch quotas: those quotas protect raw inbound message admission and downstream agent dispatch. Delivery persistence instead has a separate 3,000-callback-per-minute safety fuse per SMS account route and returns HTTP 503 without the durable-acceptance marker above that limit. This is fail-closed overload protection, not lossless backpressure. With signature validation disabled, delivery callbacks first use the stricter 30/minute resolved-client-address cap before persistence.
 - Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and validated sender after body parsing and signature validation pass (HTTP 429 above that). The sender key is the canonicalized, signature-covered `From` value, so equivalent SMS/RCS address forms share one budget, one flooding sender exhausts only its own budget, and callbacks from other senders behind Twilio's shared egress addresses remain dispatchable. Invalid or missing sender values share a separate empty-sender budget.
 - Aggregate validated-callback ceiling of 300 accepted callbacks per minute per SMS account and webhook route. This bounds durable-ingress pressure from many distinct signed senders without recreating shared-egress cross-throttling. If signature validation is disabled, nothing authenticates `From`; the stricter 30/min resolved-client-address dispatch cap applies instead of the validated sender and aggregate policy.
 - Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
-- The payload `AccountSid` must match the configured `accountSid`. The raw callback is first committed to the durable ingress queue and acknowledged; a mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched.
+- Inbound payloads must carry a nonempty `AccountSid` that exactly matches the configured `accountSid`. Direct-number callbacks must target the configured `fromNumber`; Messaging Service callbacks must carry the configured `MessagingServiceSid`. The raw callback is first committed to the durable ingress queue and acknowledged; an identity mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched or allowed to download media.
+- Delivery callbacks with a missing or different `AccountSid` are acknowledged, logged, and intentionally not stored.
 - Replayed `MessageSid` values are deduplicated by the durable ingress queue. Completed-message tombstones are retained for 24 hours (up to 20,000 entries per account); permanent-failure tombstones are retained for 30 days (up to 1,000 entries).
+- Delivery observations use a semantic, non-PII fingerprint of source, message SID, normalized status, error code, and carrier completion date. Multiple states for one outbound message remain distinct. Records expire 30 days after their latest observation, while the 5,000-message cap can evict older records sooner.
 - Request bodies over 32 KB are rejected.
 
-Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.
+OpenClaw adds the `5xx` retry policy and a retry count to generated delivery `StatusCallback` URLs so Twilio can retry a failed SQLite commit or an overloaded delivery-state route. Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Neither a 429 nor a delivery-state 503 guarantees later recovery; use reconciliation when final-state completeness matters. Missed intermediate transitions cannot be reconstructed.
+
+For completeness-sensitive workflows, persist Message SIDs and reconcile stale nonterminal records by polling Twilio's Message resource. Twilio's [delivery logging guidance](https://www.twilio.com/docs/messaging/guides/outbound-message-logging) recommends polling when a message has not reached `delivered` or `undelivered` within 12 hours because a status callback may not have arrived. The SMS fallback URL is not a substitute: it only handles failures retrieving or executing the [inbound SMS TwiML webhook](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource).
 
 For local tunnel testing only, you can set:
 
@@ -20030,7 +20103,7 @@ Each account must use a distinct `webhookPath`; the Gateway refuses to register 
 
 Check that `publicWebhookUrl` exactly matches the URL configured in Twilio, including scheme, host, path, and query string. Twilio signs the public URL string, so proxy rewrites and alternate hostnames can break signature validation.
 
-A 403 with `Invalid account` means the inbound payload's `AccountSid` does not match the configured `accountSid`; check that the webhook points at the account that owns the number.
+If Twilio receives a durable acknowledgement but no pairing request appears, check the Gateway log for a permanent invalid-payload failure. Confirm the callback's `AccountSid` and `To` match the configured account and `fromNumber`, or that its `MessagingServiceSid` matches the configured Messaging Service.
 
 ### No pairing request appears
 
@@ -20047,7 +20120,17 @@ If the Twilio message log shows error `11200`, Twilio accepted the inbound SMS b
 
 ### Outbound sends fail
 
-Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. If you use a trial Twilio account, the destination number may need to be verified in Twilio before outbound SMS will send.
+Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. Twilio trial accounts can send only to verified recipients in the account's sign-up country and must use Twilio's predefined content; custom SMS bodies are not supported. Trial accounts also cannot register for A2P 10DLC, so upgrade before registering a US 10DLC sender.
+
+### Twilio accepts the send but delivery later fails
+
+Start with OpenClaw's stored delivery observation:
+
+```bash
+openclaw channels status --channel sms --probe --json
+```
+
+If the recent outbound status is `failed` or `undelivered`, use its `messageSid` to inspect the final Message status and error code in Twilio. [`30034`](https://www.twilio.com/docs/api/errors/30034) means the sender is unregistered or is not in the Sender Pool of the Messaging Service associated with the approved Campaign. [`30035`](https://www.twilio.com/docs/api/errors/30035) means Twilio is still registering, deregistering, or reassigning the number; wait until its status is `REGISTERED` before sending.
 
 ### Messages arrive but the agent does not answer
 
@@ -22317,6 +22400,45 @@ openclaw gateway restart
 
 
 
+# Section: channels/wecom.md
+
+---
+summary: "Install the official WeCom plugin and find its versioned setup documentation"
+read_when:
+  - You want to connect OpenClaw to WeCom
+  - You need the supported WeCom plugin and its setup documentation
+title: "WeCom"
+---
+
+OpenClaw exposes WeCom through the external
+`@wecom/wecom-openclaw-plugin` package maintained by the Tencent WeCom team.
+The plugin is listed in OpenClaw's official channel catalog but is not bundled
+with the core install.
+
+## Install
+
+```bash
+openclaw channels add --channel wecom
+openclaw gateway restart
+openclaw channels status --channel wecom
+```
+
+The OpenClaw catalog installs an exact version of
+`@wecom/wecom-openclaw-plugin`.
+
+## Configure
+
+WeCom credentials, connection modes, callback routes, and access-control
+behavior belong to the external plugin and can change independently of
+OpenClaw. Follow the
+[package documentation](https://www.npmjs.com/package/@wecom/wecom-openclaw-plugin)
+for the installed release before configuring the channel.
+
+When upgrading the plugin independently, keep using the documentation for the
+installed version.
+
+
+
 # Section: channels/whatsapp.md
 
 ---
@@ -23872,10 +23994,11 @@ For multi-account setups, prefer setting `profile` on each account in config so 
 # Section: clawhub/cli.md
 
 ---
-summary: "ClawHub CLI entry points for discovering, installing, publishing, and verifying OpenClaw skills and plugins."
+summary: "ClawHub CLI entry points for discovering, installing, removing, publishing, and verifying OpenClaw skills and plugins."
 read_when:
   - You want to use ClawHub from the command line
   - You want to install ClawHub skills or plugins through OpenClaw
+  - You need to remove an installed ClawHub skill
   - You want to publish ClawHub packages
 title: "ClawHub CLI"
 ---
@@ -23886,8 +24009,8 @@ Two command-line surfaces talk to ClawHub:
 
 - `openclaw skills` / `openclaw plugins` - discover, install, and update
   packages for a local OpenClaw agent or Gateway.
-- The standalone `clawhub` CLI - publisher workflows: login, publish, sync,
-  and transfer.
+- The standalone `clawhub` CLI - remove installed skills and handle publisher
+  workflows including login, publish, sync, and transfer.
 
 ## Discover and install
 
@@ -23932,6 +24055,28 @@ enforces scan and force-install policy before returning a pinned commit.
   non-interactively.
 - **Official ClawHub publishers/packages and bundled OpenClaw sources** skip
   the trust prompt and security-verdict fetch entirely.
+
+## Remove an installed skill
+
+If the standalone ClawHub CLI is not already installed, install it explicitly:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The command asks for confirmation, then removes the installed skill directory
+and its ClawHub lockfile entry. Select the original agent workspace or shared
+OpenClaw state directory when the installation is outside the current workdir:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+For a custom `OPENCLAW_STATE_DIR`, replace `~/.openclaw` with that configured
+directory. See [Remove a ClawHub skill](/cli/skills#remove-a-clawhub-skill) for
+workspace targeting and skill refresh behavior.
 
 ## Publish and maintain
 
@@ -24805,9 +24950,9 @@ Config sample:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         identity: {
           name: "OpenClaw",
           theme: "space lobster",
@@ -24815,7 +24960,7 @@ Config sample:
           avatar: "avatars/openclaw.png",
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -29270,6 +29415,7 @@ Low-level RPC helper.
 
 ```bash
 openclaw gateway call status
+openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
@@ -29278,6 +29424,9 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Gateway token.
@@ -29296,7 +29445,7 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 
 <Note>
-`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected).
+`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
 
 ## Manage the Gateway service
@@ -32939,7 +33088,7 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice custom-api-key \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
@@ -32983,7 +33132,7 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
-With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values: for auth-profile-backed providers this writes `keyRef: { source: "env", provider: "default", id: <envVar> }`; for custom providers it writes `models.providers.<id>.apiKey` the same way (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Contract: set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`) and do not also pass an inline key flag unless that env var is set - a flag value without the matching env var fails fast with guidance.
+With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, or `exec` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
 
@@ -33028,7 +33177,7 @@ openclaw onboard --non-interactive \
 
 ```bash
 # Promptless endpoint selection
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
@@ -33038,7 +33187,7 @@ openclaw onboard --non-interactive \
 Mistral:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice mistral-api-key \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
@@ -34516,7 +34665,7 @@ openclaw plugins uninstall <id> --keep-files
 openclaw plugins uninstall <id> --force
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and linked `plugins.load.paths` entries when applicable. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
 `uninstall` prints a preview of what will be removed, then prompts `Uninstall plugin "<id>"?` before making changes. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -36556,9 +36705,10 @@ Applies safe, deterministic remediations:
 # Section: cli/sessions.md
 
 ---
-summary: "CLI reference for `openclaw sessions` (list stored sessions + usage)"
+summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
+  - You want to archive or delete sessions from a headless Gateway
 title: "Sessions"
 ---
 
@@ -36631,6 +36781,81 @@ skipped.
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
+  ]
+}
+```
+
+## Archive sessions
+
+Archive one or more sessions through the running Gateway:
+
+```bash
+openclaw sessions archive "agent:main:scratch-1"
+openclaw sessions archive "agent:main:scratch-1" "agent:main:scratch-2"
+openclaw sessions archive "agent:work:scratch-1" --agent work
+openclaw sessions archive "agent:main:scratch-1" --dry-run
+openclaw sessions archive "agent:main:scratch-1" --json
+```
+
+Archive uses the same `sessions.patch` lifecycle operation as the Control UI.
+It keeps the transcript, marks the session archived, and removes the session
+from the default active list. Already archived sessions are successful no-ops.
+Use `--dry-run` to validate every key and preview the result without changing
+session state.
+
+## Delete sessions
+
+Delete one or more sessions through the running Gateway:
+
+```bash
+openclaw sessions delete "agent:main:scratch-1"
+openclaw sessions delete "agent:main:scratch-1" "agent:main:scratch-2" --yes
+openclaw sessions delete "agent:work:scratch-1" --agent work --yes
+openclaw sessions delete "agent:main:scratch-1" --dry-run
+openclaw sessions delete "agent:main:scratch-1" --yes --json
+```
+
+<Warning>
+  Delete is destructive. In an interactive terminal it asks once before
+  deleting the valid keys. Non-interactive and `--json` deletion requires
+  `--yes`. Use `--dry-run` first when scripting a bulk cleanup.
+</Warning>
+
+Delete uses the same `sessions.delete` lifecycle operation as the Control UI,
+with transcript cleanup enabled. The Gateway removes the live session row,
+transcript generations, session-owned runtime state, bindings, boards, and
+other lifecycle artifacts. For ordinary sessions it retains the transcript as
+a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
+removed without an archive. If a managed worktree cannot be removed safely,
+the command reports the preserved branch and path for manual cleanup.
+
+Both lifecycle commands:
+
+- accept multiple keys and report one ordered result per key;
+- use `--agent <id>` to select the owning agent, which is required for a
+  `global` key outside the default agent;
+- support `--url`, `--token`, `--password`, and `--timeout <ms>` Gateway
+  connection overrides;
+- return a non-zero exit when any key is unknown or any operation fails, while
+  still processing the other valid keys;
+- emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
+  when `--json` is set.
+
+Example mixed-result JSON:
+
+```json
+{
+  "ok": false,
+  "operation": "archive",
+  "dryRun": false,
+  "results": [
+    { "key": "agent:main:scratch-1", "ok": true, "status": "archived" },
+    {
+      "key": "agent:main:missing",
+      "ok": false,
+      "status": "not_found",
+      "error": "Session not found. Run openclaw sessions list --json to choose a valid key."
+    }
   ]
 }
 ```
@@ -36968,6 +37193,7 @@ summary: "CLI reference for `openclaw skills` (search/install/update/verify/list
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
+  - You need to remove an installed ClawHub skill
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
@@ -37098,6 +37324,39 @@ community releases require review and `--acknowledge-clawhub-risk` when a
 non-interactive command should continue after that review. Official ClawHub
 skill publishers and bundled OpenClaw skill sources bypass this release-trust
 prompt.
+
+## Remove a ClawHub skill
+
+Use the standalone ClawHub CLI to remove a ClawHub-tracked skill. If the CLI
+is not installed, install it explicitly first:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The CLI asks for confirmation before deleting the skill directory and its
+`.clawhub/lock.json` entry. Use the installed skill's owner-qualified name or
+bare slug, not its original `skills-sh:` reference.
+
+Select the same root where the skill was installed: the agent workspace for an
+agent-specific skill, or the OpenClaw state directory for a shared skill
+installed with `--global`:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+If `OPENCLAW_STATE_DIR` is set, use that configured state directory for shared
+skills instead:
+
+```bash
+clawhub --workdir "$OPENCLAW_STATE_DIR" uninstall @owner/my-skill
+```
+
+The default [skills watcher](/tools/skills#snapshots-and-refresh) picks up the
+removal on the next agent turn. If watching is disabled, start a new session.
 
 ## Skill Workshop
 
@@ -47506,6 +47765,7 @@ To let one agent search another agent's QMD session transcripts, add extra colle
     },
     entries: {
       main: {
+        default: true,
         workspace: "~/workspaces/main",
         memory: {
           search: {
@@ -47543,10 +47803,10 @@ Direct chats collapse to the agent's main session key by default, so true isolat
 ```json5
 {
   agents: {
-    list: [
-      { id: "alex", workspace: "~/.openclaw/workspace-alex" },
-      { id: "mia", workspace: "~/.openclaw/workspace-mia" },
-    ],
+    entries: {
+      alex: { default: true, workspace: "~/.openclaw/workspace-alex" },
+      mia: { workspace: "~/.openclaw/workspace-mia" },
+    },
   },
   bindings: [
     {
@@ -47603,10 +47863,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "coding", workspace: "~/.openclaw/workspace-coding" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          coding: { workspace: "~/.openclaw/workspace-coding" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "discord", accountId: "default" } },
@@ -47650,10 +47910,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "alerts", workspace: "~/.openclaw/workspace-alerts" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          alerts: { workspace: "~/.openclaw/workspace-alerts" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "default" } },
@@ -47699,21 +47959,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```js
     {
       agents: {
-        list: [
-          {
-            id: "home",
+        entries: {
+          home: {
             default: true,
             name: "Home",
             workspace: "~/.openclaw/workspace-home",
             agentDir: "~/.openclaw/agents/home/agent",
           },
-          {
-            id: "work",
+          work: {
             name: "Work",
             workspace: "~/.openclaw/workspace-work",
             agentDir: "~/.openclaw/agents/work/agent",
           },
-        ],
+        },
       },
 
       // Deterministic routing: first match wins (most-specific first).
@@ -47769,20 +48027,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
         { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
@@ -47800,20 +48057,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -47834,9 +48090,9 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "family",
+        entries: {
+          family: {
+            default: true,
             name: "Family",
             workspace: "~/.openclaw/workspace-family",
             identity: { name: "Family Bot" },
@@ -47860,7 +48116,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"],
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -47886,17 +48142,16 @@ Each agent can have its own sandbox and tool restrictions:
 ```js
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: {
           mode: "off",  // No sandbox for personal agent
         },
         // No tool restrictions - all tools available
       },
-      {
-        id: "family",
+      family: {
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
           mode: "all",     // Always sandboxed
@@ -47911,7 +48166,7 @@ Each agent can have its own sandbox and tool restrictions:
           deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -54552,6 +54807,29 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
+OpenClaw's managed Claude stdio sessions require the `msg_lifecycle_v1`
+capability, first observed in the published Claude Code 2.1.206 build. At
+runtime OpenClaw does not trust the version string alone: it waits for
+Claude Code's `system/init` record to advertise `msg_lifecycle_v1`, then accepts
+assistant, tool, and result records only after the matching input lifecycle has
+started. Unknown capabilities are ignored. A CLI that omits the required
+capability fails immediately with `claude update` and gateway-restart guidance
+instead of waiting for the no-output watchdog.
+
+Setup and Doctor treat 2.1.206 as advisory, so a lower-version compatible
+backport or wrapper remains selectable and is verified by the runtime gate.
+
+```bash
+claude --version
+claude update
+# Restart the OpenClaw gateway after updating.
+```
+
+Claude Code's public CLI documentation covers stream-json mode and updates but
+does not currently document the lifecycle event itself. OpenClaw therefore
+feature-detects the advertised capability; 2.1.206 is the first published
+Claude Code build observed to provide it.
+
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
@@ -54638,19 +54916,20 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                   | Value                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | `claude`                                                                                                                                                                                                      |
-| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`              | `jsonl`                                                                                                                                                                                                       |
-| `input`               | `stdin`                                                                                                                                                                                                       |
-| `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`         | `always`                                                                                                                                                                                                      |
-| `imageArg`            | `@`                                                                                                                                                                                                           |
-| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| Key                      | Value                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`                | `claude`                                                                                                                                                                                                      |
+| `args`                   | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
+| `output`                 | `jsonl`                                                                                                                                                                                                       |
+| `input`                  | `stdin`                                                                                                                                                                                                       |
+| `modelArg`               | `--model`                                                                                                                                                                                                     |
+| `sessionArgs`            | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
+| `sessionMode`            | `always`                                                                                                                                                                                                      |
+| live-session requirement | `msg_lifecycle_v1` (first observed in Claude Code 2.1.206)                                                                                                                                                    |
+| `imageArg`               | `@`                                                                                                                                                                                                           |
+| `imagePathScope`         | `workspace`                                                                                                                                                                                                   |
+| `systemPromptFileArg`    | `--append-system-prompt-file`                                                                                                                                                                                 |
+| `systemPromptMode`       | `append`                                                                                                                                                                                                      |
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -55221,11 +55500,11 @@ Optional default skill allowlist for agents that do not set
 {
   agents: {
     defaults: { skills: ["github", "weather"] },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -55316,14 +55595,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
-    list: [
-      {
-        id: "strict-worker",
+    entries: {
+      "strict-worker": {
+        default: true,
         contextInjection: "always",
         bootstrapMaxChars: 50000,
         bootstrapTotalMaxChars: 300000,
       },
-    ],
+    },
   },
 }
 ```
@@ -55429,14 +55708,14 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: { memoryGetMaxChars: 12000 },
     },
-    list: [
-      {
-        id: "tiny-local",
+    entries: {
+      "tiny-local": {
+        default: true,
         contextLimits: {
           memoryGetMaxChars: 6000,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -55459,7 +55738,9 @@ Per-agent override for the skills prompt budget.
 ```json5
 {
   agents: {
-    list: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
+    entries: {
+      "tiny-local": { default: true, skillsLimits: { maxSkillsPromptChars: 6000 } },
+    },
   },
 }
 ```
@@ -56145,9 +56426,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
@@ -56189,13 +56469,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- Each key in `agents.entries` is the stable agent id.
+- `default`: exactly one agent entry must set `default: true`.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -56226,10 +56506,10 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    entries: {
+      home: { default: true, workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -56267,13 +56547,13 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
-    ],
+    },
   },
 }
 ```
@@ -56285,9 +56565,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -56302,7 +56582,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -56314,9 +56594,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
@@ -56348,7 +56628,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -56773,7 +57053,7 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
         quotedBot: true,
         threadParticipation: true,
       },
-      heartbeat: {
+      heartbeatVisibility: {
         showOk: false,
         showAlerts: true,
         useIndicator: true,
@@ -56786,9 +57066,9 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
 - `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
-- `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output (default `false`).
-- `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
-- `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output (default `true`).
+- `channels.defaults.heartbeatVisibility.showOk`: include healthy channel statuses in heartbeat output (default `false`).
+- `channels.defaults.heartbeatVisibility.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
+- `channels.defaults.heartbeatVisibility.useIndicator`: render compact indicator-style heartbeat output (default `true`).
 
 ### WhatsApp
 
@@ -60490,7 +60770,7 @@ writer is best-effort, not a lossless compliance archive.
       tracesEndpoint: "https://traces.example.com/v1/traces",
       metricsEndpoint: "https://metrics.example.com/v1/metrics",
       logsEndpoint: "https://logs.example.com/v1/logs",
-      protocol: "http/protobuf", // http/protobuf | grpc
+      protocol: "http/protobuf",
       headers: { "x-tenant-id": "my-org" },
       serviceName: "openclaw-gateway",
       traces: true,
@@ -60514,8 +60794,8 @@ writer is best-effort, not a lossless compliance archive.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
-- `otel.protocol`: `"http/protobuf"` (default) or `"grpc"`.
-- `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
+- `otel.protocol`: `"http/protobuf"` (default). gRPC export is retired; run [`openclaw doctor --fix`](/cli/doctor) to repair a persisted legacy value or get source-specific manual-edit guidance.
+- `otel.headers`: extra HTTP request headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
 - `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
@@ -60525,6 +60805,7 @@ writer is best-effort, not a lossless compliance archive.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
+- `OTEL_EXPORTER_OTLP_PROTOCOL`: protocol fallback used only when `otel.protocol` is unset. Set it to `http/protobuf` or leave it unset; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 
 ---
@@ -63211,10 +63492,9 @@ Example: two agents, only the second agent runs heartbeats.
         target: "last", // explicit delivery to last contact (default is "none")
       },
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "ops",
+    entries: {
+      main: { default: true },
+      ops: {
         heartbeat: {
           every: "1h",
           target: "whatsapp",
@@ -63223,7 +63503,7 @@ Example: two agents, only the second agent runs heartbeats.
           prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -63270,9 +63550,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "ops",
+    entries: {
+      ops: {
+        default: true,
         heartbeat: {
           every: "1h",
           target: "telegram",
@@ -63280,7 +63560,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
           accountId: "ops-bot",
         },
       },
-    ],
+    },
   },
   channels: {
     telegram: {
@@ -63388,17 +63668,17 @@ By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is
 ```yaml
 channels:
   defaults:
-    heartbeat:
+    heartbeatVisibility:
       showOk: false # Hide HEARTBEAT_OK (default)
       showAlerts: true # Show alert messages (default)
       useIndicator: true # Emit indicator events (default)
   telegram:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true # Show OK acknowledgments on Telegram
   whatsapp:
     accounts:
       work:
-        heartbeat:
+        heartbeatVisibility:
           showAlerts: false # Suppress alert delivery for this account
 ```
 
@@ -63417,30 +63697,30 @@ If **all three** are false, OpenClaw skips the heartbeat run entirely (no model 
 ```yaml
 channels:
   defaults:
-    heartbeat:
+    heartbeatVisibility:
       showOk: false
       showAlerts: true
       useIndicator: true
   slack:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true # all Slack accounts
     accounts:
       ops:
-        heartbeat:
+        heartbeatVisibility:
           showAlerts: false # suppress alerts for the ops account only
   telegram:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true
 ```
 
 ### Common patterns
 
-| Goal                                     | Config                                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Default behavior (silent OKs, alerts on) | _(no config needed)_                                                                     |
-| Fully silent (no messages, no indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| Indicator-only (no messages)             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs in one channel only                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| Goal                                     | Config                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Default behavior (silent OKs, alerts on) | _(no config needed)_                                                                               |
+| Fully silent (no messages, no indicator) | `channels.defaults.heartbeatVisibility: { showOk: false, showAlerts: false, useIndicator: false }` |
+| Indicator-only (no messages)             | `channels.defaults.heartbeatVisibility: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| OKs in one channel only                  | `channels.telegram.heartbeatVisibility: { showOk: true }`                                          |
 
 ## Monitor scratch (optional)
 
@@ -65832,7 +66112,20 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 
 <Note>
-`protocol` supports `http/protobuf` only. Since `traces` and `metrics` default to enabled, any other value (including `grpc`) aborts the entire diagnostics-otel subscription with an `unsupported protocol` warning - this also stops stdout log export. Explicitly set `traces: false` and `metrics: false` if you only want `logsExporter: "stdout"` with a non-OTLP protocol value.
+`diagnostics.otel.protocol` accepts only `http/protobuf`. If a persisted config,
+including a value supplied through `${VAR}` interpolation, still resolves this
+field to the retired `grpc` value, run
+[`openclaw doctor --fix`](/cli/doctor). Doctor repairs directly authored values
+and a sole internal single-file include that owns the top-level `diagnostics`
+section. For root or array includes, nested include chains, sibling overrides,
+external include targets, or another ambiguous source, Doctor leaves the files
+unchanged and lists the candidate source file or files to edit manually.
+
+`OTEL_EXPORTER_OTLP_PROTOCOL` is a process-environment fallback used only when
+`diagnostics.otel.protocol` is unset. Doctor does not rewrite process
+environment variables. An unsupported fallback is rejected at runtime when an
+OTLP signal is enabled; set it to `http/protobuf` or unset it. A stdout-only log
+configuration does not use the OTLP transport and continues to work.
 </Note>
 
 ## Signals exported
@@ -65882,7 +66175,7 @@ stdout, or `both` for both.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc disables OTLP export
+      protocol: "http/protobuf",
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
       metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
@@ -65917,7 +66210,7 @@ dashboards, alerts, and recording rules that query the old names.
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
 | `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Fallback for the wire protocol when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables export.                                                                                                                                                                                                 |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Process-environment fallback used only when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables OTLP export; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.                                                                                    |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
@@ -82453,7 +82746,7 @@ The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the 
 Authenticated deep health snapshot:
 
 ```bash
-docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
+docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'
 ```
 
 ### LAN vs loopback
@@ -101525,7 +101818,7 @@ openclaw gateway --port 18999 --bind loopback
 Then:
 
 ```bash
-openclaw gateway call health --url ws://127.0.0.1:18999 --timeout 3000
+openclaw gateway call health --port 18999 --timeout 3000
 ```
 
 ## Related
@@ -103865,15 +104158,18 @@ Route fields:
 - `auth`: required, `"gateway"` or `"plugin"`. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
 - `match`: optional. `"exact"` (default) or `"prefix"`.
 - `handleUpgrade`: optional handler for WebSocket upgrade requests on the same route.
-- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
+- `replaceExisting`: optional. Required only for dynamic lifecycle registration to replace its own existing route.
 - `handler`: return `true` when the route handled the request.
 
 Notes:
 
 - `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
-- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
+- Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
+- Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
 - `auth: "gateway"` routes run inside a Gateway request runtime scope. The default surface (`gatewayRuntimeScopeSurface: "write-default"`) is intentionally conservative:
   - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) and any non-trusted-proxy auth method get a single `operator.write` scope, even if the caller sends `x-openclaw-scopes`
@@ -106058,9 +106354,17 @@ only for behavior that really belongs to the backend.
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`liveSessionRequirement` declares one exact capability that the CLI must
+advertise in its initialization record before OpenClaw trusts streamed output.
+It also supplies the first known compatible version, version-probe arguments,
+and update command used by setup and Doctor. Runtime support remains
+capability-based, so a compatible backport or wrapper is not rejected only
+because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
@@ -114461,7 +114765,10 @@ When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
 read-only: no login, model pull, download, or config write. Preparation rechecks
 the exact selected model and returns a config proposal; OpenClaw live-tests that
-proposal in isolation and commits it only after success.
+proposal in isolation and commits it only after success. A provider can also
+expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
+when the local service is reachable but no model qualifies for automatic setup.
+The availability probe is also read-only.
 
 ## commandAliases reference
 
@@ -119857,6 +120164,14 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
 
+`prepareUrl({ mediaAccess })` forwards host-authorized local media access to
+the shared outbound loader. Hosted media capacity defaults to
+`overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
+issued URLs must remain valid until expiry, and configure both backing keyed
+stores with `"reject-new"` so independent writers cannot evict live rows.
+Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
+so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
+
 Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
 channel records with `toInboundMediaFacts(...)` from
 `openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
@@ -122848,6 +123163,14 @@ For an end-to-end authoring guide, see
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
   `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
   API exists; they must not reach into another plugin's private layout.
+- A memory runtime that can return session-transcript hits should implement
+  `runtime.authorizeSearchHits(...)`. The host calls this hook before raw search
+  hits reach caller-visible surfaces and supplies the requesting agent, session
+  key, and sandbox state. Return only hits the requester may observe. If the hook
+  is absent, OpenClaw fails closed by withholding session-source hits while
+  retaining ordinary memory hits. Keep transcript identity and visibility
+  policy in the owning memory plugin; callers must not infer authorization from
+  paths or duplicate plugin-specific rules.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
@@ -126018,7 +126341,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
-    | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and shared setup-plan construction for plugin-owned secret providers |
+    | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, setup-plan construction, and setup CLI scaffolding for plugin-owned secret providers |
     | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
@@ -126120,7 +126443,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
-    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
+    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
@@ -127779,7 +128102,7 @@ Current runtime behavior:
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
-- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
@@ -133840,10 +134163,21 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        Verify with:
+        OpenClaw's streamed session correlation requires the
+        `msg_lifecycle_v1` capability. Claude Code 2.1.206 is the first
+        published build known to advertise it. Verify the installed version:
 
         ```bash
         claude --version
+        ```
+
+        A lower-version compatible backport or wrapper remains selectable;
+        OpenClaw verifies the capability at runtime. If the runtime rejects the
+        installed build, update Claude Code and restart OpenClaw so the gateway
+        launches the new binary:
+
+        ```bash
+        claude update
         ```
       </Step>
       <Step title="Run onboarding">
@@ -133863,6 +134197,8 @@ OpenClaw release:
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
+    `openclaw doctor` also reports advisory guidance for an installed Claude
+    Code version below the first-known compatible release.
     </Note>
 
     <Warning>
@@ -146282,7 +146618,7 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
       model: { primary: "openrouter/auto" },
@@ -146317,12 +146653,14 @@ under `agents.defaults.mediaModels.image`:
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "openrouter/google/gemini-3.1-flash-image-preview",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: {
+          primary: "openrouter/google/gemini-3.1-flash-image-preview",
+          timeoutMs: 180000,
+        },
       },
     },
   },
@@ -146343,11 +146681,13 @@ OpenRouter can back the `video_generate` tool through its asynchronous
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "openrouter/google/veo-3.1-fast",
+      mediaModels: {
+        video: {
+          primary: "openrouter/google/veo-3.1-fast",
+        },
       },
     },
   },
@@ -146371,12 +146711,14 @@ output. Set an OpenRouter audio model under
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "openrouter/google/lyria-3-pro-preview",
-        timeoutMs: 180_000,
+      mediaModels: {
+        music: {
+          primary: "openrouter/google/lyria-3-pro-preview",
+          timeoutMs: 180000,
+        },
       },
     },
   },
@@ -146426,10 +146768,14 @@ media understanding preflight.
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
-      },
+      models: [
+        {
+          provider: "openrouter",
+          model: "openai/whisper-large-v3-turbo",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: { enabled: true },
     },
   },
 }
@@ -146454,11 +146800,11 @@ openclaw models set openrouter/openrouter/fusion
 Configure Fusion's panel and judge through the model's `params.extraBody`;
 those fields forward directly into the OpenRouter chat-completions request
 body. Fusion works with either OAuth or API-key onboarding; if you use OAuth,
-omit the `env.OPENROUTER_API_KEY` line below.
+omit the `env.vars.OPENROUTER_API_KEY` line below.
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
       model: { primary: "openrouter/openrouter/fusion" },
@@ -157888,8 +158234,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.zalo.webhookSecret`
 - `channels.zalo.accounts.*.botToken`
 - `channels.zalo.accounts.*.webhookSecret`
-- `channels.googlechat.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
-- `channels.googlechat.accounts.*.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
+- `channels.googlechat.serviceAccount`
+- `channels.googlechat.accounts.*.serviceAccount`
 
 ### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
@@ -167426,7 +167772,7 @@ Add `--json` for a machine-readable summary.
 
 - `--gateway-port` defaults to `18789`; only pass it to override.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
-- `--secret-input-mode ref` stores an env-backed reference (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`) in the auth profile instead of the plaintext key. In non-interactive `ref` mode, the provider env var must already be set in the process environment: passing an inline key flag without its matching env var fails fast.
+- `--secret-input-mode ref` stores new credentials as env-backed references (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`); set the provider env var when adding a credential or passing an inline key flag. Existing resolvable named profiles and their `env`, `file`, or `exec` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ```bash
 openclaw onboard --non-interactive --accept-risk \
@@ -167908,11 +168254,13 @@ Credential storage mode:
   - Env refs: validates variable name + non-empty value in the current onboarding environment.
   - Provider refs: validates provider config and resolves the requested id.
   - If preflight fails, onboarding shows the error and lets you retry.
-- In non-interactive mode, `--secret-input-mode ref` is env-backed only.
-  - Set the provider env var in the onboarding process environment.
+- In non-interactive mode, `--secret-input-mode ref` creates only env-backed references for new credentials.
+  - Set the provider env var in the onboarding process environment when adding a new credential.
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
-  - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
+  - Existing resolvable named auth profiles are reused unchanged, including existing `env`, `file`, and `exec` references; no new `apiKey` or `keyRef` is written and no additional provider env var is required.
+  - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
+  - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 - Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
   - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
   - Password mode: plaintext or SecretRef.
@@ -168169,9 +168517,12 @@ Local mode (default) walks through these steps:
    Security note: if this agent will run tools or process webhook/hook
    content, prefer the strongest latest-generation model available and keep
    tool policy strict - weaker or older tiers are easier to prompt-inject.
-   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs
-   instead of plaintext API key values; the referenced env var must already
-   be set, or onboarding fails fast. Interactive secret reference mode can
+   For non-interactive runs, `--secret-input-mode ref` stores new credentials
+   as env-backed refs; set the provider env var when adding a credential.
+   Existing resolvable named profiles and their `env`, `file`, or `exec` refs
+   are reused unchanged without a new credential write or additional provider
+   env var. Previously stored plaintext is not migrated; see
+   [Secrets management](/gateway/secrets). Interactive secret reference mode can
    point at an environment variable or a configured provider ref (`file` or
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to
@@ -172219,7 +172570,7 @@ different Gateway. After a browser crash, the next launch archives sessions
 left by the previous browser instance. Archived sessions reject new work, while
 their transcripts remain available in session history. Browser-copilot keys are
 thread sessions, so normal age and entry-count maintenance preserves them. The
-per-agent session disk budget still applies (default `2gb`) and may evict the
+per-agent session disk budget still applies (default `10gb`) and may evict the
 oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
 
 The side panel currently requires either a Gateway-hosted extension relay or a
@@ -190492,7 +190843,8 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
-- `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
@@ -190503,6 +190855,7 @@ Session lifecycle:
 - `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
 - `/reset` (reset the current session key in place)
 - `/abort` (abort the active run)
+- `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
 
@@ -190884,7 +191237,7 @@ or password explicitly, and use `wss://` behind TLS.
 # Section: web/webchat.md
 
 ---
-summary: "Loopback WebChat static host and Gateway WS usage for chat UI"
+summary: "Native and Control UI WebChat usage over the Gateway WebSocket"
 read_when:
   - Debugging or configuring WebChat access
 title: "WebChat"
