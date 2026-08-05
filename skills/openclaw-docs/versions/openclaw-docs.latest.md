@@ -401,7 +401,7 @@ Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code pol
 - **CI workflow edits** validate the Node CI graph, workflow linting, and the Windows lane (`ci.yml` executes it), but do not force iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
-- **TUI PTY** splits by runtime ownership. The Linux Node shard runs the deterministic source-level `TuiBackend` fixture lane. The `build-artifacts` job reruns `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1`, so the slower `tui --local` smoke exercises the exact-head built CLI while mocking only the external model endpoint.
+- **TUI PTY** splits by proof ownership. The dedicated `core-runtime-tui-pty` Node shard owns the full real-backend suite against the exact-head built CLI. The `build-artifacts` job keeps only a local model roundtrip and a real Gateway connection canary, so every artifact boundary proves the built launcher without duplicating the full serial suite inside the build job.
 - **CI routing-only edits, the small set of core-test fixtures the fast task runs directly, and narrow plugin contract helper edits** use a fast Node-only manifest path: `preflight`, `security-fast`, and only the fast lanes the change touches — a single `checks-fast-core` CI-routing task, the two plugin contract shards, or both. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
@@ -415,13 +415,13 @@ The slowest Node test families are split or balanced so each job stays small wit
 - Pull requests on the canonical repository reuse the changed-test resolver against the synthetic merged-tree diff. Precise changes run one targeted Node job; each selected test file gets its own process so stateful suite isolation remains intact. The planner combines sibling tests with import-graph dependents and falls back to the existing 14-job compact full-suite plan for workspace package, package/lockfile, shared harness, split-config, renamed, or deleted changes, public extension-contract changes, tests with special shard setup, partially resolved or empty targets, oversized path or target plans, and planner errors. Targeted plans always retain the full built-artifact boundary gate because its repository scanners cannot be derived from imports. `main` pushes run the same full compact suite: pending intermediate push events can be coalesced, so the newest surviving run must validate the complete integration tree rather than only its final single-push diff. Manual dispatches and release gates retain the full named per-shard matrix.
 - The full Node matrix admits the consistently slow serial tooling, auto-reply command shards, and broad core-fast cache writer first. This keeps the 28-job cap while preventing critical-path work and the next run's transform seed from slipping into a later wave.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
-- Linux Node shard jobs persist Vitest's experimental filesystem module cache through the upstream Actions cache API, which Blacksmith transparently accelerates on its runners. Every CI shard is restore-only and unpacks the protected seed into its own runner-local root; the shard wrapper then gives concurrent Vitest processes separate live subdirectories. Only the non-cancelling daily or explicitly dispatched warmer saves a new immutable archive, so pull requests cannot publish transforms or mint per-PR cache families. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations. The protected writer scans and prunes its restored cache to 75% after it exceeds 2 GiB. Vitest hashes module id, source content, environment, and resolved transform config, so ordinary partial source changes keep unchanged entries warm while changed modules miss safely. Coarse restore prefixes bridge workflow runs; normal Actions cache LRU and inactivity eviction bound old immutable archives.
+- Linux Node shard jobs persist Vitest's experimental filesystem module cache through the upstream Actions cache API, which Blacksmith transparently accelerates on its runners. Every CI shard is restore-only and unpacks the protected seed into its own runner-local root; the shard wrapper then gives concurrent Vitest processes separate live subdirectories. Only the non-cancelling daily or explicitly dispatched warmer saves a new immutable archive, so pull requests cannot publish transforms or mint per-PR cache families. The warmer launches each selected shard/config envelope in a fresh child process with concurrency one, preserving its include patterns and environment while reusing the same serial cache leaf. This prevents config-global state from leaking, avoids expanding filtered shards into whole configs, and retains transforms produced by the previous child. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations. The protected writer scans and prunes its restored cache to 75% after it exceeds 2 GiB. Vitest hashes module id, source content, environment, and resolved transform config, so ordinary partial source changes keep unchanged entries warm while changed modules miss safely. Coarse restore prefixes bridge workflow runs; normal Actions cache LRU and inactivity eviction bound old immutable archives.
 - Trusted Linux Node jobs also bind the pnpm store and `node_modules` from one protected dependency disk per supported Node line. Package manifests, install settings, runner platform, and the exact Node patch stay out of the disk key; an exact runtime and install-input fingerprint decides whether a job reuses the tree or reinstalls and refreshes the same disk. Manifests are canonicalized before hashing. The audited direct root hooks retain only pnpm's install lifecycle scripts, so formatting and ordinary test/build script edits keep the warm dependency tree; unaudited lifecycle-hook drift fails closed until its source inputs join the fingerprint contract. Dependency, package-manager, hook-source, and lockfile changes always invalidate the snapshot. A matching fingerprint is necessary but not sufficient: setup also checks the importer archive and manifest checksums, then verifies registry-backed lockfile dependencies retained by postinstall against the package manifests Node resolves from their importers. Missing or stale importer content falls back to a fresh install instead of serving the root hoist. A pull request whose read-only snapshot is unusable detaches the workspace bind and installs into runner-local storage, avoiding slow writes to a clone it cannot publish. Sticky cold installs disable pnpm's inner fetch retries and make up to three bounded full-install attempts from the progressively warmed store; a timeout remains a failure. After a content-validated restore or frozen-lockfile install, setup disables pnpm's redundant pre-run dependency check: the repository intentionally prunes plugin-local `node_modules`, which pnpm otherwise treats as stale and repairs through unsafe concurrent implicit installs during shard fanout. Canonical main preflight is the sole writer and measures the store on every refresh, running `pnpm store prune` only after retired package versions push it above 8 GiB. Blacksmith snapshot publication is asynchronous even after a writer job completes, so the first run after a fresh key or fingerprint can remain cold; later content-validated exact-marker restores are the rollout proof. Required CI jobs and pull requests get disposable clones, so dependency changes do not create new disks, competing snapshots, or a cache lock that can cancel builds.
 - Node shard and build-artifact jobs also restore Node's portable on-disk compile cache through immutable Actions caches. Independent `test` and `build` namespaces prevent their writers from replacing each other's archives: the scheduled test warmer owns the protected test seed, while `build-artifacts` may publish at most one protected build archive per UTC day from trusted `main` pushes. PR and ordinary test jobs only read protected snapshots, so feature-branch bytecode never enters the shared seed and PR traffic creates no cache archives. This reuses V8 bytecode for Node-loaded orchestration, build tooling, and external dependencies across different checkout paths, including when only part of the source graph changes. Vitest child processes disable an inherited compile cache because coverage can be enabled inside dynamic configs and V8 coverage can lose source-position precision when scripts are deserialized from bytecode.
 - The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs.
 - Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mjs`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
-- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline.
+- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Both paths then run the two built TUI PTY artifact canaries alone; the dedicated Node shard owns the full serial suite.
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs and
 12 for the smaller fast/check lanes; Windows and Android stay at two because
@@ -871,6 +871,7 @@ The scheduled live/E2E workflow runs the full release-path Docker suite daily an
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic parity is nested under the broad QA and release harnesses, not a standalone PR workflow. Use `Full Release Validation` with `rerun_group=qa-parity` when parity should ride with a broad validation run.
 
 - The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
+- Release Matrix catalog validation runs serially on a 16-vCPU Blacksmith runner with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
 
 Scheduled, manual, and release Matrix checks use the deterministic mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same deterministic model boundary. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
@@ -7894,7 +7895,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
-    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. When block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
+    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
     - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration as a status headline, with the compact tool rows underneath and no generated label.
     - Media, error, and explicit-reply finals cancel pending preview edits.
     - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` in every mode. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` appear without config; set either key to `false` to keep the status headline only.
@@ -20726,7 +20727,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For text-only replies: short previews get the final edit in place; long finals that split into multiple messages reuse the preview as the first chunk, then send only the remainder; progress-mode finals clear the status draft and use normal final delivery; if the final edit fails before completion is confirmed, OpenClaw falls back to normal final delivery and cleans up the stale preview. For complex replies (media payloads), OpenClaw always falls back to normal final delivery and cleans up the preview.
 
-    Preview streaming and block streaming are mutually exclusive — when block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
+    Preview streaming and block streaming are mutually exclusive. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
 
     Reasoning: `/reasoning stream` streams reasoning into the live preview while generating, then deletes the reasoning preview after final delivery (use `/reasoning on` to keep it visible). The final answer is sent without reasoning text.
 
@@ -21049,7 +21050,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `own` means user reactions to bot-sent messages only (best-effort via a sent-message cache). Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
 
-    Telegram does not provide thread IDs in reaction updates: non-forum groups route to the group chat session; forum groups route to the general-topic session (`:topic:1`), not the exact originating topic.
+    Telegram does not provide thread IDs in reaction updates. Non-forum groups route to the group chat session. Forum groups recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so the reaction routes to that topic's session, including its topic agent and conversation bindings. When the reacted-to message is no longer cached the topic is unknown, so OpenClaw skips the reaction notification and logs a warning instead of attributing it to General (`:topic:1`).
 
     `allowed_updates` for polling/webhook include `message_reaction` automatically.
 
@@ -25216,14 +25217,28 @@ title: "Audit records"
 
 # `openclaw audit`
 
-Query the Gateway's metadata-only audit ledger for agent runs, tool actions, and
-opt-in message lifecycle records.
+Query the Gateway's metadata-only activity ledger, discover executions that
+share a run correlation, or inspect immutable identity context for one exact
+agent execution.
 
-The ledger is on by default for run and tool events. Set
-[`logging.audit.enabled: false`](/gateway/configuration-reference#audit) and
-restart the Gateway to stop all new event records. Message records are
-separately disabled by default; set `logging.audit.messages` to `direct` or
-`all` and restart the Gateway to record them. Existing records stay queryable until they expire (30 days).
+Run and tool activity records are on by default. Execution identity is
+separately off by default on fresh installs and upgrades. Enable it explicitly:
+
+```bash
+openclaw config set logging.audit.executionIdentity true
+openclaw gateway restart
+```
+
+Identity collection requires `logging.audit.enabled` to remain enabled.
+Message records are also separately disabled by default; set
+`logging.audit.messages` to `direct` or `all` and restart the Gateway to
+record them. Existing records stay queryable until they expire (30 days).
+
+Direct local commands use the same bounded writer lifecycle as the Gateway.
+`openclaw agent exec` deletes its temporary state directory by default, so its
+audit evidence is intentionally discarded with the rest of that isolated run.
+Use `agent exec --state-dir <dir>` when the run state must remain available,
+and inspect it through a Gateway using that same state directory.
 
 The ledger is separate from conversation transcripts: it records identity,
 ordering, provenance, action, status, and normalized outcome codes, but never
@@ -25237,6 +25252,10 @@ openclaw audit
 openclaw audit --agent main --status failed
 openclaw audit --session "agent:main:main" --after 2026-07-01T00:00:00Z
 openclaw audit --run 8c69f72e-8b11-4c54-98d5-1a3dd67450c3
+openclaw audit --run 8c69f72e-8b11-4c54-98d5-1a3dd67450c3 --explain
+openclaw audit --execution 5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf --explain
+openclaw audit --execution 5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf --explain --json
+openclaw audit --run 8c69f72e-8b11-4c54-98d5-1a3dd67450c3 --explain --json
 openclaw audit --kind tool_action --limit 50 --json
 openclaw audit --kind message --direction outbound --channel telegram --json
 ```
@@ -25245,7 +25264,8 @@ openclaw audit --kind message --direction outbound --channel telegram --json
 
 - `--agent <id>`: exact agent id
 - `--session <key>`: exact session key
-- `--run <id>`: exact run id
+- `--run <id>`: exact run id; filters activity unless `--explain` is also set
+- `--execution <id>`: exact execution id; requires `--explain`
 - `--kind <kind>`: `agent_run`, `tool_action`, or `message`
 - `--status <status>`: `started`, `succeeded`, `failed`, `cancelled`,
   `timed_out`, `blocked`, or `unknown`
@@ -25253,8 +25273,14 @@ openclaw audit --kind message --direction outbound --channel telegram --json
 - `--channel <channel>`: exact message channel
 - `--after <timestamp>` / `--before <timestamp>`: inclusive ISO timestamp or
   Unix milliseconds
-- `--limit <count>`: page size from 1 to 500; default `100`
-- `--cursor <sequence>`: continue a previous newest-first query
+- `--limit <count>`: activity page size from 1 to 500 (default `100`), decision
+  page size from 1 to 100, or ambiguous execution-candidate page size from 1
+  to 50 with `--explain` (default `50`)
+- `--cursor <sequence>`: continue an activity, decision, or ambiguous
+  execution-candidate page
+- `--explain`: inspect immutable execution identity and run-admission reasoning;
+  requires exactly one of `--run` or `--execution` and accepts only `--limit`,
+  `--cursor`, and `--json`
 - `--json`: print the bounded page as JSON
 
 The CLI queries the versioned activity RPC so one command shows the complete
@@ -25269,6 +25295,74 @@ and raw message identity fields are absent. Agent, session, and run ids, timing,
 channels, outcomes, and stable HMAC references can correlate activity. Protect
 them with the same access controls and retention practices as other operator
 records.
+
+The Gateway intentionally exposes retained execution-identity diagnostics to
+every client with `operator.read` in its operator domain. That scope is a
+trusted read-only boundary, not hostile multi-tenant isolation. Use separate
+Gateway trust domains when operators must not share audit identity data.
+
+## Discover and explain executions
+
+Every admitted outer turn receives an opaque `executionId`. `contextId`
+identifies its immutable evidence record; the existing `runId` stays a
+possibly shared session, routing, or recovery correlation. Use `--run <id>
+--explain` to discover retained executions rather than query the best-effort
+activity list. One match resolves directly. Multiple matches return
+`ambiguous`, list at most 50 candidates, and tell you to select one explicitly:
+
+```bash
+openclaw audit --execution <execution-id> --explain
+```
+
+OpenClaw never silently selects the first or latest execution. The exact text
+view renders these sections:
+
+1. **Identity**: trust domain, invoker, ingress, agent principal, agent
+   definition, runtime instance, represented subject, and sponsor.
+2. **Authority**: applicable grants and assurance evidence.
+3. **Lineage**: parent context or an explicit absent, unknown, or unsupported
+   state.
+4. **Decisions**: the bounded run-admission receipt page.
+5. **Missing evidence** and **Next steps**.
+
+Every field includes `present`, `absent`, `unknown`, or `unsupported`; the CLI
+does not infer a user from a session key, device id, display name, or shared
+credential. A direct local run currently shows authoritative `local-cli`
+ingress, an absent invoker, and
+`unattributed` coverage. Its admission receipt says `not-applicable` because no
+identity-aware policy or grant evaluation was proven.
+
+JSON output is the Gateway result without lossy reformatting. An exact result contains one
+bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
+missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run
+result instead contains at most 50 execution candidates and an optional
+`nextExecutionCursor`. Sensitive domain,
+runtime, invoker, assurance, ingress-source, and grant references are
+installation-local HMAC projections. Configured agent ids and exact run ids
+remain visible, as do context and execution ids, so redirected output is still
+private operator data.
+
+An older Gateway produces an explicit `unsupported` result with
+`gateway_upgrade_required` and an upgrade-and-rerun next step. The CLI never
+reconstructs identity from legacy audit rows. A current Gateway distinguishes
+an unknown run, an unavailable pre-feature, disabled, or failed context write,
+an expired context, and a corrupt context without claiming that missing
+best-effort activity proves no execution. A newly admitted run can also be
+temporarily unavailable while its bounded identity envelope waits in the audit
+writer queue; retry inspection after the run or normal process shutdown.
+Admission never waits for writer readiness, schema or HMAC-key initialization,
+SQLite, or persistence.
+
+Once a context is older than 30 days, the CLI returns no fields or admission
+decisions from it. While bounded cleanup is pending, the result is `unsupported`
+with an expiry-and-rerun next step. After cleanup it can become `unknown` if no
+separately retained activity remains; this absence does not prove that the run
+did not occur. Startup and hourly maintenance prune at most 1,024 identity
+contexts per tick and continue when collection is disabled. Queue saturation,
+worker/storage failure, cleanup failure, or abrupt process termination can lose
+best-effort evidence but never block or abort the agent run. Normal Gateway and
+direct-local CLI shutdown flushes accepted work when its writer lifecycle
+permits.
 
 ## Recorded events
 
@@ -25330,6 +25424,24 @@ openclaw gateway call audit.activity.list --params '{"channel":"telegram","limit
 
 The result is `{ "events": AuditActivityEventV1[], "nextCursor"?: string }`.
 Results are newest first and limited to 500 records per request.
+
+`audit.run.inspect` also requires `operator.read`:
+
+```bash
+openclaw gateway call audit.run.inspect \
+  --params '{"runId":"8c69f72e-8b11-4c54-98d5-1a3dd67450c3","decisionLimit":50}'
+
+openclaw gateway call audit.run.inspect \
+  --params '{"executionId":"5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf","decisionLimit":50}'
+```
+
+Its result is `{ "schemaVersion": 1, "run": ..., "identity": ..., "decisions":
+..., "coverage": ..., "nextDecisionCursor"?: ..., "nextExecutionCursor"?: ... }`.
+The closed request accepts exactly one of `executionId` or `runId`.
+`decisionLimit` is 1–100 and `decisionCursor` is optional. Run discovery also
+accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
+with multiple retained executions returns the typed `ambiguous` identity state
+and no identity context or decisions until the caller selects an execution id.
 
 The shipped `audit.list` RPC remains unchanged for older run/tool clients. When
 `audit.activity.list` is unavailable on an older Gateway, the CLI retries
@@ -26627,6 +26739,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
+openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
@@ -26822,7 +26935,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-path <path>` (required)
     - `--provider-mode <singleValue|json>`
     - `--provider-max-bytes <bytes>`
-    - `--provider-allow-insecure-path`
 
   </Accordion>
   <Accordion title="Exec provider (--provider-source exec)">
@@ -26834,8 +26946,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-env <KEY=VALUE>` (repeatable)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
-    - `--provider-allow-insecure-path`
-    - `--provider-allow-symlink-command`
 
   </Accordion>
 </AccordionGroup>
@@ -36509,7 +36619,7 @@ Notes:
 
 ### Exec provider safety
 
-Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, paired with `trustedDirs` (for example `["/opt/homebrew"]`). On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed; for trusted paths only, set `allowInsecurePath: true` on that provider to bypass the path security check.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 
@@ -52049,12 +52159,18 @@ replies**, not final replies or tool summaries.
   once, possibly multiple chunks if very long).
 - **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
 
-Block streaming is **off unless** `*.streaming.block.enabled` is explicitly
-set to `true` (exception: QQ Bot has no `streaming.block` keys and streams
-block replies unless `channels.qqbot.streaming.mode` is `"off"`). Channels can
-stream a live preview (`channels.<channel>.streaming.mode`) without block
-replies. The `blockStreaming*` defaults live under `agents.defaults`, not the
-config root.
+Block streaming follows `agents.defaults.blockStreamingDefault` unless a
+channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no
+`streaming.block` keys and streams block replies unless
+`channels.qqbot.streaming.mode` is `"off"`. Channels can stream a live preview
+(`channels.<channel>.streaming.mode`) without block replies. The
+`blockStreaming*` defaults live under `agents.defaults`, not the config root.
+
+For Discord and Telegram, an explicitly configured non-`off` preview mode
+takes precedence over inherited `agents.defaults.blockStreamingDefault: "on"`.
+Set that channel's `streaming.block.enabled: true` when block replies should
+override its preview. If the preview is unavailable for a turn, inherited block
+delivery still applies.
 
 ## Preview streaming modes
 
@@ -53871,6 +53987,110 @@ normalized outcome codes. It never stores prompts, message bodies, tool
 arguments, tool results, attachments, filenames, URLs, command output, or raw
 error text.
 
+The Gateway also keeps an adjacent execution identity context for newly
+admitted agent runs. This context is authoritative for the identity facts it
+contains; it does not make the activity ledger lossless and does not turn audit
+records into authorization evidence.
+
+## Run identity inspection
+
+Execution identity recording is off by default, including on fresh installs
+and upgrades. Enable it explicitly, then restart the Gateway:
+
+```bash
+openclaw config set logging.audit.executionIdentity true
+openclaw gateway restart
+```
+
+Collection requires both `logging.audit.enabled` and
+`logging.audit.executionIdentity` to be true. Setting either to `false`
+stops new contexts after restart; no environment-variable alias or silent
+migration enables the feature. Retained contexts remain inspectable until
+their 30-day expiry.
+
+After session work admission succeeds, OpenClaw validates and freezes
+one bounded identity envelope, immediately offers it to the existing audit
+writer queue, and continues the run without waiting for writer readiness,
+SQLite, or persistence. The worker initializes schema and HMAC-key state,
+pseudonymizes raw references, constructs the immutable context, validates its
+canonical bytes, and persists it. An accepted envelope can therefore be
+temporarily unavailable to inspection while queued work finishes.
+
+Persistence remains best-effort. Queue saturation, worker or storage failure,
+and process crashes can lose evidence; they log only a bounded operational
+warning and never abort the run. Normal Gateway and direct-local CLI shutdown
+flushes accepted work when the writer lifecycle permits, but abrupt termination
+can still lose queued evidence.
+
+When identity collection is enabled, restart recovery stores only the safe
+execution/context/run ids and timestamp with its existing private recovery
+owner. A later ambiguous retry references that token instead of rebuilding
+identity from the new process. When collection or the audit ledger is disabled,
+recovery creates, stores, and propagates no new identity token. If the original
+queued context was lost, exact inspection stays explicitly unavailable; the
+retry never manufactures replacement evidence. Raw identity references are not
+stored in the recovery token.
+
+Each admitted outer turn receives a new opaque `executionId`; `contextId`
+identifies its immutable evidence record, while the existing `runId` remains a
+possibly shared routing, session, or recovery correlation. Query one exact
+execution with `audit.run.inspect` or
+[`openclaw audit --execution <id> --explain`](/cli/audit). Use `--run <id>
+--explain` to discover executions for a run correlation. One retained match
+resolves directly. Multiple matches return `ambiguous` with at most 50
+candidate execution ids and require exact selection; OpenClaw never chooses the
+first or latest execution silently. The result explicitly states the evidence
+state for these fields:
+
+- trust domain, invoker, and ingress;
+- agent principal, agent definition, and runtime instance;
+- represented subject and sponsor;
+- applicable grants and assurance evidence;
+- parent or child lineage when available.
+
+The foundation records direct local CLI ingress and Gateway boot-system ingress
+at their authoritative producers. Generic public ingress remains explicitly
+unknown when its boundary cannot prove a more specific source; OpenClaw never
+infers ingress or invoker identity from a session key. A direct local execution
+is `unattributed`: the Gateway cell, local CLI ingress, configured agent, and
+runtime binding are present, but no durable invoker principal is supplied at
+this boundary. A run becomes
+`attribution-only` only when an authoritative ingress supplies an invoker fact.
+Neither state means that identity affected an allow or deny decision.
+
+Each present context currently projects one run-admission receipt. Its outcome
+is `not-applicable`, its policy and grant references are empty, and its reason
+states that no identity-aware policy or grant evaluation was proven. This is
+an explanation of admission evidence, not an enforcement claim.
+
+Run inspection returns successful typed diagnostics instead of inventing
+facts:
+
+- `unknown`: the selected run or execution is not known, or expected context is
+  corrupt or unreadable;
+- `unsupported`: best-effort activity shows the run, but no context is
+  available, as with a pre-feature, disabled, or failed context write. A
+  context just beyond retention also uses this state while its bounded cleanup
+  is pending, with an explicit expiry remediation;
+- `ambiguous`: a `runId` has multiple retained executions; select a candidate
+  `executionId` before inspecting identity or decisions;
+- `unattributed`: the supported run has no usable invoker principal;
+- `attribution-only`: invoker attribution exists but was not evaluated for
+  authorization.
+
+The method requires `operator.read`. Requests are closed and select exactly one
+`executionId` or `runId`. Decision pages contain at most 100 receipts;
+ambiguous run-discovery pages contain at most 50 candidate executions. Both use
+bounded cursors.
+
+Every client with `operator.read` in the same Gateway operator domain may
+receive this retained identity category. This is intentional: the scope already
+covers logs and session reads, collection is explicit opt-in, retained
+references are bounded and pseudonymized, and optional display labels are
+secret-redacted. `operator.read` is not a hostile multi-tenant isolation
+boundary; use separate Gateway trust domains when operators must not share this
+diagnostic data.
+
 ## Record families
 
 Run and tool events are recorded whenever auditing is enabled (the default).
@@ -53940,6 +54160,17 @@ Run and tool records retain `sessionKey` and `sessionId` for correlation;
 canonical session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
+Execution identity contexts use the same installation-local key owner with a
+separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, and grant
+references exist only in a deeply frozen, in-process worker message capped at
+16 KiB and 16 entries in each grant/assurance array. The worker replaces them with keyed
+pseudonyms before persistence; they are never stored, exported, inspected, or
+logged. Configured agent ids plus context, execution, and run ids remain
+operator-visible.
+Contexts never contain prompt or message text, command bodies, arguments,
+paths, credentials, environment values, or arbitrary plugin payloads. Each
+encoded context is also capped at 16 KiB.
+
 Audit exports remain sensitive operational metadata even without content:
 timing, channels, outcomes, and stable pseudonyms can correlate activity.
 Protect exports with the same access controls and retention practices as other
@@ -53951,8 +54182,8 @@ The ledger is best-effort and deliberately bounded. Treat it as evidence of
 what was recorded, not as proof of what happened:
 
 - **Absence of a row proves nothing.** Pre-admission inbound drops, sends from
-  CLI processes without a running Gateway recorder, and plugin-local or
-  direct-send paths that bypass shared durable delivery leave no record.
+  plugin-local or direct-send paths that bypass shared durable delivery, a
+  dropped admission envelope, and crash-lost queued work can leave no record.
 - Writes go through a bounded background worker; worker failure or queue
   saturation drops records and logs one operational warning.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
@@ -53974,6 +54205,31 @@ Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing
 rows and their ledger sequences are preserved.
 
+Execution identity contexts also live in the shared state database. Canonical
+rows are keyed by unique execution and context ids; `runId` is a non-unique,
+indexed correlation. Their
+additive table is created lazily on first use without a schema-version bump.
+Fresh and upgraded installations do not populate identity contexts until an
+operator enables collection.
+First-use schema creation, HMAC-key access, canonical context construction, and
+all SQLite work happen in the audit worker, never in agent admission.
+Contexts are retained for 30 days and capped at 100,000 rows. Exact-execution
+inspection and run discovery never return a context, candidate, or admission
+decision after that context is older than 30 days, even if physical cleanup
+has not run. Expired
+rows are pruned during Gateway startup, hourly audit maintenance, and later
+context writes, with at most 1,024 identity-context rows removed per write or
+maintenance tick. Maintenance continues when collection is disabled. An older
+build ignores this table.
+
+Immediately after expiry, inspection can report the run as `unsupported` while
+the expired row still proves only that its identity context became unavailable;
+no expired fields or decisions are returned. After bounded cleanup, the same
+lookup can become `unknown` if no separately retained best-effort activity
+remains. That transition does not prove the run did not occur. These limits
+make the inspector an operational diagnostic surface, not a compliance
+archive.
+
 ## Querying
 
 - CLI: [`openclaw audit`](/cli/audit) with filters for agent, session, run,
@@ -53982,6 +54238,10 @@ rows and their ledger sequences are preserved.
   versioned V1 activity event union; the shipped `audit.list` RPC is unchanged
   for older run/tool clients. See
   [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
+- Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
+  `executionId` for exact inspection or one `runId` for bounded discovery. It
+  returns the immutable V1 context and admission receipt for an exact match, or
+  a typed ambiguous candidate page when a run has multiple executions.
 
 ## Related
 
@@ -60640,10 +60900,10 @@ Validation:
 Notes:
 
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
-- File and exec provider paths fail closed when Windows ACL verification is unavailable. Set `allowInsecurePath: true` only for trusted paths that cannot be verified.
+- File and exec provider paths fail closed when Windows ACL verification is unavailable. Use paths whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
-- By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
-- If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
+- Symlink command paths are rejected. Configure the resolved absolute binary path instead.
+- If `trustedDirs` is configured, the command path must be inside an approved directory.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 - Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
@@ -60686,6 +60946,7 @@ Notes:
   logging: {
     audit: {
       enabled: true,
+      executionIdentity: false,
       messages: "off", // off | direct | all
     },
   },
@@ -60710,6 +60971,11 @@ and coverage limits.
   the incident. Setting `false` stops new event inserts after the Gateway restarts;
   existing records stay readable until they expire. Turning it back on resumes
   recording from that point — the gap is not backfilled.
+- `executionIdentity`: retain bounded attribution context for exact execution
+  inspection (default: `false`). This privacy-sensitive metadata is disabled
+  on fresh installs and upgrades. Collection requires `enabled: true`; use
+  `openclaw config set logging.audit.executionIdentity true`, then restart the
+  Gateway. There is no environment-variable alias.
 - `messages`: message metadata scope (default: `"off"`). `"direct"` records
   known direct conversations only. `"all"` also records group, channel, and
   unknown conversation kinds. Both modes remain content-free and replace raw
@@ -60721,9 +60987,9 @@ A root-level `audit` block is retired; the canonical path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
-The running Gateway captures `logging.audit.enabled` and
-`logging.audit.messages` at startup;
-restart it after changing either setting. Message coverage currently includes
+The running Gateway captures `logging.audit.enabled`,
+`logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
+restart it after changing any of these settings. Message coverage currently includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
@@ -66783,7 +67049,7 @@ require the `node` role.
 
 | Scope                   | Meaning                                                                                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating calls.                                                                          |
+| `operator.read`         | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
 | `operator.write`        | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
 | `operator.admin`        | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
 | `operator.pairing`      | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
@@ -66829,6 +67095,13 @@ Session mutation RPCs are authorized by their negotiated operator scopes,
 independent of the connecting client's `client.id` or `client.mode`. Client
 identity can still affect connection and device-auth policy, but it neither
 grants nor removes session mutation authority.
+
+`audit.run.inspect` intentionally uses `operator.read`. Every client with that
+scope in a Gateway operator domain may receive the retained execution-identity
+context, including bounded pseudonymized references and secret-redacted display
+labels. `operator.read` is not a per-user or hostile multi-tenant privacy
+boundary. Operators who must keep this data separate need separate Gateway
+trust domains.
 
 ## Device pairing approvals
 
@@ -68138,7 +68411,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
-    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
+    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
@@ -68376,6 +68649,16 @@ recording is separately controlled by `logging.audit.messages` and defaults to
 `"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
+
+`audit.run.inspect` also requires `operator.read`. Its closed request selects
+exactly one `executionId` for exact inspection or one `runId` for bounded
+execution discovery. One run match resolves directly; multiple matches return
+an explicit `ambiguous` result with at most 50 candidates and require exact
+execution selection. Decision pages contain at most 100 receipts. Execution
+identity collection is separately off by default and requires
+`logging.audit.executionIdentity: true` plus an enabled audit ledger after
+Gateway restart. Missing best-effort evidence never proves that a run did not
+occur.
 
 The shipped `audit.list` request, result, and `AuditEvent` schemas remain
 unchanged and return only agent-run and tool-action records. New operator
@@ -70435,16 +70718,16 @@ Define providers under `secrets.providers`:
 - `mode: "json"` (default) expects a JSON object payload and resolves `id` as a JSON pointer.
 - `mode: "singleValue"` expects ref id `"value"` and returns the raw file contents (trailing newline stripped).
 - Path must pass ownership/permission checks; `timeoutMs` (default 5000) and `maxBytes` (default 1 MiB) bound the read.
-- Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass the check.
+- Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. Move the secret to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.
 
 </Accordion>
 
 <Accordion title="Exec provider">
 - Runs the configured absolute binary path directly, no shell.
-- By default `command` must be a regular file, not a symlink. Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims), and pair it with `trustedDirs` (for example `["/opt/homebrew"]`) so only package-manager paths qualify.
+- `command` must be a regular file, not a symlink. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
 - Supports `timeoutMs` (default 5000), `noOutputTimeoutMs` (default equals `timeoutMs`), `maxOutputBytes` (default 1 MiB), `env`/`passEnv` allowlist, and `trustedDirs`.
 - `jsonOnly` defaults to `true`. With `jsonOnly: false` and a single requested id, plain non-JSON stdout is accepted as that id's value.
-- Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass the check.
+- Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. Use a command path whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - Plugin-managed exec providers can use `pluginIntegration` instead of a copied `command`/`args`. OpenClaw resolves the current command details from the installed plugin manifest during startup/reload; if the plugin is disabled, removed, untrusted, or no longer declares the integration, active SecretRefs on that provider fail closed.
 
 Request payload (stdin):
@@ -70605,9 +70888,8 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
         providers: {
           vault_openai: {
             source: "exec",
-            command: "/opt/homebrew/bin/vault",
-            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-            trustedDirs: ["/opt/homebrew"],
+            command: "/absolute/non-symlink/path/to/vault",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
             args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
             passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
             jsonOnly: false,
@@ -70713,9 +70995,8 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
         providers: {
           sops_openai: {
             source: "exec",
-            command: "/opt/homebrew/bin/sops",
-            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-            trustedDirs: ["/opt/homebrew"],
+            command: "/absolute/non-symlink/path/to/sops",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
             args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
             passEnv: ["SOPS_AGE_KEY_FILE"],
             jsonOnly: false,
@@ -97682,8 +97963,9 @@ Playback conversion is lazy:
    unplayable-media fallback and keep the download action available.
 
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
-or video byte cap. Cached playback renditions are pruned by normal media-store
-maintenance.
+or video byte cap. Cached playback renditions use a fixed seven-day retention
+that Gateway maintenance enforces at startup and hourly, independently of
+`attachments.ttlHours`.
 
 ## Managed attachments and access
 
@@ -100113,6 +100395,129 @@ WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notificat
 
 
 
+# Section: platforms/chromeos.md
+
+---
+summary: "Run the OpenClaw Gateway on ChromeOS inside a Crostini Linux container"
+read_when:
+  - Installing OpenClaw on a Chromebook or ChromeOS device
+  - Debugging missing provider keys or a Gateway that is gone after a reboot
+title: "ChromeOS"
+---
+
+ChromeOS runs Linux software through **Crostini**, a managed Debian container
+that Google exposes as the "Linux development environment". The Gateway runs
+inside that container exactly like any other Linux install, so the [Linux
+guide](/platforms/linux) applies in full. This page covers the ChromeOS
+specific setup and the gotchas that differ from a plain Linux host.
+
+OpenClaw requires Node because its canonical state store uses `node:sqlite`.
+Bun can install dependencies or run package scripts, but it cannot run the
+OpenClaw CLI or Gateway.
+
+## Enable the Linux container
+
+Turn on Crostini before installing anything:
+
+1. Open ChromeOS **Settings**.
+2. Go to **About ChromeOS** then **Developers**.
+3. Next to **Linux development environment**, select **Set up** and follow the
+   prompts. ChromeOS downloads the Debian container and opens a **Terminal**.
+
+Run every command below inside that Terminal.
+
+## Quick path
+
+1. Install via the installer script (it installs a supported Node for you):
+
+   ```bash
+   curl -fsSL https://openclaw.ai/install.sh | bash
+   ```
+
+2. Onboard and install the service:
+
+   ```bash
+   openclaw onboard --install-daemon
+   ```
+
+3. Confirm the Gateway is running:
+
+   ```bash
+   openclaw gateway status
+   ```
+
+Full server guidance lives in the [Linux guide](/platforms/linux) and the
+[Gateway runbook](/gateway).
+
+## Prefer the native install over Docker
+
+On a single user Chromebook, use the native npm install (the installer script,
+or a global `npm i -g openclaw@latest`) rather than [Docker](/install/docker).
+
+Docker works inside Crostini, but Docker in Crostini adds friction: if you use
+the Claude Code CLI as your model runtime, it has to be installed and logged in
+**inside a persisted container home**, which is easy to lose on a container
+rebuild. The native install keeps the CLI and its login on the Crostini
+filesystem directly, so a Docker image rebuild cannot wipe it.
+
+## Node version
+
+The Node version available in a Crostini container may be below OpenClaw's
+minimum. OpenClaw requires Node 22.22.3+, Node 24.15+, or Node 25.9+; Node 26
+is the recommended default. The installer script detects a missing or
+unsupported Node version and provisions a supported release automatically.
+
+If you installed Node yourself before OpenClaw, upgrade it **before** installing
+OpenClaw:
+
+```bash
+node -v
+```
+
+See [Node install guidance](/install/node) for the supported versions.
+
+## Provider keys and environment variables
+
+The Gateway runs as a **systemd user service**, so an `export VAR=...` in an
+interactive Terminal is not inherited by the already-installed service.
+
+Put provider keys in `~/.openclaw/.env` instead, one per line:
+
+```bash
+DEEPSEEK_API_KEY=your-key-here
+```
+
+Then restart so the service picks them up:
+
+```bash
+openclaw gateway restart
+```
+
+See [Environment variables](/help/environment) for the full precedence and
+source rules.
+
+## Crostini is not always on
+
+Do not treat Crostini as an always-on host. After a ChromeOS reboot, open the
+**Terminal** once to start the Linux environment before relying on the Gateway.
+
+Then verify the service:
+
+```bash
+openclaw gateway status
+```
+
+## Related
+
+- [Linux guide](/platforms/linux)
+- [Install overview](/install)
+- [Node install guidance](/install/node)
+- [Gateway runbook](/gateway)
+- [Gateway configuration](/gateway/configuration)
+- [Google: Set up Linux on your Chromebook](https://support.google.com/chromebook/answer/9145439)
+
+
+
 # Section: platforms/digitalocean.md
 
 ---
@@ -100274,11 +100679,12 @@ Linux-compatible Gateway runtime.
 
 ## Choose your OS
 
-- macOS: [macOS](/platforms/macos)
-- iOS: [iOS](/platforms/ios)
 - Android: [Android](/platforms/android)
-- Windows: [Windows](/platforms/windows)
+- ChromeOS: [ChromeOS (Crostini)](/platforms/chromeos)
+- iOS: [iOS](/platforms/ios)
 - Linux: [Linux](/platforms/linux)
+- macOS: [macOS](/platforms/macos)
+- Windows: [Windows](/platforms/windows)
 
 ## VPS and hosting
 
@@ -101163,6 +101569,7 @@ resource controls (systemd `MemoryMax=`, container memory limits).
 
 - [Install overview](/install)
 - [Linux server](/vps)
+- [ChromeOS (Crostini)](/platforms/chromeos)
 - [Raspberry Pi](/platforms/raspberry-pi)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)
@@ -115495,7 +115902,7 @@ At startup/reload, OpenClaw resolves that provider by loading current plugin man
 
 Only `source: "exec"` presets are currently supported. `command` must be `${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script. OpenClaw materializes it at startup/reload to the current Node executable and the absolute in-plugin script path. Node options such as `--require`, `--import`, `--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest preset contract. Operators who need non-Node commands can configure standalone manual exec providers directly.
 
-OpenClaw derives `trustedDirs` for manifest presets from the plugin root and, for `${node}` presets, the current Node executable directory. Manifest-authored `trustedDirs` are ignored. Other exec provider options such as `timeoutMs`, `noOutputTimeoutMs`, `maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass through to the normal SecretRef exec provider config.
+OpenClaw derives `trustedDirs` for manifest presets from the plugin root and, for `${node}` presets, the current Node executable directory. Manifest-authored `trustedDirs` are ignored. Other exec provider options such as `timeoutMs`, `noOutputTimeoutMs`, `maxOutputBytes`, `jsonOnly`, `env`, and `passEnv` pass through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 
@@ -124488,6 +124895,7 @@ read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
+  - You are implementing model-picker persistence in a channel plugin
 ---
 
 Reference for the `api.runtime` object injected into every plugin during registration. Use these helpers instead of importing host internals directly.
@@ -124542,7 +124950,19 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
 seam, including its authoritative conflict check and post-commit effects. The
-lower-level session-entry model helpers are not a picker persistence API.
+lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
+persistence API.
+
+Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
+persistence fallback when a channel callback cannot enter the full live-session
+transaction and already owns an atomic canonical session-entry patch. Pass the
+active config, resolved agent directory, entry, effective provider before the
+change, and validated selection. The helper mutates that entry only: it keeps a
+pinned auth profile when its recorded credential provider or configured alias is
+compatible, clears an incompatible pin, and enforces the model-selection lock.
+The caller still owns model allowlist validation, atomic persistence,
+`markLiveSwitchPending`, and any post-commit effects. Prefer
+`applySessionModelSelection(...)` whenever the full transaction is available.
 
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
@@ -126477,6 +126897,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
+    | `plugin-sdk/realtime-voice-audio-queue` | Private-local JavaScript-only host runtime for bundled or separately published official plugins; narrow bounded audio queue seam for lazy realtime voice provider facades without importing the broader realtime voice runtime; not for third-party plugins |
     | `plugin-sdk/realtime-voice` | Private-local after July 2026; Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness and output activity tracking. For official runtime consumers, sender-auth contract revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged; ingress owns authentication, and consumers requiring the handoff must fail closed on other revisions. |
     | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter`, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
@@ -154907,6 +155328,32 @@ gh workflow run openclaw-npm-release.yml \
   -f full_release_validation_run_attempt=<full-validation-run-attempt> \
   -f plugin_npm_run_id=<plugin-npm-run-id>
 ```
+
+If the immutable candidate has already passed its saved preflight and Full
+Release Validation but core publication needs a workflow-only recovery, dispatch
+the trusted current-`main` workflow instead. Keep the same tag and evidence
+identities; do not move the tag or republish plugins:
+
+```bash
+gh workflow run openclaw-npm-release.yml \
+  --ref main \
+  -f tag=vYYYY.M.P \
+  -f preflight_only=false \
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch=extended-stable/YYYY.M.33 \
+  -f preflight_run_id=<npm-preflight-run-id> \
+  -f full_release_validation_run_id=<full-validation-run-id> \
+  -f full_release_validation_run_attempt=<full-validation-run-attempt> \
+  -f plugin_npm_run_id=<plugin-npm-run-id>
+```
+
+This recovery path checks out and publishes the immutable tag and requires the
+canonical branch implied by that tag. It accepts Full Release Validation
+evidence from the canonical candidate branch directly, from current `main`
+directly when its workflow SHA is reachable from current `main`, or from the
+trusted main-pinned harness. Every accepted form must attest the immutable
+tag's SHA. Use it only when the candidate source and recorded evidence are
+unchanged.
 
 For non-production rehearsal only, add
 `-f bypass_extended_stable_guard=true` to preflight and publish. It bypasses the
@@ -186031,6 +186478,40 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_describe`
 - `tool_call`
 
+`tool_search` accepts either the existing single-query shape or a batch of
+independent queries:
+
+```json
+{
+  "query": "today's calendar events",
+  "limit": 3
+}
+```
+
+```json
+{
+  "queries": [
+    { "query": "today's calendar events", "limit": 3 },
+    { "query": "Slack messages needing attention", "limit": 3 }
+  ]
+}
+```
+
+Single-query calls continue to return the compact candidate array directly.
+Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
+query uses the same effective catalog, ranking, filtering, and per-query limit
+as an ordinary search; a candidate may appear in more than one result group.
+Descriptions are compacted before output. If the complete batch would exceed
+the 4,000-character response budget, lower-ranked candidates are removed and
+the response includes `truncated: true`. A result group that lost candidates
+also includes `truncated: true`, so an empty truncated group cannot be mistaken
+for a query that had no matches.
+Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
+batch may request at most 50 candidates in total. A batch accepts at most 16
+queries, with at most 512 characters per query and 512 UTF-8 bytes across the
+serialized query list. Invalid batches fail as one request, while a valid query
+with no matches returns an empty `candidates` array.
+
 Directory mode exposes:
 
 - `tool_search`
@@ -186172,15 +186653,16 @@ answer:
 
 ## E2E validation
 
-The QA Lab gateway scenario proves both paths with the OpenClaw runtime:
+The QA Lab gateway scenario proves all three paths with the OpenClaw runtime:
 
 ```bash
 pnpm openclaw qa suite --provider-mode mock-openai --scenario tool-search-gateway-e2e
 ```
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock
-OpenAI provider, starts a Gateway once in direct mode and once with Tool Search
-enabled, then compares provider request payloads and session logs.
+OpenAI provider, then runs the Gateway in direct, code-mode Tool Search, and
+structured Tool Search modes. It compares provider request payloads for direct
+and code mode, then verifies session logs and tool flow across all three lanes.
 
 The regression proves:
 
@@ -186190,6 +186672,8 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
+7. Structured mode resolves two queries with one `tool_search` call before the
+   selected plugin tool runs through `tool_call`.
 
 ## Failure behavior
 
