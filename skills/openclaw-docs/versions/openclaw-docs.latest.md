@@ -6754,25 +6754,26 @@ no account selector, so multiple enabled discussion accounts are rejected
 rather than choosing one by configuration order.
 
 Opening a discussion creates a public ClickClack channel marked as externally
-managed. The plugin keeps the session label, category, and archive state in
-sync. Restoring a session restores its channel; clearing the session category
-moves the channel back to the configured default section. Deleting an
-OpenClaw session archives the ClickClack channel instead of deleting it, so its
-history remains available. The plugin reconciles bindings when discussion RPCs
-are used and approximately once per minute while any bindings exist.
+managed. The plugin keeps the session label and category in sync, but channel
+lifecycle remains independent. Clearing the session category
+moves the channel back to the configured default section. Archiving, resetting,
+or deleting an OpenClaw session never archives or replaces the ClickClack
+channel. ClickClack owns channel archive and restore independently. The plugin
+reconciles bindings when discussion RPCs are used and approximately once per
+minute while any bindings exist.
 
 Inbound messages in a managed channel use a deterministic side session under
 the same agent id as the attached main session. The side agent is told which
 main session to observe and can use `sessions_history` and `session_status`
 (`changesSince` is useful for incremental checks). It uses `sessions_send` only
 when people in the discussion ask it to relay or steer the main session.
-The binding, managed ownership reference, and side-session peer identity include
-the concrete OpenClaw session id along with the pinned ClickClack server and
-channel. Resetting a reusable session key or retargeting an account revokes the
-old channel locally, archives it when the old credential remains usable, and
-cannot reuse its side transcript. Messages arriving through an
-archived, reset, disabled, or retargeted binding are dropped instead of falling
-back to the account's normal channel routing. Released bindings leave a durable
+The binding separates durable room identity from its replaceable session
+attachment. The side-session peer identity and scoped grant include the exact
+concrete OpenClaw session id, so resetting a reusable session key rotates the
+attachment and cannot reuse the old side transcript. The ClickClack channel id,
+URL, history, and ownership reference remain unchanged. Messages arriving
+through an inactive, disabled, or retargeted attachment are dropped instead of
+falling back to the account's normal channel routing. Released bindings leave a durable
 revoked-channel marker so delayed realtime events remain fail-closed. Remote
 ownership is keyed by ClickClack server and channel id, so renaming the local
 account cannot turn a managed channel into an ordinary one.
@@ -6793,22 +6794,22 @@ before persisting a binding. If a create response is lost, the next open adopts
 the channel by its server-enforced `external_ref` instead of creating another.
 Until that outcome is reconciled, the pending reservation quarantines
 otherwise-unbound events in the destination workspace. The coarse reconciler
-adopts the channel when the same session is still live or archives it after a
-reset; it clears the reservation when no remote channel was created.
+adopts the channel when the logical session is active, including after its
+concrete session id changes; it clears the reservation when no remote channel
+was created.
 That reference contains a durable per-OpenClaw-installation namespace plus a
-hash of the session key, concrete session id, ClickClack destination, and durable
+hash of the session key, ClickClack destination, and durable
 binding generation. Separate gateways cannot adopt each other's channels,
-reset sessions cannot inherit old channel history, and an account or workspace
+while concrete session resets keep the same channel. An account or workspace
 round trip cannot re-adopt a previous channel. Bindings are also pinned to the
 configured ClickClack server URL and are invalidated if the account is
 retargeted. Changing or removing `controlUrlBase` updates or clears the managed
 channel link on the next reconciliation pass. Changing
-`discussions.workspace` archives and releases the old binding before a channel
-can be opened in the new workspace when the old workspace credential remains
-configured. If the token was replaced with a workspace-scoped credential that
-cannot access the old workspace, OpenClaw records the old channel as revoked and
-releases the binding without trying the replacement token; archive that leftover
-channel from ClickClack.
+`discussions.workspace` releases the old attachment before a channel can be
+opened in the new workspace. It never archives the old room. If the token was
+replaced with a workspace-scoped credential that cannot access the old
+workspace, OpenClaw records the old channel as revoked and releases the binding
+without trying the replacement token.
 
 The attached main session also receives a pull-only `discussion` tool. It reads
 the latest messages and recent thread replies as one escaped, attributed record
@@ -14589,6 +14590,9 @@ Example:
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
 - Use stable Teams conversation IDs from Teams links as keys, not mutable display names (see [Team and Channel IDs](#team-and-channel-ids-common-gotcha)).
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
+- `groupAllowFrom` authorizes group senders, not delegated Graph reads of other channels. If an existing configuration only sets `groupAllowFrom`, keep the default `groupPolicy: "allowlist"` and configure the target under `channels.msteams.teams.<team>.channels`.
+- Alternatively, deliberately set `groupPolicy: "open"` for broader delegated reads. This also admits **any group sender** (still mention-gated by default), so it is less restrictive than a scoped team/channel route.
+- Direct-operator reads and reads in the current conversation do not require an additional team/channel route.
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
 
@@ -14599,10 +14603,11 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000"],
       teams: {
-        "My Team": {
+        "19:team-id@thread.tacv2": {
           channels: {
-            General: { requireMention: true },
+            "19:channel-id@thread.tacv2": { requireMention: true },
           },
         },
       },
@@ -17603,17 +17608,17 @@ Slack support covers DMs and channels via Slack app integrations. Default transp
 
 Socket Mode and HTTP Request URLs reach feature parity for messaging, slash commands, App Home, and interactivity. Pick by deployment shape, not features.
 
-| Concern                      | Socket Mode (default)                                                                                                                                | HTTP Request URLs                                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Public Gateway URL           | Not required                                                                                                                                         | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
-| Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                            | No outbound WS; inbound HTTPS only                                                                             |
-| Tokens needed                | Bot identity: bot token + App-Level Token with `connections:write`; user identity: user token + App-Level Token                                      | Bot identity: bot token + Signing Secret; user identity: user token + Signing Secret                           |
-| Dev laptop / behind firewall | Works as-is                                                                                                                                          | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
-| Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                 | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
-| Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                             | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
-| Slash command transport      | Delivered over the WS connection; `slash_commands[].url` is ignored                                                                                  | Slack POSTs to `slash_commands[].url`; field is required for the command to dispatch                           |
-| Request signing              | Not used (auth is the App-Level Token)                                                                                                               | Slack signs every request; OpenClaw verifies with `signingSecret`                                              |
-| Recovery on connection drop  | Slack SDK auto-reconnect is enabled; OpenClaw also restarts failed Socket Mode sessions with bounded backoff. Pong-timeout transport tuning applies. | No persistent connection to drop; retries are per-request from Slack                                           |
+| Concern                      | Socket Mode (default)                                                                                                                                  | HTTP Request URLs                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Public Gateway URL           | Not required                                                                                                                                           | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
+| Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                              | No outbound WS; inbound HTTPS only                                                                             |
+| Tokens needed                | Bot identity: bot token + App-Level Token with `connections:write`; user identity: user token + App-Level Token                                        | Bot identity: bot token + Signing Secret; user identity: user token + Signing Secret                           |
+| Dev laptop / behind firewall | Works as-is                                                                                                                                            | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
+| Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                   | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
+| Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                               | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
+| Slash command transport      | Delivered over the WS connection; `slash_commands[].url` is ignored                                                                                    | Slack POSTs to `slash_commands[].url`; field is required for the command to dispatch                           |
+| Request signing              | Not used (auth is the App-Level Token)                                                                                                                 | Slack signs every request; OpenClaw verifies with `signingSecret`                                              |
+| Recovery on connection drop  | Slack SDK auto-reconnect is enabled; OpenClaw also restarts failed Socket Mode sessions with bounded backoff. A fixed 15s client pong timeout applies. | No persistent connection to drop; retries are per-request from Slack                                           |
 
 <Note>
   **Pick Socket Mode** for single-Gateway hosts, dev laptops, and on-prem networks that can reach `*.slack.com` outbound but cannot accept inbound HTTPS.
@@ -18386,30 +18391,12 @@ OpenClaw automatically drops user-scope message events authored by the resolved 
 
 ## Socket Mode transport tuning
 
-OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
-
-```json5
-{
-  channels: {
-    slack: {
-      mode: "socket",
-      socketMode: {
-        clientPingTimeout: 20000,
-        serverPingTimeout: 30000,
-        pingPongLoggingEnabled: false,
-      },
-    },
-  },
-}
-```
-
-Use this only for Socket Mode workspaces that log Slack websocket pong/server-ping timeouts or run on hosts with known event-loop starvation. `clientPingTimeout` is the pong wait after the SDK sends a client ping; `serverPingTimeout` is the wait for Slack server pings. App messages and events remain application state, not transport liveness signals.
+OpenClaw sets the Slack SDK client pong timeout to 15 seconds for Socket Mode. This is a fixed internal default and is not operator-configurable.
 
 Notes:
 
-- `socketMode` is ignored in HTTP Request URL mode.
-- Base `channels.slack.socketMode` settings apply to all Slack accounts unless overridden. Per-account overrides use `channels.slack.accounts.<accountId>.socketMode`; because this is an object override, include every socket tuning field you want for that account.
-- Only `clientPingTimeout` has an OpenClaw default (`15000`). `serverPingTimeout` and `pingPongLoggingEnabled` are passed to the Slack SDK only when configured.
+- The `channels.slack.socketMode` object, including `clientPingTimeout`, `serverPingTimeout`, and `pingPongLoggingEnabled`, is retired and is no longer read at runtime. `openclaw doctor` flags retired layout tuning knobs with a general notice rather than a per-key path. `openclaw doctor --fix` removes those three fields wherever they appear, at the channel root and under `accounts.<accountId>`, and drops the `socketMode` object once it is empty. Any other key you added inside it is left alone, so delete it by hand.
+- App messages and events remain application state, not transport liveness signals.
 - Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Recoverable start, start-wait, and disconnect failures retry until the channel stops. Permanent account and credential errors such as invalid auth, revoked tokens, or missing scopes fail fast instead of retrying forever.
 
 ## Manifest and scope checklist
@@ -20845,13 +20832,18 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   channel: "telegram",
   to: "123456789",
   message: "Choose an option:",
-  buttons: [
-    [
-      { text: "Yes", callback_data: "yes" },
-      { text: "No", callback_data: "no" },
+  presentation: {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          { label: "Yes", action: { type: "callback", value: "yes" }, style: "success" },
+          { label: "No", action: { type: "callback", value: "no" }, style: "danger" },
+          { label: "Cancel", action: { type: "callback", value: "cancel" } },
+        ],
+      },
     ],
-    [{ text: "Cancel", callback_data: "cancel" }],
-  ],
+  },
 }
 ```
 
@@ -20867,16 +20859,21 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     blocks: [
       {
         type: "buttons",
-        buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+        buttons: [
+          {
+            label: "Launch",
+            action: { type: "web-app", url: "https://example.com/app" },
+          },
+        ],
       },
     ],
   },
 }
 ```
 
-    `web_app` buttons only work in private chats between a user and the bot.
+    Mini App buttons only work in private chats between a user and the bot.
 
-    Callback clicks not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
+    Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
 
   </Accordion>
 
@@ -27735,9 +27732,10 @@ title: "Dashboard"
 
 # `openclaw dashboard`
 
-Open the Control UI with a short-lived, one-time browser pairing link. A successful handoff leaves
-that browser with its own durable device credential, so reopening the dashboard does not depend on
-the shared Gateway token.
+Open the Control UI with a short-lived, one-time owner pairing link. A successful handoff gives that
+signed browser a durable administrator device credential, so reopening the dashboard does not depend
+on the shared Gateway token. Opening a fresh handoff in the same browser can also repair a previously
+limited device credential.
 
 ```bash
 openclaw dashboard
@@ -27770,7 +27768,7 @@ Notes:
 - Resolves configured `gateway.auth.token` SecretRefs when possible.
 - `browserUrl` carries a single-use, ten-minute bootstrap in the URL fragment. The Control UI strips
   it immediately, binds it to the browser's signed device identity, and stores only the resulting
-  per-device credential.
+  administrator per-device credential. Another browser profile cannot inherit or replay that grant.
 - Follows `gateway.tls.enabled`: TLS-enabled gateways print/open `https://` Control UI URLs and connect over `wss://`.
 - For `lan` or a wildcard `custom` bind, same-host launches always use loopback because a wildcard is not a browser destination. Plaintext `tailnet` and `custom` binds also use `127.0.0.1` so the browser has a secure context; TLS-enabled specific hosts keep the configured address so certificate names match.
 - Before delivering an authenticated loopback URL for a specific-interface bind, the command probes the configured interface and verifies that it and `127.0.0.1` are owned by the same Gateway process. Ambiguous listener ownership fails closed with status guidance.
@@ -32447,7 +32445,7 @@ openclaw models scan
 Bare `openclaw models` is equivalent to `openclaw models status`.
 `openclaw models --json` returns the same object as `openclaw models status --json`.
 
-`openclaw models status` shows the resolved default/fallbacks plus an auth overview. For plugin-owned agent runtimes such as Codex, it also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
+`openclaw models status` shows the resolved default/fallbacks plus an auth overview. Active profile cooldowns appear under **Unavailable auth profiles** with the stored reason and recovery action; JSON output exposes the same data in `auth.unusableProfiles`. For plugin-owned agent runtimes such as Codex, status also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
 In `--json` output, `auth.providers` is the env/config/store-aware provider overview, while `auth.oauth` is auth-store profile health only.
 
@@ -32576,7 +32574,7 @@ openclaw models auth order clear --provider <id>
 
 `models auth add` is the interactive auth helper. It can launch a provider auth flow (OAuth/API key) or guide you into manual token paste, depending on the provider you choose.
 
-`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
+`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 
@@ -33125,11 +33123,13 @@ are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
 In a macOS, Linux, or Windows desktop session, it then opens the authenticated
 Control UI dashboard and waits up to 60 seconds for the browser client to
-connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
-dashboard URL, including an SSH port-forward command for a loopback Gateway,
-and waits up to five minutes. A successful connection continues in the browser;
-an unreachable Gateway or a timeout falls back to the same terminal hatch as
-before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
+connect. The short-lived handoff gives that exact signed browser a durable
+administrator credential. On headless Linux or over SSH, it prints a prominent
+copy-pasteable dashboard URL, including an SSH port-forward command for a
+loopback Gateway, and waits up to five minutes. A successful connection
+continues in the browser; an unreachable Gateway or a timeout falls back to the
+same terminal hatch as before. Pass `--tui` to skip the browser handoff and
+force that terminal hatch.
 If applying setup fails, onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
@@ -34811,7 +34811,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the canonical registry-channel resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
     `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
@@ -46524,6 +46524,8 @@ Use a user-pinned profile only when you want to force one account/key for that s
 
 When a profile fails due to auth/rate-limit errors (or a timeout that looks like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 
+CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback; a successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
+
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">
     That rate-limit bucket is broader than plain `429`: it also includes provider messages such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, `throttled`, `resource exhausted`, and periodic usage-window limits such as `weekly limit reached` or `monthly limit exhausted`.
@@ -56974,7 +56976,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
-  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
+  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings
@@ -61071,7 +61073,8 @@ writer is best-effort, not a lossless compliance archive.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
-- `OTEL_EXPORTER_OTLP_PROTOCOL`: protocol fallback used only when `otel.protocol` is unset. Set it to `http/protobuf` or leave it unset; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`, and `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`: signal-specific protocol fallbacks used when `otel.protocol` is unset. Each overrides `OTEL_EXPORTER_OTLP_PROTOCOL` for its signal.
+- `OTEL_EXPORTER_OTLP_PROTOCOL`: shared protocol fallback used when neither `otel.protocol` nor the matching signal-specific variable is set. Only `http/protobuf` is supported. Protocol validation is isolated per signal, so an unsupported resolved value disables that signal's OTLP exporter without blocking supported sibling signals. Doctor does not rewrite environment variables.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 
 ---
@@ -66338,9 +66341,10 @@ OTLP/HTTP works without code changes. For local file logs, see
 - **`diagnostics-otel`** subscribes to those events and exports them as
   OpenTelemetry **metrics**, **traces**, and **logs** over OTLP/HTTP, and can
   mirror log records to stdout JSONL.
-- **Provider calls** receive a W3C `traceparent` header from OpenClaw's
-  trusted model-call span context when the provider transport accepts custom
-  headers. Plugin-emitted trace context is not propagated.
+- **Provider calls** receive a W3C `traceparent` header from the actual current
+  OpenTelemetry model-call span when the provider transport accepts custom
+  headers. Diagnostic IDs remain local correlation keys, and plugin-emitted
+  trace context is not propagated.
 - Exporters attach only when both the diagnostics surface and the plugin are
   enabled, so in-process cost stays near zero by default.
 
@@ -66387,11 +66391,13 @@ section. For root or array includes, nested include chains, sibling overrides,
 external include targets, or another ambiguous source, Doctor leaves the files
 unchanged and lists the candidate source file or files to edit manually.
 
-`OTEL_EXPORTER_OTLP_PROTOCOL` is a process-environment fallback used only when
-`diagnostics.otel.protocol` is unset. Doctor does not rewrite process
-environment variables. An unsupported fallback is rejected at runtime when an
-OTLP signal is enabled; set it to `http/protobuf` or unset it. A stdout-only log
-configuration does not use the OTLP transport and continues to work.
+When `diagnostics.otel.protocol` is unset, each plugin-owned OTLP signal first
+checks its nonblank `OTEL_EXPORTER_OTLP_*_PROTOCOL` value, then
+`OTEL_EXPORTER_OTLP_PROTOCOL`, then defaults to `http/protobuf`. Doctor does not
+rewrite process environment variables. An unsupported value disables only that
+plugin-owned OTLP signal; supported sibling signals continue, as does the stdout
+branch of `logsExporter: "both"`. Preloaded trace and metric SDKs own their own
+transport selection and are not rejected by this plugin.
 </Note>
 
 ## Signals exported
@@ -66407,6 +66413,19 @@ default to on when `diagnostics.otel.enabled` is true; logs default to off
 and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
+
+<Note>
+The shared `endpoint` and `OTEL_EXPORTER_OTLP_ENDPOINT` are bases for all
+enabled signals. OpenClaw appends `/v1/traces`, `/v1/metrics`, or `/v1/logs`
+to root and custom collector paths. For compatibility with hosted frontends,
+a shared endpoint already ending in one of those signal paths keeps that path
+for its matching signal and replaces the terminal segment for the others.
+
+Signal-specific `tracesEndpoint`, `metricsEndpoint`, and `logsEndpoint`
+settings, plus their matching `OTEL_EXPORTER_OTLP_*_ENDPOINT` fallbacks, are
+passed to the exporter as exact URLs. OpenClaw does not append or rewrite their
+paths.
+</Note>
 
 ## Which processes export
 
@@ -66476,7 +66495,8 @@ dashboards, alerts, and recording rules that query the old names.
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
 | `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Process-environment fallback used only when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables OTLP export; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.                                                                                    |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Shared process-environment fallback used when `diagnostics.otel.protocol` and the signal-specific protocol variable are unset. Only `http/protobuf` enables a plugin-owned OTLP exporter.                                                                                                                      |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` / `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Signal-specific protocol fallbacks used when `diagnostics.otel.protocol` is unset. A nonblank signal-specific value wins over the shared protocol value. Unsupported values disable only that plugin-owned OTLP signal.                                                                                        |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
@@ -66529,10 +66549,13 @@ bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
 
-Outbound model requests may include a W3C `traceparent` header generated only
-from OpenClaw-owned diagnostic trace context for the active model call.
-Existing caller-supplied `traceparent` headers are replaced, so plugins or
-custom provider options cannot spoof cross-service trace ancestry.
+When `diagnostics-otel` tracing is active, outbound model requests may include
+a W3C `traceparent` header from the actual exporter-owned model-call span.
+Diagnostic trace IDs and span IDs only correlate events to that span; they are
+not used as outbound OTel identities. If the exporter cannot resolve a real
+span context, OpenClaw omits the header instead of naming an unexported parent.
+Existing caller-supplied `traceparent` headers are removed or replaced, so
+plugins or custom provider options cannot spoof cross-service trace ancestry.
 
 Set `diagnostics.otel.captureContent` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, and tool-definition
@@ -67109,6 +67132,14 @@ Device pairing records are the durable source of approved roles and scopes.
 An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
+
+The explicit exception is the administrator-capable Control UI owner profile
+issued directly on the Gateway host by `openclaw dashboard` or graphical
+onboarding. Its short-lived, single-use bootstrap can approve the exact closed
+scope set for a fresh browser or upgrade an existing limited credential only
+when it binds to that same signed browser keypair. Generic Control UI and
+Telegram handoffs, mobile setup profiles, shared credentials, locality, and
+caller-selected scopes do not receive this exception.
 
 Approving a device request:
 
@@ -82913,7 +82944,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
 | `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                                   |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | Shared OTLP protocol fallback. Only `http/protobuf` is supported today                                            |
+| `OTEL_EXPORTER_OTLP_*_PROTOCOL`                 | Signal-specific protocol fallback for traces, metrics, or logs; wins over the shared fallback                     |
 | `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
 | `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
@@ -107213,7 +107245,7 @@ reconciliation so OpenClaw does not override that selection.
 
 ## Remote marketplaces
 
-Codex 0.146.0 can read and install Computer Use plugins from discovered remote
+Codex 0.146.1 can read and install Computer Use plugins from discovered remote
 marketplaces. OpenClaw passes the opaque remote plugin ID returned by Codex to
 `plugin/read` and `plugin/install`; a human-readable plugin name is not a valid
 substitute.
@@ -107496,7 +107528,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.146.0`):
+with the official plugin (currently `@openai/codex` `0.146.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -107618,7 +107650,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin accepts exactly stable Codex app-server `0.146.0`. Older or newer
+The plugin accepts exactly stable Codex app-server `0.146.1`. Older or newer
 versions, prereleases, build-suffixed versions, and unversioned app-server
 handshakes are rejected. The same exact-version requirement applies to explicit
 custom executables, remote app-servers, and macOS desktop binaries.
@@ -107669,7 +107701,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a `0.146.0` remote app-server trusted to accept
+Only connect OpenClaw to a `0.146.1` remote app-server trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 
@@ -107745,7 +107777,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.146.0` app-server.
+This preview path uses the pinned Codex `0.146.1` app-server.
 
 ```json5
 {
@@ -108028,8 +108060,8 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.146.0`. A live `model/list`
-probe against the official `0.146.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.146.1`. A live `model/list`
+probe against the official `0.146.1` app-server returned these public picker
 rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |
@@ -108605,10 +108637,10 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.146.0`. The plugin ships and manages `@openai/codex`
-  `0.146.0` by default, so a `codex` command on `PATH` does not affect normal
+- Codex app-server `0.146.1`. The plugin ships and manages `@openai/codex`
+  `0.146.1` by default, so a `codex` command on `PATH` does not affect normal
   startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.146.0` version.
+  report the same exact stable `0.146.1` version.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -109720,7 +109752,7 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.146.0`. Older or
+**The app-server is rejected:** use exactly stable Codex `0.146.1`. Older or
 newer versions, prereleases, build-suffixed versions, and unversioned servers
 are rejected because OpenClaw validates generated schemas and runtime contracts
 against the Codex version it ships. Update or remove custom, remote, or desktop
@@ -109847,8 +109879,8 @@ working.
 - The agent runtime must be the native Codex harness.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
-- Codex app-server reports exactly stable `0.146.0`. The official plugin ships
-  `@openai/codex` `0.146.0`; custom, remote, and macOS desktop-owned binaries
+- Codex app-server reports exactly stable `0.146.1`. The official plugin ships
+  `@openai/codex` `0.146.1`; custom, remote, and macOS desktop-owned binaries
   must use the same exact version.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -120407,6 +120439,15 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
+### TTS voice delivery
+
+Declare native voice-note behavior under `capabilities.tts.voice`. Set
+`synthesisTarget: "voice-note"` when TTS providers should produce a native
+voice-note format. Set `captionedFinalText: true` only when the outbound voice
+operation accepts visible final text and enforces its transport's caption and
+overflow rules. Core then holds final-mode streamed text for that operation and
+falls back to text when the voice payload is proven unsent.
+
 Legacy reply helpers such as `dispatchInboundReplyWithBase` and
 `recordInboundSessionAndDispatchReply` remain available for compatibility
 dispatchers. Do not use them for new channel code; start with the `message`
@@ -125039,6 +125080,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       // pass level to an embedded run
     }
 
+    // Resolve a synchronous create target for a session catalog
+    const target = api.runtime.agent.resolveSessionCatalogCreateTarget({
+      config: api.runtime.config.current(),
+      requestedAgentId: agentId,
+      provider: "example",
+      modelIds: ["example-model"],
+      agentRuntime: "example-cli",
+    });
+
     // Get agent timeout
     const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 
@@ -125064,6 +125114,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
+
+    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy seam for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
 
     **Session store helpers** are under `api.runtime.agent.session`:
 
@@ -134412,15 +134464,22 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
 
 ## Capabilities and limits
 
-All three modes share the same per-request video count and duration cap; only the input shape differs.
+Each model advertises only its matching runtime mode. Geometry also follows the
+vendor protocol for that model family instead of sending one generic parameter shape.
 
-| Mode               | Max output videos | Max input images | Max input videos | Max duration | Supported controls                                        |
-| ------------------ | ----------------- | ---------------- | ---------------- | ------------ | --------------------------------------------------------- |
-| Text-to-video      | 1                 | n/a              | n/a              | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Image-to-video     | 1                 | 1                | n/a              | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Reference-to-video | 1                 | n/a              | 4                | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
+| Mode                         | Max output videos | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | ----------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | 1                 | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | 1                 | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
 
-A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**. Set `durationSeconds` explicitly on the [video generation tool](/tools/video-generation) to extend up to 10 s.
+Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
+documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
+uses the input image's aspect ratio. Wan 2.7 reference-to-video sends the newer
+`media`, `resolution`, and `ratio` fields and always generates audio.
+
+A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**.
 
 <Warning>
   Reference image and video inputs must be remote `http(s)` URLs; DashScope's reference modes reject local file paths. Upload to object storage first, or use the [media tool](/tools/media-overview) flow that already produces a public URL.
@@ -148194,12 +148253,23 @@ To make Qwen the default video provider:
 }
 ```
 
-Video-generation limits: 1 output video per request, up to 1 input image
-(image-to-video), up to 4 input videos (video-to-video), max 10 seconds
-duration. Supports `size`, `aspectRatio`, `resolution`, `audio`, and
-`watermark`. Reference image/video inputs require remote http(s) URLs; local
-file paths are rejected up front because the DashScope video endpoint does not
-accept uploaded local buffers for those references.
+Each Wan model advertises only its matching runtime mode:
+
+| Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | `wan2.6-t2v`                     | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | `wan2.6-i2v`                     | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | `wan2.6-r2v`, `wan2.6-r2v-flash` | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | `wan2.7-r2v`                     | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
+
+Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
+documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
+uses the input image's aspect ratio. Wan 2.7 reference-to-video sends
+`media`, `resolution`, and `ratio` and always generates audio.
+
+Reference image/video inputs require remote http(s) URLs; local file paths are
+rejected up front because the DashScope video endpoint does not accept uploaded
+local buffers for those references.
 
 <Note>
 See [Video generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
@@ -158779,7 +158849,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
 | `maxEntries`            | `500`                 | cap on session entries                                                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
 Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
@@ -179114,8 +179184,13 @@ spend and lockups while preserving normal tool access.
 
 - Warnings come first.
 - Blocking follows once a pattern persists past the warning threshold.
-- Critical thresholds block the next tool-cycle and surface a clear
-  loop-detection reason in the run record.
+- In the embedded agent loop, the first critical loop blocks the whole tool
+  batch before any tool in that batch runs. The model then gets one more
+  response with its normal tools.
+- During that response, the model can answer, ask a question, or continue with
+  a different tool or different arguments.
+- Another critical loop in the same run blocks its whole batch and ends the
+  run. A new user run starts with a fresh recovery allowance.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 
@@ -181967,30 +182042,14 @@ skill authoring.
 The default mode is `auto`. OpenClaw captures strong learning signals and applies
 them through the normal scanner-gated Workshop service without asking for
 approval. Choose `propose` to review every capture before it becomes active, or
-`off` to keep only the suggestion nudge.
+`off` to disable autonomous capture.
 
-## Capture paths
+## Experience review
 
-OpenClaw uses two complementary capture paths.
-
-### Deterministic correction capture
-
-When an interactive turn ends, OpenClaw looks for durable instructions such as
-"from now on," "next time," and direct corrections to a failed approach. This
-path is deterministic and does not start another model run. It can:
-
-- group related instructions into up to three focused skills;
-- route a correction to a matching writable workspace skill;
-- revise its own related pending proposal; and
-- capture after a failed turn because the user instruction remains useful even
-  when the work did not complete.
-
-Detection is intentionally heuristic. A durable phrase can occasionally produce
-an overly broad or low-value capture. That is an accepted tradeoff because
-miscaptures are cheap to inspect and remove, while Workshop governance keeps the
-write bounded and recoverable.
-
-### Experience review
+Every autonomous capture is authored by a model reviewing real evidence. There
+is no template or pattern-matching path: content that reaches a proposal was
+written by the reviewer against the Workshop authoring standards, never copied
+from conversation text.
 
 After substantial work, OpenClaw can run one isolated background review to find
 a reusable recovery technique or a stable procedure that would remove at least
@@ -182016,14 +182075,23 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and conservative. It can list or inspect proposals and
-create or revise at most one pending proposal. Its one-mutation budget is shared
-across retries. It cannot apply, reject, quarantine, message, update a live skill,
-or use general agent tools. The reviewed trajectory is evidence, not instructions.
+The reviewer is isolated and conservative. It sees a bounded workspace skill
+list and can list or inspect proposals. It drafts at most one pending proposal:
+preferring to revise a matching pending proposal, then to propose an update to
+the existing skill governing the work, and creating a new skill only when
+nothing covers the class. Its one-mutation budget is shared across retries.
+Every mutation is a pending proposal — it never writes a live skill directly and
+cannot apply, reject, quarantine, message, or use general agent tools. Because
+the reviewer drafts update bodies without reading the live skill, update
+proposals are never auto-applied: they stay pending for operator review even in
+`auto` mode. The reviewed trajectory is evidence, not instructions.
 
 Good candidates include:
 
 - a reliable recovery after repeated tool or model failures;
+- a durable user correction or standing instruction ("from now on," "always,"
+  "never," "stop doing X"), embedded as a procedure step in the skill governing
+  that work;
 - a non-obvious ordering constraint that prevented a recurring error;
 - a stable multi-step workflow that required repeated discovery; or
 - a reusable preflight that would avoid several future calls.
@@ -182039,11 +182107,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                          | Suggestion nudge                                                    |
-| --------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `off`     | Does not create deterministic or experience-review captures.                                              | Enabled. OpenClaw can offer to save a detected durable instruction. |
-| `propose` | Creates or revises pending proposals through both capture paths. Nothing applies automatically.           | Suppressed.                                                         |
-| `auto`    | Creates or revises proposals, then immediately calls the normal Workshop apply path. This is the default. | Suppressed.                                                         |
+| Mode      | Capture behavior                                                                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                                                                                                           |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                  |
+| `auto`    | Creates or revises proposals, then applies new-skill proposals through the normal Workshop apply path. Update proposals stay pending for review. This is the default. |
 
 Set the mode with the CLI:
 
@@ -182117,17 +182185,13 @@ Delayed experience review requires the runtime to report its resolved model and
 actual `skill_workshop` availability. The embedded runner and Codex app-server
 harness report those facts; Codex also reports its exact model-iteration count.
 Other CLI-backed runtimes fail closed until they provide the same runtime facts.
-
-Deterministic correction capture and `/learn` do not depend on delayed review and
-continue to work on those runtimes. In `auto` mode, a runtime that does not report
-actual Workshop availability leaves deterministic captures pending instead of
-applying them.
+`/learn` does not depend on delayed review and continues to work on those
+runtimes.
 
 ## Cost and privacy
 
-Deterministic correction capture does not make an extra model call. Experience
-review adds one bounded model run on the configured provider only after a
-substantial turn, not after every message. The review can make more
+Experience review adds one bounded model run on the configured provider only
+after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
 The reviewer receives only the current turn beginning with its most recent user
@@ -182212,14 +182276,13 @@ Check the following:
 
 1. `skills.workshop.autonomous.mode` is `propose` or `auto` in the active Gateway
    config.
-2. The correction uses durable language, or the turn reached at least 10 model
-   iterations without ending in a provider or prompt error.
+2. The turn reached at least 10 model iterations without ending in a provider or
+   prompt error.
 3. The conversation is eligible foreground work.
 4. The runtime reported the resolved model and actual `skill_workshop`
    availability.
 5. The run was not sandboxed and tool policy still permits `skill_workshop`.
-6. For experience review, the Gateway stayed running and idle through the
-   30-second quiet period.
+6. The Gateway stayed running and idle through the 30-second quiet period.
 
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
@@ -182244,8 +182307,8 @@ build a retry loop around automatic capture.
 
 ### Too many low-value captures appear
 
-Switch to `propose` to review every capture, or `off` to keep only the suggestion
-nudge:
+Switch to `propose` to review every capture, or `off` to disable autonomous
+capture:
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode propose
@@ -182690,15 +182753,14 @@ Skill Workshop tool, so run proposal review actions from a normal host-side
 agent session or the CLI.
 </Note>
 
-## Suggested skills
+## Self-learning
 
-OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
-when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
-the most recent detected workflow through `skill_workshop`; the user decides whether to create a
-proposal. This built-in suggestion does not create or change a skill by itself. Set
-`skills.workshop.autonomous.mode` to `propose` to create pending proposals directly, or to `auto`
-to apply scanner-approved captures through the normal Workshop service. The Control UI Workshop
-tab shows whether self-learning is on; use the config setting to choose all three modes.
+After substantial work, an isolated background review can turn corrections and
+successful procedures into Workshop proposals; see
+[Self-learning](/tools/self-learning). Set `skills.workshop.autonomous.mode` to
+`propose` to create pending proposals, or to `auto` to apply scanner-approved
+captures through the normal Workshop service. The Control UI Workshop tab shows
+whether self-learning is on; use the config setting to choose all three modes.
 
 ### Scan past sessions
 
@@ -182727,10 +182789,12 @@ are stored in the shared OpenClaw state database; transcript content is not copi
 into scan state.
 
 In `propose` and `auto` modes, OpenClaw can also perform a conservative review after successful,
-substantial work and after the whole agent system becomes idle. That isolated review can create or
-revise at most one pending proposal. It cannot update a live skill or apply, reject, or quarantine a
-proposal. In `auto` mode, the orchestrating capture pipeline applies the result afterward through
-the normal scanner-gated service.
+substantial work and after the whole agent system becomes idle. That isolated review can draft at
+most one pending proposal — a new skill, an update to an existing workspace skill, or a revision
+of a pending proposal. It never writes a live skill directly and cannot apply, reject, or
+quarantine a proposal. In `auto` mode, the orchestrating capture pipeline applies a new-skill
+result afterward through the normal scanner-gated service; update proposals always stay pending
+for operator review.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -182755,23 +182819,20 @@ the proposal threshold, and troubleshooting.
 
 | Setting                    | Default  | Effect                                                                                                                                                              |
 | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode`          | `"auto"` | `"off"` keeps the suggestion nudge, `"propose"` creates pending captures, and `"auto"` applies captures through the normal Workshop scanner and apply path.         |
+| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures through the normal Workshop scanner and apply path.        |
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
 | `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
 | `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
 | `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
-Autonomous capture in `propose` and `auto` modes recognizes prospective rules (for example, “from now on”) and reactive
-corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
-to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
-revises its own pending proposal when another correction targets the same skill.
-
-For successful substantial work without an explicit correction, an isolated run of the selected
-model decides whether the completed trajectory clears the conservative proposal bar. The
-foreground model is not prompted to learn before it replies. The background reviewer preserves the
-foreground run as proposal provenance, cannot access general agent tools, and cannot make lifecycle
-decisions. In `auto` mode, the capture pipeline applies the resulting pending proposal only after
-the isolated run completes. The review starts only when the foreground runtime reports its resolved model
+In `propose` and `auto` modes, an isolated run of the selected model decides whether the
+completed trajectory clears the conservative proposal bar. The foreground model is not prompted
+to learn before it replies. The background reviewer preserves the foreground run as proposal
+provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
+mode, the capture pipeline applies a resulting new-skill proposal only after the isolated run
+completes; update proposals targeting an existing skill always stay pending for operator review,
+because the reviewer drafts them without reading the live skill body. The review starts only when
+the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.
 
@@ -187714,6 +187775,14 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
+Telegram also advertises captioned final TTS. With `tts.mode: "final"` and
+Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
+until synthesis finishes and sent as the voice-note caption. Text beyond
+Telegram's caption limit follows the voice note as a normal text message. If
+synthesis or a proven pre-send delivery step fails, OpenClaw sends the visible
+text instead. `tagged` mode keeps its normal streaming behavior, and text
+inside a `[[tts:text]]` block remains audio-only.
+
 After synthesis, OpenClaw persists batch TTS output in the media store under
 `tool-speech-synthesis`. The reply uses that stable media path instead of a
 provider temporary file, and normal media maintenance prunes expired output.
@@ -187758,9 +187827,11 @@ When `tts.auto` is enabled, OpenClaw:
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
 - Attaches the generated audio to the reply.
-- In `mode: "final"`, still sends audio-only TTS for streamed final replies
-  after the text stream completes; the generated media goes through the same
-  channel media normalization as normal reply attachments.
+- In `mode: "final"`, sends TTS after streamed text completes. Channels without
+  captioned-final support receive an audio-only supplement; Telegram puts text
+  within its caption limit on the voice note and sends overflow as follow-up
+  text. Generated media goes through the same channel media normalization as
+  normal reply attachments.
 
 If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 
@@ -189581,7 +189652,7 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 
 ## Device pairing (first connection)
 
-After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred recovery path: it opens a short-lived, single-use pairing link and leaves the browser with a durable per-device credential.
+After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
 
 <Warning>
 When upgrading directly from a release that used the retired
@@ -189612,7 +189683,7 @@ silently discarding the old key.
 
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
-Switching an already-paired remote browser from read access to write/admin access is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. A qualifying direct-loopback Control UI connection can silently approve the upgrade after it authenticates.
+Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation, revocation, and the Paperclip / `openclaw_gateway` first-run approval flow.
 
@@ -190742,7 +190813,8 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean link.
 - Re-open or repair a browser anytime: `openclaw dashboard`. It copies/opens a single-use pairing link
-  that replaces stale browser credentials without granting blanket remote auto-approval.
+  that grants administrator access to that exact signed browser, including recovery from a previously
+  limited credential, without granting blanket remote auto-approval.
 - If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
   hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
   prints the shared token value in interactive logs.
@@ -190756,7 +190828,8 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
   is kept in sessionStorage for the current tab and selected gateway URL, not localStorage.
 - **Host-authorized browser handoff**: `openclaw dashboard` issues a short-lived, single-use bootstrap
   instead of putting the shared Gateway token in the browser launch URL. The bootstrap is bound to
-  that browser's signed device identity and exchanged for a durable per-device credential.
+  that browser's signed device identity and exchanged for a durable administrator credential. A
+  different browser profile cannot redeem the same handoff or inherit the resulting access.
 - **Missing-config runtime token**: if startup says it generated a runtime token, that token is ephemeral and cannot be recovered. Loopback still requires auth. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings.
 - If `gateway.auth.token` is SecretRef-managed, the interactive dashboard handoff still works because
   it carries only the short-lived browser bootstrap; the external shared token is not placed in
@@ -190776,7 +190849,9 @@ Requirements:
 - Run `/dashboard` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
 - Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
 
-The Mini App performs a one-time owner handoff and redirects to Control UI with a short-lived bootstrap token. It does not expose a shared gateway token in the URL.
+The Mini App performs a bounded one-time dashboard handoff and redirects to Control UI with a
+short-lived bootstrap token. It does not expose a shared gateway token in the URL, and it does not
+receive the administrator grant reserved for handoffs issued directly by the Gateway host.
 
 Non-goals for v1:
 
@@ -190790,7 +190865,7 @@ Non-goals for v1:
 - Confirm the gateway is reachable: local `openclaw status`; remote, SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host` then open `http://127.0.0.1:18789/`.
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints; that retry reuses the token's cached approved scopes (explicit `deviceToken`/`scopes` callers keep their requested scope set). If auth still fails after that retry, resolve token drift manually.
 - For `AUTH_SCOPE_MISMATCH`, the device token was recognized but does not carry the requested scopes; re-pair or approve the new scope set instead of rotating the shared gateway token.
-- Outside that retry path, connect auth precedence is: explicit shared token/password, then explicit `deviceToken`, then stored device token, then bootstrap token.
+- Outside that retry path, the Control UI prefers a pending bootstrap token so a fresh host-issued handoff can create or upgrade the browser credential. Without a pending bootstrap, explicit shared token/password take precedence over the stored device token.
 - On the async Tailscale Serve path, failed attempts for the same `{scope, ip}` are serialized before the failed-auth limiter records them, so a second concurrent bad retry can already show `retry later`.
 - For token drift repair steps, see [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
 - Retrieve or supply the shared secret from the gateway host:
