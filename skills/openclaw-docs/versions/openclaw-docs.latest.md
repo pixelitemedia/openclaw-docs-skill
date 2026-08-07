@@ -3773,6 +3773,14 @@ coarse command/lifecycle event system and show up in `openclaw hooks list` as
 `plugin:<id>`. Use those for side effects and compatibility with hook packs, not
 for ordered middleware or policy gates.
 
+The legacy Plugin SDK `api.registerHook` registers into the internal event
+system only (`command:new`, `gateway:startup`, `message:received`, ...). Typed
+lifecycle event names such as `before_tool_call`, `message_received`, or
+`session_start` are dispatched exclusively by the typed hook runner and are
+**not** invoked through `registerHook`. Registering a typed name with
+`registerHook` emits a registration warning pointing to the public `api.on(...)`
+API as the replacement; it never silently no-ops.
+
 For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration
@@ -6919,9 +6927,15 @@ An older server's generic 404 is not treated as proof that a send is absent.
 OpenClaw leaves the delivery unresolved rather than risking a duplicate; update
 ClickClack before enabling media-producing agent replies.
 
-## Agent activity rows
+## Native progress and agent activity rows
 
-By default a ClickClack channel shows nothing while an agent turn runs; only the final reply lands. Set `agentActivity: true` on an account to publish durable `agent_commentary` and `agent_tool` message rows while the turn is in progress:
+Native progress is opt-in per account. Set `nativeProgress: true` to show a
+transient `<agent name> is responding` status and progress lines while an agent
+turn runs. The agent name comes from the configured account name, ClickClack bot
+handle, or agent ID. These use ephemeral `agent.progress` events and are cleared
+when the turn ends; only the final reply is durable. Set `agentActivity: true`
+separately to publish durable `agent_commentary` and `agent_tool` message rows
+while the turn is in progress:
 
 ```json5
 {
@@ -6930,6 +6944,7 @@ By default a ClickClack channel shows nothing while an agent turn runs; only the
       enabled: true,
       token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
       workspace: "default",
+      nativeProgress: true,
       agentActivity: true,
     },
   },
@@ -6938,8 +6953,10 @@ By default a ClickClack channel shows nothing while an agent turn runs; only the
 
 Requirements and behavior:
 
-- **Off by default.** Stock setups and older ClickClack servers are untouched.
-- **Requires the `agent_activity:write` token scope.** This scope is separate from `bot:write` and is not inherited by it; create the bot token with `--scopes bot:write,agent_activity:write` (or grant the scope to an existing token) before enabling the option.
+- **Native progress is off by default.** Set `nativeProgress: true` only for ClickClack deployments that support the ephemeral realtime endpoint.
+- **Durable activity is separately off by default.** Set `agentActivity: true` to persist activity rows; this does not enable native progress by itself.
+- **Native progress is best effort.** Progress publication uses the ephemeral realtime endpoint and a bounded request timeout. A failed or stalled progress request is logged and cannot block final text delivery.
+- **Durable activity requires the `agent_activity:write` token scope.** This scope is separate from `bot:write` and is not inherited by it; create the bot token with `--scopes bot:write,agent_activity:write` before enabling `agentActivity`.
 - **Best-effort degradation.** If the token lacks `agent_activity:write` or the server rejects activity writes, failures are logged and the final reply still delivers normally; no activity rows appear.
 - Rows are grouped per turn (`turn_id`), coalesced so one logical step is one row, and tool rows use the same progress formatting as Discord/Slack/Telegram (tool name plus command detail).
 - **Attribution metadata.** Agent-authored posts (activity rows and the final reply) carry `author_model` and `author_thinking` fields resolved from the actual model used for the turn (including after fallback). Servers that do not define these columns ignore the unknown JSON fields; servers that persist them can answer "which model said this line, at which thinking level" per message.
@@ -7028,7 +7045,7 @@ ClickClack token scopes are enforced by the ClickClack API.
 - `commands:write`: publish the bot's command menu. Included in current `bot:write` and `bot:admin` bundles and grantable individually.
 - `agent_activity:write`: durable agent activity rows (`agent_commentary` / `agent_tool`). Not inherited by `bot:write` or `bot:admin`; required only when `agentActivity: true` is set.
 
-OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
+OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [native progress and agent activity rows](#native-progress-and-agent-activity-rows).
 
 ## Troubleshooting
 
@@ -25738,25 +25755,7 @@ openclaw browser close t1
 
 Raw target ids are volatile diagnostic handles, not durable agent memory: when Chromium replaces the underlying raw target during a navigation or form submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab when it can prove the match. Prefer `suggestedTargetId`.
 
-## Extract / snapshot / screenshot / actions
-
-Answer a question from the current page without printing the page content:
-
-```bash
-openclaw browser extract "What is the main conclusion?"
-openclaw browser extract "Which deadline is listed?" --target-id docs --timeout-ms 90000
-openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
-```
-
-`extract` uses the selected agent model, returns only the wrapped answer, and
-reports `NOT_FOUND` when the answer is absent. Its overall timeout defaults to
-60 seconds and is clamped to 5–120 seconds. It requires a Playwright-backed
-profile; use `snapshot` when you need refs or when extraction is unavailable.
-Use `--selector <css>` to limit large pages to matching subtrees and repeat
-`--ignore-selector <css>` to remove navigation, footers, ads, or banners before
-conversion. `--schema <json>` requests validated structured output in
-`details.json`; invalid structured output is retried once, then fails with
-guidance to retry without the schema.
+## Snapshot / screenshot / actions
 
 Snapshot:
 
@@ -25896,7 +25895,7 @@ Current existing-session limits:
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
-- `extract`, `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
+- `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
 
 ## Remote browser control (node host proxy)
 
@@ -28228,6 +28227,11 @@ Health checks and quick fixes for the gateway, channels, plugins, skills, model 
 When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
+
+When the Gateway has exporter health facts, doctor reports the latest trusted
+per-signal state and transport under **Telemetry exporters**. The summary is
+redacted and does not include endpoint values, headers, certificates, payloads,
+or raw errors.
 
 Related:
 
@@ -31663,13 +31667,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; unknown vector/semantic state means it was not probed. QMD lexical `searchMode: "search"` always skips semantic vector probes, even with `--deep`. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                                          |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                                               |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                                               |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                                             |
+| Flag        | Effect                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. QMD lexical `searchMode: "search"` always skips semantic vector probes, even with `--deep`. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                                                                                                             |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                                                                                                                  |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                                                                                                                  |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                                                                                                                |
 
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
@@ -32744,6 +32748,12 @@ Options:
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
+
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
 
 Manage the service:
 
@@ -34801,6 +34811,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
+
     During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
 
     That targeted-update rule differs from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
@@ -34813,7 +34825,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Beta channel updates">
     Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
-    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
+    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates except while completing the trusted plugin id replacement above.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
@@ -37582,6 +37594,9 @@ and `openclaw memory status --deep`.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+- `status --all` includes a **Telemetry exporters** diagnosis with the latest
+  trusted per-signal exporter state and transport. Endpoint values, headers,
+  certificates, payloads, and raw errors are not shown.
 
 ## Secrets
 
@@ -50683,6 +50698,9 @@ The minimum adoption bar for a new channel:
    changing the command's existing scenario catalog. Same-channel partitions
    are serial unless the factory declares that every instance owns isolated
    credentials or disposable servers, Gateway state, and artifact paths.
+   Module-backed flow scenarios additionally require
+   `adapterFactory.supportsModuleFlows: true`; those factories must return
+   adapters that implement `prepareFlow`.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.
@@ -60274,8 +60292,10 @@ See [Plugins](/tools/plugin).
 - `assistant`: Control UI identity override. Falls back to active agent identity.
 - `prefs`: cross-device operator preferences. This is the canonical home so agents can
   change them through the approval gate and every Control UI client stays in
-  sync; browsers mirror the values into local storage for instant boot and keep
-  a device-local copy when they cannot write config (viewer scope, offline).
+  sync; browsers mirror the values into local storage for instant boot. An
+  explicitly read-only connection keeps edits in that browser without attempting
+  a config write. Offline edits remain queued for a later writable connection and
+  continue as browser-local preferences while reconnected read-only.
   `chatPersistCommentary` defaults to `true`. Setting it to `false` keeps live
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
@@ -63462,6 +63482,9 @@ Each layer can fail independently and throws its own `GatewayLockError`.
 
 ### State and config locks
 
+- Lock files, SQLite coordinators, and transient reclaim guards live under
+  `$OPENCLAW_STATE_DIR/tmp/openclaw-<uid>` (or `openclaw` on platforms without
+  a user ID). An overridden state directory therefore owns its complete lock tree.
 - Lock liveness comes from the recorded PID, platform process start identity when available, and Gateway process identity. A verified owner remains authoritative during startup before its port begins listening.
 - A dedicated SQLite coordinator serializes metadata inspection, stale-owner reclamation, and lock replacement. Its exclusive transaction is released automatically if the owning process crashes.
 - If a lock file is missing or the recorded owner process is gone, startup reclaims the lock and continues.
@@ -63488,6 +63511,10 @@ Each layer can fail independently and throws its own `GatewayLockError`.
 
 On shutdown, the gateway closes the HTTP/WebSocket server and removes its state
 and config lock files.
+
+The state-local layout is a clean version boundary. Binaries from before this
+change use the process temp directory, so an old and new binary sharing one state
+directory during an upgrade do not exclude each other through these locks.
 
 ## Operational notes
 
@@ -66448,6 +66475,31 @@ paths.
   through the Gateway, or use `openclaw agent --local`, when you need traces
   from a headless run.
 
+## Exporter health
+
+`openclaw doctor` and `openclaw status --all` show a bounded, redacted snapshot
+of the running Gateway's latest trusted exporter state for each signal and
+transport. For `diagnostics-otel`, the snapshot distinguishes:
+
+- OTLP/HTTP protobuf with an endpoint supplied by config or an `OTEL_*`
+  environment fallback.
+- OTLP/HTTP protobuf using the exporter dependency's default endpoint because
+  no endpoint was supplied.
+- Stdout log export.
+- Trace or metric export owned by an externally preloaded OpenTelemetry SDK.
+
+OTLP export failure and recovery transitions are recorded from the exporter's
+final result callback, after dependency-owned retries finish. A retryable
+response that later succeeds is therefore not reported as a failure. Startup,
+log preparation or emit, export, and shutdown failures use fixed reason
+categories rather than raw errors.
+
+The snapshot never includes endpoint values, headers, certificates, payloads,
+or raw error messages. Transport is retained only in this local health
+projection. It is not added to the existing
+`openclaw.telemetry.exporter.events` metric attributes, and existing Prometheus
+label sets are unchanged.
+
 ## Configuration reference
 
 ```json5
@@ -66816,9 +66868,14 @@ Liveness warnings also emit:
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - Optional host-derived `openclaw.plugin` only for trusted plugin runtime completions
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.usage.*`
+
+Plugin attribution is span-only. It does not add a plugin dimension to shared
+OpenTelemetry metrics or change Prometheus metric labels.
+
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
 - `openclaw.model.call`
@@ -83868,18 +83925,13 @@ fly machine update <machine-id> --vm-memory 2048 -y
 
 Gateway refuses to start with "already running" errors after a container restart.
 
-The runtime lock files live at `<tmpdir>/openclaw-<uid>/gateway.<hash>.lock`
-and `gateway.state.<hash>.lock` (Linux:
-`/tmp/openclaw-<uid>/gateway.*.lock`), not on the persistent `/data` volume, so
-a full container restart normally clears them along with the rest of the
-container filesystem. If a lock survives (for example a `fly machine restart`
-that preserves the container filesystem) and blocks startup, remove it
-manually:
-
-```bash
-fly ssh console --command "rm -f /tmp/openclaw-*/gateway.*.lock"
-fly machine restart <machine-id>
-```
+With `OPENCLAW_STATE_DIR=/data`, the lock tree lives under
+`/data/tmp/openclaw-<uid>` and persists with the volume. OpenClaw normally
+reclaims stale owners automatically. If startup continues to report an owner,
+first use `fly status` and `fly logs` to verify that no other machine or Gateway
+process is using the volume. Do not delete the lock tree while an owner may
+still be running; see [Gateway lock](/gateway/gateway-lock) for the ownership
+and stale-recovery contract.
 
 ### Config not being read
 
@@ -96846,6 +96898,18 @@ The bundled `cua-computer` plugin provides an experimental fulfiller for Windows
 
 2. Start `openclaw node run` from the interactive desktop session. The plugin creates its configured SDK runtime lazily, then creates one OpenClaw-owned trusted session for the node-host command execution. It closes that session and shuts down the runtime when the command host stops or restarts.
 
+3. Add `computer.act` to the Gateway allowlist. This plugin registers `computer.act` as a dangerous plugin node command, so enabling the plugin alone is not enough; the operator must opt in explicitly:
+
+   ```json5
+   {
+     gateway: {
+       nodes: { commands: { allow: ["computer.act"] } },
+     },
+   }
+   ```
+
+   Without this entry, `node.invoke` rejects `computer.act` even though the node advertises it.
+
 This fulfiller currently controls only the primary display. `hold_key`, `left_mouse_down`, and `left_mouse_up` are unavailable because the CUA Driver SDK has no desktop-scope held-input contract. Modifier-held clicks, scrolling, and dragging are rejected because the typed desktop methods do not accept modifiers. The `key` action accepts named keys, letters, and modifier combos (for example `cmd+c` or `Return`); digit and punctuation keys are rejected because the driver drops their layout-dependent shift state, so send that text through the `type` action instead. Cancellation is passed to the SDK for each node invocation.
 
 The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, trusted session identifier, TTLs, and desktop scope are fixed by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a session or widen that authority. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
@@ -96895,7 +96959,7 @@ Once the node-local control is enabled and the pairing update is approved, `comp
 
 On macOS, default-on means a paired gateway can drive pointer and keyboard input as soon as the required macOS grants exist. There is no per-action confirmation. Turn off **Allow Computer Control** before pairing, or at any later time, to stop advertising and accepting `computer.act`.
 
-`gateway.nodes.commands.deny` remains an explicit global revocation and always wins. `computer.act` does not need a `gateway.nodes.commands.allow` entry. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
+`gateway.nodes.commands.deny` remains an explicit global revocation and always wins. For the macOS fulfiller, `computer.act` does not need a `gateway.nodes.commands.allow` entry. The experimental `cua-computer` plugin registers `computer.act` as a dangerous plugin node command, so once that plugin is enabled the operator must add it to `gateway.nodes.commands.allow` (see the Windows/Linux setup above); the plugin registration excludes it from the default allowlist regardless of platform. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
 
@@ -98909,6 +98973,42 @@ title: "Node troubleshooting"
 ---
 
 Use this page when a node is visible in status but node tools fail.
+
+## Node goes offline after SSH logout (Linux)
+
+On Linux, `openclaw node install` creates a **user-level** systemd service. The
+`systemd --user` instance is torn down when your last login session ends, so the
+node service stops the moment you log out — even though it looked healthy
+(`enabled` + `running`) while you were connected.
+
+Check lingering:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+If it reads `Linger=no`, enable it (may require sudo):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Then restart the node service and verify it survives logout:
+
+```bash
+openclaw node restart
+# log out, then from another machine:
+openclaw nodes status
+```
+
+`openclaw node install` prints a warning with this recovery command when it
+detects lingering is disabled. Don't mix a user-level service with a
+system-level one for the same node. The duplicate-scope guard that prevents
+two managers from running the same unit name is enforced for gateway units
+(two supervisors on the same port SIGTERM each other in a restart loop); for
+node services the installer does not raise this guard, so a leftover unit in
+the other scope can leave the node in an ambiguous state. Fully remove one
+before switching.
 
 ## Command ladder
 
@@ -115288,6 +115388,11 @@ accepted through 2026-10-01 while authors migrate. An
 optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
+Module-backed flow scenarios are an adapter-owned execution form. Set
+`adapterFactory.supportsModuleFlows` to `true` only when every adapter created
+by that factory implements `prepareFlow`; QA planning excludes module flows
+from implementations that do not declare support.
+
 ```json
 {
   "qaRunners": [
@@ -118737,7 +118842,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - npm; ClawHub: `clawhub:@openclaw/fireworks-provider`. Adds Fireworks model provider support to OpenClaw.
 
-- **[fish-audio](/plugins/reference/fish-audio)** (`@openclaw/fish-audio-speech`) - npm; ClawHub: `clawhub:@openclaw/fish-audio-speech`. Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
+- **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm; ClawHub: `clawhub:@openclaw/fish-audio-speech`. Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
 
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm; ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
@@ -131484,16 +131589,16 @@ providers: `fireworks`
 
 
 
-# Section: plugins/reference/fish-audio.md
+# Section: plugins/reference/fish-audio-speech.md
 
 ---
 summary: "Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output."
 read_when:
-  - You are installing, configuring, or auditing the fish-audio plugin
-title: "Fish Audio plugin"
+  - You are installing, configuring, or auditing the fish-audio-speech plugin
+title: "Fish Audio Speech plugin"
 ---
 
-# Fish Audio plugin
+# Fish Audio Speech plugin
 
 Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
 
@@ -139281,6 +139386,15 @@ separate Fish Audio license. Hosted API use follows Fish Audio's service terms.
 </Warning>
 
 ## Hosted S2.1
+
+Install the `fish-audio-speech` plugin:
+
+```bash
+openclaw plugins install @openclaw/fish-audio-speech
+```
+
+The plugin id is `fish-audio-speech`. The provider and TTS configuration id
+remain `fish-audio`.
 
 Set an API key from the [Fish Audio API Keys](https://fish.audio/app/api-keys) page:
 
@@ -170843,7 +170957,7 @@ agent tools, but nothing listens on the loopback control port.
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
-- Snapshot/screenshot/extract: `GET /snapshot`, `POST /screenshot`, `POST /extract`
+- Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
@@ -170868,27 +170982,6 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 `suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
-
-### Page extraction
-
-The agent tool accepts `action="extract"` with required `query` and optional
-`targetId`, `timeoutMs`, `selector`, `ignoreSelectors`, and `schema`. `selector`
-is a CSS selector that limits capture to matching subtrees; a no-match response
-is an error and never falls back to the whole page. `ignoreSelectors` is an
-array of CSS selectors removed from the captured subtree before readable text
-conversion, so navigation, footers, ads, and banners do not consume the model
-context window. The reported `chars` count reflects the scoped, converted text.
-
-`schema` is a JSON Schema object for structured extraction. A successful result
-stores the validated value in `details.json` and shows compact JSON in the
-wrapped text block. Invalid JSON or a schema mismatch gets one correction retry;
-if that also fails, retry without `schema` or adjust the schema. Without
-`schema`, extraction keeps its free-text answer and `NOT_FOUND` behavior.
-
-The CLI mirrors these fields with `--selector <css>`, repeatable
-`--ignore-selector <css>`, and `--schema <json>`. The private `POST /extract`
-capture route accepts `targetId`, `timeoutMs`, `selector`, and
-`ignoreSelectors`; schema validation happens in the calling agent tool or CLI.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -170925,7 +171018,7 @@ Other runtime failures may still return `{ "error": "<message>" }` without a
 
 ### Playwright requirement
 
-Some features (navigate/act/AI snapshot/role snapshot, extract, element
+Some features (navigate/act/AI snapshot/role snapshot, element
 screenshots, PDF) require Playwright. If Playwright isn't installed, those endpoints return
 a clear 501 error.
 
@@ -170948,7 +171041,6 @@ What still needs Playwright:
 - AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
-- page-question extraction
 
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
@@ -171034,8 +171126,6 @@ openclaw browser snapshot --urls
 openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
 openclaw browser snapshot --out snapshot.txt
-openclaw browser extract "What is the page's main conclusion?"
-openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
 openclaw browser console --level error
 openclaw browser errors --clear
 openclaw browser requests --filter api --clear
@@ -171103,12 +171193,6 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
-- Use `browser extract "<question>"` or agent-tool `action="extract"` when you
-  need an answer from the current page but do not need interaction refs. It
-  sanitizes readable page content, caps it at 80,000 characters, runs one
-  model call, and returns only the wrapped answer. The overall timeout defaults
-  to 60 seconds and is clamped to 5–120 seconds. If extraction fails, fall back
-  to `snapshot`; existing-session profiles do not support extraction.
 - The agent-facing `browser` tool exposes `action=download` (required `ref` and
   `path`) and `action=waitfordownload` (optional `path`). Both return the saved
   download URL, suggested filename, and guarded local path. Explicit download
@@ -171936,16 +172020,10 @@ Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions load on demand, so routine
 turns do not pay the full token cost.
 
-For “read this page and answer X,” use browser `action="extract"` with a
-`query`. It sends sanitized, bounded readable text through one model call and
-returns only the answer; keep `snapshot` for choosing actions and obtaining
-refs. Extraction requires a Playwright-backed profile and falls back to a
-snapshot workflow when it cannot complete.
-
-On large pages, pass `selector` to capture only the relevant CSS subtree and
-`ignoreSelectors` to remove repeated chrome before conversion. Pass a JSON
-`schema` when the caller needs validated machine-usable fields in
-`details.json`; without it, extraction remains a free-text answer.
+For page text, use a selector-scoped snapshot or `act:evaluate` that returns
+only the relevant text or structured data, then let the active agent model
+reason over that bounded result. Use efficient snapshots for controls and
+action discovery; they intentionally omit most non-interactive prose.
 
 ## Missing browser command or tool
 
@@ -182064,7 +182142,9 @@ Experience review starts only when all of these conditions hold:
 
 - the foreground turn completed or was interrupted, but did not end in a
   provider or prompt error;
-- the current turn used at least 10 model iterations;
+- the current turn used at least 10 model iterations, or same-sender shallow
+  turns in the session accumulated that much unreviewed work (the accumulated
+  review covers the bounded message window of those turns);
 - the run was an eligible foreground conversation, not cron, heartbeat, memory,
   overflow, hook, subagent, or review work;
 - the runtime reported the resolved provider, model, and actual availability of
@@ -182075,16 +182155,20 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and conservative. It sees a bounded workspace skill
-list and can list or inspect proposals. It drafts at most one pending proposal:
-preferring to revise a matching pending proposal, then to propose an update to
-the existing skill governing the work, and creating a new skill only when
-nothing covers the class. Its one-mutation budget is shared across retries.
-Every mutation is a pending proposal — it never writes a live skill directly and
-cannot apply, reject, quarantine, message, or use general agent tools. Because
-the reviewer drafts update bodies without reading the live skill, update
-proposals are never auto-applied: they stay pending for operator review even in
-`auto` mode. The reviewed trajectory is evidence, not instructions.
+The reviewer is isolated and biased toward small, well-evidenced captures. It
+sees a bounded workspace skill list, can list or inspect proposals, and can read
+a bounded excerpt of a writable skill for context. It drafts at most one pending
+proposal: preferring to revise a matching pending proposal, then to patch the
+existing skill governing the work, and creating a new skill only when nothing
+covers the class. A patch proposal quotes the exact live text to change (or
+appends a new section) and the tool composes the full body inside the same read
+that hash-binds the proposal, so untouched content survives by construction and
+patches auto-apply in `auto` mode. A patch requires a full-skill read receipt:
+skills beyond the bounded read budget cannot be patched autonomously. A full-body update rewrite always stays
+pending for operator review. Its one-mutation budget is shared across retries. Every
+mutation is a pending proposal — it never writes a live skill directly and
+cannot apply, reject, quarantine, message, or use general agent tools. The
+reviewed trajectory is evidence, not instructions.
 
 Good candidates include:
 
@@ -182107,11 +182191,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                                                                                      |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`     | Does not create experience-review captures.                                                                                                                           |
-| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                  |
-| `auto`    | Creates or revises proposals, then applies new-skill proposals through the normal Workshop apply path. Update proposals stay pending for review. This is the default. |
+| Mode      | Capture behavior                                                                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                                                                                                                      |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                             |
+| `auto`    | Creates or revises proposals, then applies new-skill and patch proposals through the normal Workshop apply path. Full-body updates stay pending for review. This is the default. |
 
 Set the mode with the CLI:
 
@@ -182194,10 +182278,14 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-The reviewer receives only the current turn beginning with its most recent user
-message. The rendered trajectory is limited to 60,000 characters. When the
-bundle is too large, OpenClaw keeps the first message and newest evidence and
-marks the omitted middle.
+A deep-turn review receives only the current turn beginning with its most
+recent user message. A review triggered by accumulated shallow turns instead
+receives the bounded message window of those same-sender turns (at most 40
+messages); accumulation restarts whenever the sender, provider, model, or auth
+profile changes, so no turn is disclosed to a provider identity other than its
+own. Either way the rendered trajectory is limited to 60,000 characters; when
+the bundle is too large, OpenClaw keeps the first message and newest evidence
+and marks the omitted middle.
 
 The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to
@@ -182790,11 +182878,12 @@ into scan state.
 
 In `propose` and `auto` modes, OpenClaw can also perform a conservative review after successful,
 substantial work and after the whole agent system becomes idle. That isolated review can draft at
-most one pending proposal — a new skill, an update to an existing workspace skill, or a revision
-of a pending proposal. It never writes a live skill directly and cannot apply, reject, or
-quarantine a proposal. In `auto` mode, the orchestrating capture pipeline applies a new-skill
-result afterward through the normal scanner-gated service; update proposals always stay pending
-for operator review.
+most one pending proposal — a new skill, a patch of an existing workspace skill, a full-body
+update, or a revision of a pending proposal. It never writes a live skill directly and cannot
+apply, reject, or quarantine a proposal. Patch proposals quote the exact live text to change; the
+tool composes the full body from the live skill. In `auto` mode, the orchestrating capture
+pipeline applies new-skill and patch results afterward through the normal scanner-gated service;
+full-body update proposals always stay pending for operator review.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -182826,13 +182915,13 @@ the proposal threshold, and troubleshooting.
 | `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
-completed trajectory clears the conservative proposal bar. The foreground model is not prompted
+completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
 to learn before it replies. The background reviewer preserves the foreground run as proposal
 provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
-mode, the capture pipeline applies a resulting new-skill proposal only after the isolated run
-completes; update proposals targeting an existing skill always stay pending for operator review,
-because the reviewer drafts them without reading the live skill body. The review starts only when
-the foreground runtime reports its resolved model
+mode, the capture pipeline applies resulting new-skill and patch proposals only after the
+isolated run completes; full-body update proposals always stay pending for operator review,
+because the reviewer authors them without a mechanical preservation guarantee. The review starts
+only when the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.
 
@@ -183111,16 +183200,9 @@ skills, skill dependency installers, and plugin install/update sources.
   Optional allowlist of directories that may contain the policy executable.
 </ParamField>
 
-<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
-  Bypasses command path ownership and permission checks. Use only when the
-  path is protected by another mechanism.
-</ParamField>
-
-<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
-  Allows the configured command path to be a symlink. The resolved target
-  must still satisfy the other path checks. Interpreter script arguments must
-  be direct regular files, not symlinks.
-</ParamField>
+The policy command and interpreter script arguments must be direct regular
+files with trusted ownership, restricted permissions, and verifiable parent
+directories. Symlinks and insecure paths are rejected.
 
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
@@ -189748,7 +189830,7 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
-Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
+Theme, theme mode, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot. Text size remains browser-local. An explicitly read-only connection applies preference changes only in that browser and does not attempt a config write. Changes made while offline remain queued until a later connection can write config; on a read-only reconnect, they continue to behave as browser-local preferences. See [Configuration reference](/gateway/configuration-reference#ui).
 
 ## OpenClaw system care
 
