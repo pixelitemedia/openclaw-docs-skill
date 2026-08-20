@@ -1498,7 +1498,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     Browser dashboard for chat, config, sessions, and nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone" href="/nodes">
-    Pair iOS and Android nodes for Canvas, camera, and voice-enabled workflows.
+    Pair iOS and Android nodes for camera, screen, and voice-enabled workflows.
   </Card>
 </Columns>
 
@@ -1582,7 +1582,7 @@ Example:
     Channel-specific setup for Discord, Feishu, Microsoft Teams, Telegram, WhatsApp, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
-    iOS and Android nodes with pairing, Canvas, camera, and device actions.
+    iOS and Android nodes with pairing, camera, screen, and device actions.
   </Card>
   <Card title="Help" href="/help" icon="life-buoy">
     Common fixes and troubleshooting entry point.
@@ -2000,7 +2000,7 @@ Most operations flow through the Gateway (`openclaw gateway`), a single long-run
   shared-secret token/password auth, or a correctly configured non-loopback
   `trusted-proxy` deployment.
 - **One Gateway per host** is recommended. For isolation, run multiple gateways with isolated profiles and ports ([Multiple Gateways](/gateway/multiple-gateways)).
-- **Canvas host** is served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
+- **Hosted widget documents and A2UI renderer assets** are served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
 - **Remote access** is typically an SSH tunnel or Tailscale VPN ([Remote Access](/gateway/remote)).
 
 Key references:
@@ -2456,8 +2456,9 @@ Security model details: [Security](/gateway/security).
 ## Using nodes with a VPS
 
 You can keep the Gateway in the cloud and pair **nodes** on your local devices
-(Mac/iOS/Android/headless). Nodes provide local screen/camera/canvas and `system.run`
-capabilities while the Gateway stays in the cloud.
+(Mac/iOS/Android/headless). Nodes provide local screen/camera and `system.run`
+capabilities while the Gateway stays in the cloud. A paired Mac can also present
+hosted widgets in its native panel.
 
 Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
 
@@ -3027,19 +3028,28 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 ### Failure notifications
 
-Failure notifications follow a separate destination path:
+Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default after 2 consecutive failures with a 1-hour cooldown. The route can be a resolved failure destination or the job's primary announce target. Jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
-- The destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`) set a global default for failure notifications. The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
-- `job.delivery.failureDestination` overrides that per job.
-- If neither is set and the job already delivers via `announce`, failure notifications fall back to that primary announce target.
+Failure notification routes resolve in this order:
+
+1. Route fields in the job's `failureAlert` object.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into the global object by `openclaw doctor --fix`.
+3. The job's primary announce target.
+
+- `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
+- Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.
+- A per-job `failureAlert` object or any global `cron.failureAlert` object activates and tunes the policy even when the job had no existing route.
+- `delivery.bestEffort: true` suppresses inherited/default execution-failure alerts. An explicit per-job `failureAlert` remains authoritative.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
-Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
-Chat notifications show the normalized failure cause when one is available and keep raw commands, paths, and provider errors in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. The scheduler may notify immediately only through a resolved alternate failure destination; it never retries the already-failed primary route.
 
-Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
+Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
+Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+The scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
 ### Output language
 
@@ -7234,7 +7244,7 @@ title: "Discord Activities"
 
 Discord Activities let an agent post an interactive, self-contained HTML widget to the current Discord channel. The message includes an **Open widget** button; clicking it launches the widget inside Discord.
 
-The feature is off by default. OpenClaw registers the Activity HTTP routes, the `show_widget` agent tool, and the launch-button handler only when `channels.discord.activities` is present and a client secret resolves. The deprecated `discord_widget` alias remains available for one release.
+The feature is off by default. `show_widget` remains one core-owned tool. When `channels.discord.activities` is present and a client secret resolves, the Discord Activity routes, launch-button handler, and current-channel presenter become available behind that tool. Without the block, requests to the public Activity prefix remain indistinguishable from an unregistered route. No Discord-specific widget tool or alias exists.
 
 ## Prerequisites
 
@@ -7313,6 +7323,8 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
   </Step>
 </Steps>
 
+Core validates and wraps the widget document before handing it to Discord. The presenter accepts HTML source up to 48 KiB, stores the canonical composed document, and always labels the Activity button **Open widget**. The standard `show_widget` pin, name, tab, size, frame, ordering, and capability fields remain available because dashboard state stays core-owned. Registered non-HTML widget kinds are not offered when Discord is the only available presentation route.
+
 ## Security model
 
 - OAuth identifies the Discord user before widget metadata is returned.
@@ -7322,7 +7334,7 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
 - Widgets expire after seven days, with at most 64 retained per Discord plugin instance.
 - Widget HTML is authored by your agent and should be treated as trusted content. Do not embed secrets you would not want a buggy widget to expose.
 - The widget can navigate within its own nested frame. The `sandbox="allow-scripts"` iframe blocks top-level navigation, popups, and same-origin access, while its Content Security Policy blocks network connections and external resources. These controls are defense-in-depth, not a security boundary against the agent that authored the widget.
-- When Activities is disabled, `/discord/activity` is not registered at all.
+- When Activities is disabled or its required account credentials are unavailable, the route remains registered internally but public requests under `/discord/activity` are left unhandled and return the normal 404.
 
 The public Activity shell and token-exchange route become reachable through your tunnel when enabled. They do not expose widget HTML without a valid OAuth session and one-time document capability.
 
@@ -7333,7 +7345,7 @@ The public Activity shell and token-exchange route become reachable through your
 - confirm the tunnel is running and routes to the gateway's actual bind port
 - confirm the Developer Portal target includes `/discord/activity`
 - restart the gateway after changing Discord or OpenClaw configuration
-- check gateway logs for the one-line warning about a missing Activities client secret
+- confirm the Discord bot token and Activities client secret both resolve in the running gateway; incomplete credentials keep `/discord/activity` externally hidden behind the normal 404
 
 ### Discord opens a blank page or reports `blocked:csp`
 
@@ -7349,7 +7361,7 @@ Launch the button from the channel where the agent posted it. OpenClaw tracks la
 
 ### “You cannot launch Activities in this channel”
 
-Discord does not launch Activities from forum-post threads. OpenClaw can post the widget message and button there, but launch the Activity from a regular text channel instead. This restriction comes from Discord, not OpenClaw.
+Discord does not launch Activities from forum-style channels. OpenClaw rejects the Activity component delivery there instead of posting a button that cannot work. Ask for the widget from a regular text channel instead.
 
 
 
@@ -8565,6 +8577,7 @@ Auto-join example:
           {
             guildId: "123456789012345678",
             channelId: "234567890123456789",
+            whenOccupied: true,
           },
         ],
         allowedChannels: [
@@ -8608,6 +8621,8 @@ Notes:
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
 - Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
+- `voice.autoJoin[].whenOccupied` defaults to `false`. Set it to `true` for an auto-managed room that should contain the bot only while at least one human is present. OpenClaw joins on the first human arrival and leaves after the last human departs; the OpenClaw bot and other bots do not count. Startup, fresh gateway sessions, and resumed gateway sessions reconcile from Discord's voice-state roster.
+- Occupancy management owns only sessions that it joined. A manual `/vc join`, transcript capture, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
 - OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
@@ -8662,7 +8677,7 @@ Behavior:
 Choose between the join modes:
 
 - Use `followUsers` for personal or operator setups where the bot should automatically be in voice when you are.
-- Use `autoJoin` for fixed-room bots that should be present even when no tracked user is in voice.
+- Use `autoJoin` for fixed rooms. Add `whenOccupied: true` when the bot should be present only while humans are in that room; omit it for always-on voice presence.
 - Use `/vc join` for one-off joins or rooms where automatic voice presence would be surprising.
 
 Discord voice codec:
@@ -9054,7 +9069,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 ### Discord Activities
 
-Set `channels.discord.activities` to let agents post self-contained HTML widgets that open inside Discord. The block is opt-in; when absent, OpenClaw registers no Activity routes, tool, or interaction handler. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
+Set `channels.discord.activities` to let the core `show_widget` tool post self-contained HTML widgets that open inside Discord. The block is opt-in. Discord registers the Activity plumbing statically, but the current-channel presenter stays unavailable and `/discord/activity` remains externally hidden behind the normal 404 until an enabled account has an available bot token, resolved client secret, and application ID. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
 
 - `activities.clientSecret`: OAuth2 client secret for the Discord application; falls back to `DISCORD_CLIENT_SECRET`
 - `activities.applicationId`: optional Activity application ID; defaults to the bot application ID learned at gateway startup
@@ -10528,7 +10543,7 @@ Control how group/room messages are handled per channel:
     - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
     - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
     - Slack: allowlist uses `channels.slack.channels`.
-    - Matrix: allowlist uses `channels.matrix.groups`. Use room IDs (`!room:server`) or aliases (`#alias:server`); room-name keys match only with `channels.matrix.dangerouslyAllowNameMatching: true`, and unresolved entries are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
+    - Matrix: allowlist uses `channels.matrix.groups`. Use room IDs (`!room:server`, or the suffixless `!room` form on room version 12+) or aliases (`#alias:server`); room-name keys match only with `channels.matrix.dangerouslyAllowNameMatching: true`, and unresolved entries are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
     - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`: `groupEnabled`, `groupChannels`).
     - Telegram: sender allowlists accept numeric user IDs only (`"123456789"`; `telegram:`/`tg:` prefixes are stripped case-insensitively). `@username` entries do not match at runtime and log a warning; setup resolves `@username` to IDs. Negative chat IDs belong under `channels.telegram.groups`, not sender allowlists.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
@@ -13200,7 +13215,7 @@ Password-based (token is cached after first login):
 <Warning>
 Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invites, or `autoJoin: "always"` to accept every invite.
 
-`autoJoinAllowlist` accepts only `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
+`autoJoinAllowlist` accepts only a literal room ID (`!roomId:server`, or the suffixless `!roomId` form used by [room version 12](https://spec.matrix.org/latest/rooms/v12/) and later), `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
 </Warning>
 
 ```json5
@@ -13223,8 +13238,8 @@ Matrix user IDs are case-sensitive. Copy the exact `@user:server` value Matrix r
 
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
 - Approval forwarding (`approvals.exec.targets[].to` with `channel: "matrix"`): use `user:@user:server` with the exact Matrix casing.
-- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
-- Invite allowlists (`autoJoinAllowlist`): use `!room:server`, `#alias:server`, or `*`. Plain names are always rejected.
+- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` (or the suffixless `!room` form on room version 12+) or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
+- Invite allowlists (`autoJoinAllowlist`): use `!room:server` (or suffixless `!room` on room version 12+), `#alias:server`, or `*`. Plain names are always rejected.
 
 ### Account ID normalization
 
@@ -13949,7 +13964,7 @@ Named accounts can override the top-level default with `channels.matrix.accounts
 Matrix accepts these target forms anywhere OpenClaw asks for a room or user target:
 
 - Users: `@user:server`, `user:@user:server`, or `matrix:user:@user:server`
-- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server`
+- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server` (room version 12+ room IDs have no `:server` suffix — `!room`, `room:!room`, `matrix:room:!room` — and are accepted the same way)
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
 Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
@@ -28365,9 +28380,11 @@ Reminders created from an active chat preserve the live chat delivery target for
 
 Failure notifications resolve in this order:
 
-1. `delivery.failureDestination` on the job.
-2. The global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
+1. Route fields in the job's `failureAlert` object.
+2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
+
+Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
 
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
@@ -28378,6 +28395,8 @@ Chat failure notifications include the run start time in the agent's configured 
 Isolated automation runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
+
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. It can notify immediately only through a resolved alternate failure destination, never the primary route that just failed.
 
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model automation failures.
 
@@ -28650,8 +28669,10 @@ openclaw daemon uninstall
 | `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
 | `uninstall` | `--json`                                                                                         |
 | `start`     | `--json`                                                                                         |
-| `stop`      | `--json`, `--disable` (launchd only: persistently suppress KeepAlive/RunAtLoad until next start) |
+| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)   |
 | `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                            |
+
+`--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
@@ -31273,8 +31294,7 @@ openclaw [--dev] [--profile <name>] <command>
     invoke
     notify
     push
-    canvas snapshot|present|hide|navigate|eval
-    canvas a2ui push|reset
+    canvas present|hide|navigate
     camera list|snap|clip
     screen record
     location get
@@ -31513,6 +31533,10 @@ A good infer-based skill maps common user intents to the right subcommand, inclu
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
   remains aggregate; `--agent` scopes saved-auth and per-agent selection facts. Gateway-owned TTS
   provider state remains Gateway-global, so `tts providers --gateway` does not accept `--agent`.
+- Commands that resolve agent-owned model or auth state (`model run`, `image generate`, `image edit`,
+  `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
+  `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
+  an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -31609,6 +31633,7 @@ File transcription (not realtime session management).
 
 ```bash
 openclaw infer audio transcribe --file ./memo.m4a --json
+openclaw infer audio transcribe --agent <id> --file ./memo.m4a --json
 openclaw infer audio transcribe --file ./team-sync.m4a --language en --prompt "Focus on names and action items" --json
 openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --json
 ```
@@ -31643,6 +31668,7 @@ Generation and description.
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
 openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
+openclaw infer video describe --agent <id> --file ./clip.mp4 --json
 openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --json
 ```
 
@@ -34082,9 +34108,9 @@ created are rejected instead of changing what the node executes.
 # Section: cli/nodes.md
 
 ---
-summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/canvas/screen/location/notify)"
+summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/screen/location/notify and the macOS widget panel)"
 read_when:
-  - You're managing paired nodes (cameras, screen, canvas)
+  - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
 title: "Nodes"
 ---
@@ -34140,7 +34166,7 @@ openclaw nodes invoke --node <id> --command system.which --params '{"bins":["una
 
 Flags:
 
-- `--command <command>` (required): e.g. `canvas.eval`.
+- `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
 - `--idempotency-key <key>`: optional idempotency key.
@@ -34162,7 +34188,7 @@ openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp
 - `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
 - Explicit screen output paths are staged beside the destination and replace it only after a complete write; a failed write leaves an existing file unchanged.
 
-Camera and Canvas commands have their own docs: [Camera nodes](/nodes/camera), [Canvas](/platforms/mac/canvas). Canvas is implemented by the bundled experimental Canvas plugin; core keeps `openclaw nodes canvas` as a compatibility mount point.
+Camera and macOS widget-panel commands have their own docs: [Camera nodes](/nodes/camera), [Widget panel](/platforms/mac/canvas). The bundled experimental Canvas plugin registers `openclaw nodes canvas` with the surviving `present`, `hide`, and `navigate` subcommands.
 
 ## Related
 
@@ -42516,9 +42542,6 @@ Standard files OpenClaw expects inside the workspace:
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
-  <Accordion title="canvas/ - Canvas UI files (optional)">
-    Canvas UI files for node displays (for example `canvas/index.html`).
-  </Accordion>
 </AccordionGroup>
 
 <Note>
@@ -42844,9 +42867,9 @@ title: "Gateway architecture"
 - **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
   declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
-- The **canvas host** is served by the Gateway HTTP server under:
-  - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
-  - `/__openclaw__/a2ui/` (A2UI host)
+- The **hosted widget surface** is served by the Gateway HTTP server under:
+  - `/__openclaw__/canvas/` (hosted widget documents)
+  - `/__openclaw__/a2ui/` (A2UI renderer assets)
 
   It uses the same port as the Gateway (default `18789`).
 
@@ -42870,7 +42893,8 @@ title: "Gateway architecture"
 - Connect to the **same WS server** with `role: node`.
 - Provide a device identity in `connect`; pairing is **device-based** (role `node`) and
   approval lives in the device pairing store.
-- Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
+- Expose commands like `camera.*`, `screen.record`, and `location.get`; the
+  macOS app also exposes widget-panel commands under `canvas.*`.
 
 Protocol details: [Gateway protocol](/gateway/protocol)
 
@@ -44823,8 +44847,8 @@ title: "Features"
 
 - WebChat and browser Control UI
 - macOS menu bar companion app
-- iOS node with pairing, Canvas, camera, screen recording, location, and voice
-- Android node with pairing, chat, voice, Canvas, camera, and device commands
+- iOS node with pairing, camera, screen recording, location, and voice
+- Android node with pairing, chat, voice, camera, and device commands
 
 **Tools and automation:**
 
@@ -45025,7 +45049,7 @@ A nonzero exit aborts creation and removes the new worktree and branch. This is 
 
 ## Session worktrees
 
-Start an isolated chat from a Git-backed folder with a worktree session: on the Control UI's New session page, use the **Place** picker to choose a Gateway source folder, then select **Worktree** (with an optional base branch and worktree name). When the name is omitted, OpenClaw derives it from the explicit session label or the concise title generated from the first message, then falls back to a crustacean-themed name. The choice appears only after the Gateway confirms that the selected folder is a Git checkout; ordinary folders run directly and show no Git isolation control. iOS exposes the same choice from Chat actions, and Android exposes it beside New Chat, when the active agent workspace is Git-backed.
+Start an isolated chat from a Git-backed folder with a worktree session: on the Control UI's New session page, use the **Place** picker to choose a Gateway source folder, then select **Worktree** (with an optional base branch and worktree name). Choosing a paired device or cloud profile forces this managed-worktree path from the selected Gateway source; remote placement never browses or binds a node working directory. When the name is omitted, OpenClaw derives it from the explicit session label or the concise title generated from the first message, then falls back to a crustacean-themed name. The choice appears only after the Gateway confirms that the selected folder is a Git checkout; ordinary folders can run directly only on the Gateway and show no Git isolation control. iOS exposes the same choice from Chat actions, and Android exposes it beside New Chat, when the active agent workspace is Git-backed.
 
 The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at `operator.write`; selecting an arbitrary host folder still requires `operator.admin`.
 
@@ -45033,11 +45057,11 @@ Coding agents can also call `suggest_task` when they discover confirmed follow-u
 
 OpenClaw exposes these tools only to operator sessions with an actionable Gateway UI. Channel sessions and local/embedded TUI sessions do not receive them until those surfaces have a portable typed task-action contract.
 
-The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope, but repository checkout hooks and the `.openclaw/worktree-setup.sh` step run only for `operator.admin` callers because they execute repository code; `.worktreeinclude` provisioning still applies to every caller. Deleting the session removes the worktree only when doing so is lossless. Dirty worktrees or branches with unpushed commits stay available; hourly cleanup snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
+The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope, but repository checkout hooks and the `.openclaw/worktree-setup.sh` step run only for `operator.admin` callers because they execute repository code; `.worktreeinclude` provisioning still applies to every caller. Deleting the session attempts to snapshot and remove its managed worktree, including dirty worktrees and branches with unpushed commits. Hourly cleanup also snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
-`sessions.create` may include an absolute `cwd` to run directly in another Gateway folder, to choose the source checkout together with `worktree: true`, or to set a paired node's working directory. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces and every paired-node working directory require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace.
+`sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. New Session dispatches a completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. Deleting a session reports a preserved dirty checkout as `worktreePreserved` instead of silently leaving it behind.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
 
 ## Snapshots, cleanup, and restore
 
@@ -46703,8 +46727,8 @@ For self-hosted instances, point `baseUrl` to your local server (for example
 ## Migrating existing memory
 
 If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
-`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
-offers to migrate them.
+`IDENTITY.md`, `memory/`), `openclaw honcho setup` detects and offers to
+migrate them.
 
 <Info>
 Migration is non-destructive - files are uploaded to Honcho. Originals are
@@ -48671,6 +48695,22 @@ Plugin-owned capability split:
 - Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
 - Web search stays on provider id `minimax`
 
+### llama.cpp
+
+The bundled `llama-cpp` plugin provides one local text provider with two setup choices:
+
+- **Managed local server** installs and supervises a verified llama-server and local GGUF files.
+- **Existing llama-server** connects to a server that you operate and discovers its models.
+
+Install the plugin once for either path:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
+
+Both use `llama-cpp/<model>` references. See [llama.cpp](/plugins/llama-cpp) for setup,
+discovery, authentication, and managed local embeddings.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:
@@ -48823,7 +48863,7 @@ Example (OpenAI-compatible):
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
     - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
-    - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
+    - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata, local-use NAT64 (`64:ff9b:1::/48`) destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
     - For `api: "anthropic-messages"` on non-direct endpoints (any provider other than canonical `anthropic`, or a custom `models.providers.anthropic.baseUrl` whose host is not a public `api.anthropic.com` endpoint), OpenClaw suppresses implicit Anthropic beta headers such as `claude-code-20250219`, `interleaved-thinking-2025-05-14`, and OAuth markers, so custom Anthropic-compatible proxies do not reject unsupported beta flags. Set `models.providers.<id>.headers["anthropic-beta"]` explicitly if your proxy needs specific beta features.
@@ -49829,7 +49869,7 @@ Start a session as a draft to keep work in progress out of teammates' sidebars u
 
 Turn sender attribution is best-effort. Steering can merge input into an active turn, so the transcript cannot always represent each person's contribution as a separate turn. Participant history records that an actor prompted the session, not which words were theirs.
 
-Authenticated people can link a GitHub account under **Settings → Profile → Identity**. Linking is an explicit opt-in to public `Co-authored-by` credit on commits an agent creates from sessions they have prompted. Attribution uses the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, and unlink behavior.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate, default-off **Git co-author credit** toggle. Attribution uses that explicit preference plus the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
 
 ## Related
 
@@ -55224,7 +55264,7 @@ read_when:
   - You want stable preferences to guide future sessions
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
-  - You want to link GitHub credit to your Gateway profile
+  - You want verified GitHub identity and optional commit credit on your Gateway profile
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
@@ -55233,15 +55273,21 @@ OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate 
 
 ## Gateway profile and GitHub credit
 
-Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative even when you link GitHub.
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified.
 
-Enter a GitHub username in the **GitHub** row to opt into public commit attribution. The Gateway resolves the public account through GitHub, stores its stable numeric account id and current login, and derives a GitHub noreply address. OpenClaw never requests or stores a private GitHub email for this feature.
+GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint, requires the returned email to match the authenticated proxy principal and the identity provider to be GitHub, then resolves the canonical GitHub login from the returned numeric account id. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account id plus the current canonical login.
 
-When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. All linked profile-backed human participants are eligible; channel-only identities, agents, bots, and the configured primary Git author are excluded. The participant set is bounded to 32 and recorded best-effort. The run tells the model when an eligible profile is unlinked or the bound may be incomplete; it never guesses an identity from transcript names.
+The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
+
+Identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+
+Public commit metadata is a separate choice. **Git co-author credit** defaults off. Enabling it adds the verified account's public GitHub noreply address to commits created from shared sessions; OpenClaw never requests or stores a private GitHub email for this feature. Signing in as a different numeric GitHub account resets the choice, so one account cannot inherit another account's consent.
+
+When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. Profile-backed human participants with verified GitHub identity and Git co-author credit enabled are eligible; channel-only identities, agents, bots, and the configured primary Git author are excluded. The participant set is bounded to 32 and recorded best-effort. The run tells the model when a profile has no enabled credit or the bound may be incomplete; it never guesses an identity from transcript names.
 
 OpenClaw supplies exact trailers in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The trailers are not exported through the process or shell environment. Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so the instruction and post-commit verification are the enforcement boundary.
 
-Changing the linked username resolves and stores the new public account. **Disconnect** stops attribution for future runs; it does not rewrite commits that already contain the public trailer.
+Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
 
 ## Write directives, not observations
 
@@ -56669,7 +56715,6 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 | `gatewayTls=1`                | Only when TLS is enabled.                                                      |
 | `gatewayTlsSha256=<sha256>`   | Only when TLS is enabled and a fingerprint is available.                       |
 | `gatewayDirectReachable=1`    | Only when the gateway is directly reachable (not only via a relay/proxy path). |
-| `canvasPort=<port>`           | Only when the canvas host is enabled; currently the same as `gatewayPort`.     |
 | `tailnetDns=<magicdns>`       | mDNS full mode only; optional hint when Tailnet is available.                  |
 | `sshPort=<port>`              | Full mode only; omitted in minimal and off modes.                              |
 | `cliPath=<path>`              | Full mode only; omitted in minimal and off modes.                              |
@@ -56874,7 +56919,7 @@ Client to gateway:
 
 Gateway to client:
 
-- `invoke` / `invoke-res`: node commands (`canvas.*`, `camera.*`, `screen.record`, `location.get`, `sms.send`).
+- `invoke` / `invoke-res`: node commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `camera.*`, `screen.record`, `location.get`, `sms.send`).
 - `event`: chat updates for subscribed sessions.
 - `ping` / `pong`: keepalive.
 
@@ -57439,13 +57484,15 @@ current in-memory run state:
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
 4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
-   `activeRunIds`, when present, contains known exact active run identities and
-   can be empty while aggregate activity is still true. Omission means the field
-   was not projected and provides no identity information. In incremental merge
-   events, replace the cached list when the field is present; an empty array is
-   the tombstone that clears prior exact identities. Correlate only a run ID the
-   client owns locally or received from a request, history response, or event,
-   and never select the first list entry as an owner.
+   `activeRunIds`, when present, is the complete exact active set; an empty array
+   therefore proves the session is idle. When `hasActiveRun` is true and
+   `activeRunIds` is omitted, another runtime owner is active but its exact run
+   identities are unavailable. In incremental merge events, omission means no
+   change, `null` is the event-only tombstone that clears cached exact IDs to
+   unavailable, and an array replaces the cache (including `[]` for proven
+   idle). Correlate only a run ID the client owns locally or received from a
+   request, history response, or event, and never select the first list entry as
+   an owner.
 5. Show an observer headline or run-inspector link only when the observer digest's
    exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
    make a retained digest current.
@@ -57453,6 +57500,23 @@ current in-memory run state:
    Maintain the highest accepted sequence independently for each run, ignore an
    already-seen or lower sequence, and treat a forward gap as a reason to reload
    authoritative history.
+
+### Active-run cache matrix
+
+Classify the source before applying `activeRunIds`; the same omission has
+different meaning in a full snapshot and an incremental delta.
+
+| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
+| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
+| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
+| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
+| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
+| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside
@@ -57569,7 +57633,7 @@ Enrollment is environment-owned and replay-safe. The Gateway persists one setup 
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
 <Note>
-Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and the Gateway does not advertise `sessions.dispatch`. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
+Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and profile dispatch is unavailable. `sessions.dispatch` may still be advertised for eligible paired-device targets. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
 </Note>
 
 ## What runs where
@@ -57585,6 +57649,8 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 The bundled Crabbox provider supports `worker-turn` through the node transport. Codex `remote-exec` remains available only with a provider that explicitly supports its SSH sandbox carrier; OpenClaw rejects a node-only profile before allocating a lease.
 
 After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control and workspace transfer use the authenticated node and worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
+
+For a loopback Gateway behind public HTTPS ingress, set `gateway.publicOrigin` to the proxy's bare origin. Node enrollment uses it as the default external pairing endpoint; `plugins.entries.device-pair.config.publicUrl` remains the pairing-specific override. When that local proxy sends forwarded client headers, list only its listener address under `gateway.trustedProxies` (typically loopback).
 
 ## Requirements
 
@@ -57661,11 +57727,27 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 Profile fields:
 
-| Key        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                                                                                                                                                                                  |
-| `install`  | Installation preference for SSH-backed providers. The bundled Crabbox provider always installs the current Gateway bundle through the authenticated node channel.                                                                                                                                                                                                                                              |
-| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional idempotent `setup`, and absolute `binary` path. While a session remains placed, OpenClaw heartbeats its lease at a safe fraction of `idleTimeout`; teardown stops the heartbeat before releasing the machine. Crabbox desktop profiles are not supported by the node transport. |
+| Key        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `install`  | Installation preference for SSH-backed providers. The bundled Crabbox provider always installs the current Gateway bundle through the authenticated node channel.                                                                                                                                                                                                                                                                                                                 |
+| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional idempotent `setup`, optional `desktop`, and absolute `binary` path. While a session remains placed, OpenClaw heartbeats its lease at a safe fraction of `idleTimeout`; teardown stops the heartbeat before releasing the machine. `desktop: true` asks Crabbox to warm the lease with its browser and loopback RFB desktop before node enrollment. |
+
+### Per-project default profiles
+
+Use `cloudWorkers.projectProfiles` to select a default profile from a managed session worktree's `origin` remote. Keys use the normalized lowercase repository identity `host/owner/repo`, without a trailing `.git`:
+
+```json5 validate=false
+{
+  cloudWorkers: {
+    projectProfiles: {
+      "github.com/acme/app": "aws",
+    },
+  },
+}
+```
+
+An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. If a configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
 
 The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Provision replay first adopts the fixed Crabbox lease, then either resumes that node state or reuses the still-pending setup credential. It never mints a second environment identity for the same operation.
 
@@ -57701,11 +57783,11 @@ The `environments.list` response must include the configured id under `profiles`
 
 ## Dispatching a session
 
-Operators with `operator.write` can run an authorized managed-worktree session on shared runner infrastructure that a Team Gateway administrator has already provisioned and paired. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
+Administrators can run an authorized managed-worktree session on a configured cloud profile. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
 
 In the Control UI, open **New Session** and use the unified **Place** picker to choose both the working folder and a **Cloud · profile** destination. A cloud destination appears only when all four eligibility gates pass:
 
-1. The connected operator has `operator.write` scope.
+1. The connected operator has `operator.admin` scope.
 2. `environments.list` advertises at least one configured profile.
 3. The selected Gateway folder is a Git checkout that can use a managed worktree.
 4. The selected agent runtime advertises cloud placement support.
@@ -57723,7 +57805,7 @@ Other runtimes remain unavailable unless their harness explicitly declares a clo
 
 The equivalent RPC flow is:
 
-Create a session with a managed worktree, then dispatch it. The RPC requires `operator.write` and is advertised only while at least one worker profile is configured:
+Create a session with a managed worktree, then dispatch it. Profile dispatch requires `operator.admin` and is available only while at least one worker profile is configured:
 
 ```bash
 openclaw gateway call sessions.create \
@@ -57750,11 +57832,13 @@ The bundled Crabbox provider advertises whatever machine classes the configured 
 
 Completed cloud turns reconcile eligible, size-bounded workspace files back into the session's managed worktree before the turn claim is released. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. The resulting file changes remain in the managed worktree for normal review and commit.
 
+To publish the finished work, the agent calls `github_publish` as its final action and then completes the turn. The call records only a single-line title, body, and idempotency key. After reconciliation is durably accepted, but before the exact turn claim is released, the Gateway re-resolves the session-owned managed worktree and effective GitHub identity. It uses the title as the commit subject, appends deterministic verified participant trailers, pushes the authoritative branch through an exact HTTPS path, and creates or reuses a draft pull request. The terminal transcript entry contains either the pull request URL or a typed failure with the next action. A restart resumes from the accepted workspace-result fence and remote branch or pull-request evidence; it never gives the recovered worker new forge authority.
+
 Apply uses the dispatch-time manifest as the merge base. Cloud-only changes are applied, local-only changes stay in place, and paths changed on both sides use a three-way keep-local policy. A conflicted turn still finishes: the transcript reports the bounded path summary and staged result ref, the placement exposes the same conflict for the Control UI, and non-conflicting cloud changes remain applied. The notice includes `git show <ref>:<path>` to inspect a present cloud file and a top-level literal-pathspec `git checkout <ref> -- <path>` command to take it from any workspace directory. Run the commands in Bash or zsh (Git Bash on Windows). If inspect says the path does not exist, the cloud result deleted it; verify and remove the retained local path manually. If checkout reports a file/directory obstruction, move or remove the blocking local path and retry. If the staged ref itself is gone, treat the notice as stale and do not change the local path. Conflicted staged refs remain available after the normal turn fence is released; a later clean result clears the notice and retires the old ref, while explicit fence removal is the final cleanup boundary.
 
 While a fenced result is still reconciling, a new turn waits up to 15 seconds for the prior claim to release. If it is still busy, the turn fails with an actionable “previous cloud turn's workspace result is still reconciling” message and can be retried shortly. On restart, recovery discovers pending and staged results before stale-claim cleanup, completes or retries their local apply, and reclaims dead environments only after preserving the result. The bounded SQLite rollback journal makes an interrupted filesystem apply recoverable without replaying already accepted mutations.
 
-To continue the same session somewhere else, an operator with `operator.write` can open the **Runs on Cloud** chip and choose **Move session…**. Select the Gateway, a paired device, or a configured cloud profile and, when available, its machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
+To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. An operator with `operator.write` can select the Gateway or an eligible paired device; selecting a configured cloud profile requires `operator.admin`. Profiles may also offer a machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
 
@@ -57792,9 +57876,15 @@ Workspace state has a wider loss window. A completed turn reconciles cloud files
 
 After a failed placement, redispatch the session and retry the turn. A reclaimed placement redispatches automatically on the next turn. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
 
-## Desktop
+## Desktop (interactive)
 
-The bundled Crabbox provider does not support Cloud Worker Desktop after node transport convergence. Crabbox profiles with `settings.desktop: true` are rejected before allocation. Interactive desktop support requires a provider with a separate supported desktop carrier.
+Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Crabbox profile. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned.
+
+The bundled Crabbox plugin supports direct AWS profiles. Coordinator-backed AWS and Hetzner profiles are supported when the selected coordinator advertises Desktop and Browser capability. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
+
+Crabbox provisions XFCE on display `:99`, an authenticated RFB server on `127.0.0.1:5900`, a fresh lease-scoped browser profile with CDP on `127.0.0.1:9222`, and fixed zero-argument Browser and Terminal launchers. The provider also installs an OpenClaw worker wallpaper so the disposable desktop is easy to identify. Setup is idempotent and runs before node enrollment on every provisioning replay.
+
+The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.password` locally, probes the authenticated loopback RFB server, and redeems a single-use Gateway broker ticket over the node's already-connected origin. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration.
 
 ## Security model
 
@@ -57803,13 +57893,14 @@ The bundled Crabbox provider does not support Cloud Worker Desktop after node tr
 - **Minted credentials, hashed at rest.** Each dispatch mints a worker credential; the Gateway stores only its hash. Credential rotation and owner-epoch fencing guarantee at most one live owner per session — a stale worker that reconnects is fenced, never merged.
 - **Environment-bound enrollment.** One short-lived node-only setup credential is bound to the durable environment before allocation. Its first authenticated Ed25519 device identity is recorded atomically with setup completion; replay cannot substitute an unrelated node.
 - **No standing model, forge, or cloud credentials on the box.** OpenClaw worker turns proxy inference by `{provider, model}` reference. Codex remote-exec keeps the app-server plus ChatGPT subscription or API-key auth on the Gateway and sends only sandbox operations to the box. Remote-exec requires prepared auth and rejects ambient auth fallback. Workspace git commits are authored without forge credentials, and Crabbox AWS lease metadata is checked authoritatively for an instance role before setup. Keep setup commands credential-free too.
+- **Gateway-owned GitHub publication.** Publication credentials stay in the effective managed or native GitHub profile on the Gateway. The broker disables repository hooks, refuses configured Git clean filters, uses a temporary index and `git commit-tree`, pushes only a reconstructed public HTTPS URL with a command-local `gh auth git-credential` helper, and never writes a bearer token to argv, a remote URL, `.git/config`, a worker payload, or a transcript.
 - **Provider-owned egress.** Gateway-proxied inference removes any OpenClaw need for direct model access, but OpenClaw does not rewrite provider firewalls. Restrict outbound traffic in the worker provider when the task requires it.
 - **Durable, exactly-once worker transcripts.** In worker-turn mode, the worker commits transcript batches through a compare-and-swap protocol against the session's leaf; a stale base fail-stops the run instead of duplicating or rebasing paid output. Remote-exec writes through the Gateway's normal local harness path.
 
 ## Troubleshooting
 
 - **No cloud profile is advertised** — run the `operator.read`-scoped `openclaw gateway call environments.list --params '{}'`. If the response has no `profiles`, ask an administrator to validate `cloudWorkers.profiles`, inspect the provider plugin, and restart the Gateway. This is a configuration or provider-activation problem, not an authorization result.
-- **Cloud destinations are hidden or an RPC is denied** — placing, reclaiming, or moving a session requires `operator.write`; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
+- **Cloud destinations are hidden or an RPC is denied** — cloud profile dispatch and profile-target moves require `operator.admin`. `operator.write` can dispatch or move to an eligible paired device, move to the Gateway, and reclaim a placement; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
 - **The selected runtime lacks cloud placement support** — choose a model whose advertised runtime supports cloud placement. The bundled OpenClaw and Codex runtimes are supported; undeclared runtimes remain local-only.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.
@@ -57822,6 +57913,7 @@ The bundled Crabbox provider does not support Cloud Worker Desktop after node tr
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.
 - **Cloud session disk-space warning** — delete unneeded files from the remote workspace or stop the cloud worker before large writes. The warning clears automatically after the next successful sample shows enough free space; a failed sample leaves the last successful warning visible and does not affect the session lifecycle.
 - **“The previous cloud turn's workspace result is still reconciling”** — the Gateway waited briefly for the prior result's durable fence and could not acquire the session claim. Wait for reconciliation to finish, then retry the turn; restarting the Gateway is safe because recovery preserves staged results before reclaiming a dead worker.
+- **GitHub publication failed** — open **Agents → Tools → GitHub Identity** and confirm the effective `@login`, selected scope, access expiry, and refresh state. Reconnect GitHub when refresh is expired or unavailable; use a managed PAT only as the explicit fallback. For push rejection, inspect repository write access and branch drift; `/user` verification does not prove repository write access and the broker never force-pushes. For pull request rejection, grant pull-request write access and call `github_publish` again with a new tool call.
 - **Lease housekeeping** — `crabbox list --provider <backend> --json` is a read-only inventory. `crabbox stop --provider <backend> --id <lease>` and `crabbox release --provider <backend> --id <lease>` are destructive and release a lease manually. OpenClaw keeps the lease alive while its session is placed, then stops heartbeating during teardown so genuinely idle leases expire on the profile's `idleTimeout`. Crabbox 0.43.0 and older do not expose the heartbeat command; OpenClaw warns once per environment and cannot prevent coordinator-idle reaping on those binaries.
 
 ## Related
@@ -57928,14 +58020,32 @@ the only path for external traffic.
 
 ## Step 4: Decide how nodes and workers get in
 
-Access protects every route on the hostname, including the ones nodes use. Pick one:
+Access protects every route on the hostname, including the ones nodes use. A node can
+authenticate to Access on every leg it needs — the join request, the main Gateway
+WebSocket, the worker socket, and worker transfers — so the recommended path exposes
+nothing publicly.
 
-- **Exempt the self-authenticating routes.** Allow `/j/*` and `/__openclaw__/worker`
-  without Access identity, and keep WebSocket upgrade enabled on the worker route. Both
-  enforce their own short-lived credentials, so they do not depend on Access. See
-  [Nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
-- **Use an Access service token.** Add a Service Auth policy and give the node
-  `gateway.cloudflareAccess.clientId` / `clientSecret`. See [Node CLI](/cli/node).
+**Recommended: give the node an Access service token.** Add a Service Auth policy to the
+application, then on the node host:
+
+```bash
+export CF_ACCESS_CLIENT_ID="<client-id>"
+export CF_ACCESS_CLIENT_SECRET="<client-secret>"
+openclaw connect https://gateway.example/j/<code> --service
+```
+
+`openclaw connect` persists these as env SecretRefs under
+`gateway.cloudflareAccess.clientId` / `clientSecret`; see [Node CLI](/cli/node). The only
+cost is that the node needs those two values before the join command, so a join link is no
+longer paste-and-go on its own.
+
+**Alternative: exempt the self-authenticating routes.** Allow `/j/*` and
+`/__openclaw__/worker` without Access identity, keeping WebSocket upgrade enabled on the
+worker route. Both enforce their own short-lived credentials — a join code is single-use
+with a TTL, rate-limited per IP, and answers failures with an opaque 404; worker admission
+carries its own expiring credential. This keeps join links paste-and-go, at the cost of
+making those two routes publicly reachable. Prefer the service token unless you need that
+onboarding flow. See [Nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 
 If you do neither, `openclaw connect` fails against the tunnel even though the browser
 works, because the join request is redirected to the Access login page.
@@ -58578,7 +58688,7 @@ Periodic heartbeat runs.
 
 ### `agents.defaults.systemAgent`
 
-Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults. It is also the fallback owner when `models.list`, `models.authStatus`, `skills.status`, or `doctor.memory.status` omits `agentId`:
+Selects the agent whose model and credentials own ambient OpenClaw system work: system-agent and Custodian consults, and the fallback owner whenever an ambient path omits `agentId`. That includes `models.list`, `models.authStatus`, `skills.status`, and `doctor.memory.status`, the default agent directory and workspace behind auth, model-catalog, and doctor resolution, outbound channel bootstrap and queued-delivery recovery, unscoped main-session routing, Talk relay ownership, and first-run onboarding:
 
 ```json5
 {
@@ -58590,7 +58700,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-An explicit request `agentId` always wins. Other agent-scoped methods do not use this setting as a general default. Delegated consults with a requesting agent keep that requester as their owner. When `systemAgent.agentId` is absent, a sole configured agent resolves implicitly; the four reads above and ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner. The four reads above opt in individually; other agent-scoped Gateway methods, such as `tools.*`, `commands.*`, chat history, and session-catalog reads, do not use this setting as a general default. Surfaces that pick one agent's view also keep requiring an explicit choice, because silently adopting this owner would hide the other agents: `openclaw sessions` (add `--agent <id>` or `--all-agents`), `openclaw hooks` status, `openclaw models`, stored session lookup by id, and TUI startup. Ambient work in an ownerless multi-agent fleet fails with an actionable error, except queued-delivery recovery, which records the failing delivery and keeps draining the rest of the queue. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
 
 ### `agents.defaults.compaction`
 
@@ -58602,7 +58712,7 @@ An explicit request `agentId` always wins. Other agent-scoped methods do not use
         enabled: false, // disable embedded proactive auto-compaction (default: true)
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        thinkingLevel: "low", // optional compaction-only thinking override
+        thinkingLevel: "low", // default; use "inherit" to reuse the session level
         timeoutSeconds: 180,
         keepRecentTokens: 50000,
         recentTurnsPreserve: 3,
@@ -58629,7 +58739,7 @@ An explicit request `agentId` always wins. Other agent-scoped methods do not use
 - `enabled`: when `false`, disables threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths and manual `/compact` remain available. Default: `true`.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
-- `thinkingLevel`: optional thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`). It overrides the session's current thinking level and is clamped to the selected compaction model/runtime. Leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
+- `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). It defaults to `low`; set `inherit` to reuse the session's current thinking level. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
@@ -59824,6 +59934,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           {
             guildId: "123456789012345678",
             channelId: "234567890123456789",
+            whenOccupied: true,
           },
         ],
         daveEncryption: true,
@@ -59868,6 +59979,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. Default `1800000` (30 minutes), maximum `86400000` (24 hours). Per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
+- `channels.discord.voice.autoJoin[].whenOccupied` keeps an auto-managed voice channel disconnected until a human is present, then leaves when the last human departs. It defaults to `false`; bots do not count as occupants, and manual or ad-hoc voice sessions are not managed by this policy.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
 - `channels.discord.voice.daveEncryption` (default `true`) and `channels.discord.voice.decryptionFailureTolerance` (default `24`) pass through to `@discordjs/voice` DAVE options.
 - `channels.discord.voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts (default `30000`).
@@ -60700,13 +60812,18 @@ Controls elevated exec access outside the sandbox:
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
 
-Use **Agents → Tools → GitHub Identity** to configure a managed fine-grained personal access token. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin, verifies the account, publishes an account-owned managed `gh` profile, and stores only this secret-free config:
+Use **Agents → Tools → GitHub Identity → Connect GitHub** for the recommended setup. OpenClaw displays a one-time user code and a fixed link to `https://github.com/login/device`; you open GitHub explicitly and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. None of those credentials enter browser responses, config, logs, command arguments, transcripts, or model environments.
+
+OAuth access tokens expire after about eight hours. The Gateway refreshes them before expiry, verifies the durable GitHub account ID, and atomically replaces the credential inside the same private profile so already-running local tools continue using that identity. An expired or rejected refresh token is shown as **Reconnect required**. Refresh never blocks Gateway startup.
+
+**Use a PAT instead** preserves the fine-grained personal access token setup as an explicit fallback. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin. Both setup paths verify `/user`, publish an account-owned managed profile, default Git authorship to the account's canonical GitHub noreply identity, and store only secret-free config:
 
 ```json5
 {
   tools: {
     github: {
       profileId: "ghp_0123456789abcdef0123456789abcdef",
+      kind: "oauth",
       gitAuthor: { name: "Automation User", email: "automation@example.com" },
     },
   },
@@ -60725,15 +60842,19 @@ Use **Agents → Tools → GitHub Identity** to configure a managed fine-grained
 }
 ```
 
-Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
+Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. Settings shows the effective identity and the selected configuration scope separately, so editing **System** never masquerades as an agent override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
 
-Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. New runs switch to a replacement or inherited identity immediately. Existing local processes keep their immutable profile generation until they close; retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
+Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. OAuth refresh keeps the same profile path and atomically replaces only its credential after verifying the durable account ID, so admitted local processes see the refreshed token on their next `gh` command. Choosing a different identity or inheritance target creates or selects another profile for new runs; existing processes keep their prior selected profile until they close. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
 
 Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
 
-The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers; cloud workers remain credential-free. Direct branch or pull request publication is not part of this identity foundation and belongs to PR3 in this stacked series. Until that separate Gateway broker lands, repository remotes continue to use their existing credentials and publication workflow.
+The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers; those environments remain credential-free. The `github_publish` tool instead records a bounded publication request. For cloud and remote-exec turns, the Gateway waits until the exact workspace result is reconciled and accepted, then commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request. The tool and worker payload contain no repository authority or credential.
 
-Verification proves which account answered the GitHub API request. Status distinguishes missing or invalid managed credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. It does not claim that fine-grained write permissions or Git transport access were remotely verified. GitHub App and brokered publication support remain future work.
+Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
+
+Verification proves which account answered the GitHub API request. Status reports the credential kind, access expiry, refresh availability, OAuth scopes, and Git author while distinguishing missing credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. Repository-specific grants remain unknown until an exact repository operation succeeds; `/user` does not prove write access.
+
+Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
 
 Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
@@ -61076,7 +61197,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
     - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
     - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
-    - `request.allowPrivateNetwork`: when `true`, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard. Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
+    - `request.allowPrivateNetwork`: when `true`, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard. Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
 
   </Accordion>
   <Accordion title="Model catalog entries">
@@ -61112,7 +61233,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `requiresAssistantAfterToolResult` | Requires an assistant message after tool results. |
     | `requiresThinkingAsText` | Replays reasoning as text rather than structured content. |
     | `requiresReasoningContentOnAssistantMessages` | Preserves DeepSeek-style `reasoning_content` during replay. |
-    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom `llama-server` models must select it explicitly. See the llama.cpp example below. |
+    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom provider IDs pointed at llama-server must select it explicitly. See the llama.cpp example below. |
     | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
@@ -61190,7 +61311,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
 
   </Accordion>
   <Accordion title="Local models (llama.cpp / llama-server)">
-    Point a **custom** `openai-completions` provider at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint). The built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the llama.cpp schema cleaner automatically; a custom endpoint does not. Set `compat.toolSchemaProfile: "llamacpp"` on each model whose llama-server chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+    The canonical `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
 
     ```json5
     {
@@ -63025,7 +63146,7 @@ Reload debounce and in-flight operation deferral are no longer configurable and 
 
 ## Cloud worker environments
 
-Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation and does not advertise `sessions.dispatch` or a Cloud destination. The config schema and read-only `environments.list` and `environments.status` methods remain available. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
+Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new cloud-worker creation and does not advertise a Cloud destination. `sessions.dispatch` may remain available for eligible paired-device targets. The config schema and read-only `environments.list` and `environments.status` methods remain available. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
 SSH-backed `remote-exec` providers must return a trusted `hostKey` as exactly `algorithm base64`, without a hostname or comment. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback. These providers also carry workspace traffic over separate pinned SSH connections so rsync cannot block control traffic.
 
@@ -63237,7 +63358,7 @@ Validation and safety notes:
 
 ---
 
-## Canvas plugin host
+## Canvas widget presenter
 
 ```json5
 {
@@ -63246,9 +63367,7 @@ Validation and safety notes:
       canvas: {
         config: {
           host: {
-            root: "~/.openclaw/workspace/canvas",
-            liveReload: true,
-            // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
+            enabled: true, // set false, or use OPENCLAW_SKIP_CANVAS_HOST=1
           },
         },
       },
@@ -63257,18 +63376,14 @@ Validation and safety notes:
 }
 ```
 
-- Serves agent-editable HTML/CSS/JS and A2UI over HTTP under the Gateway port:
-  - `http://<gateway-host>:<gateway.port>/__openclaw__/canvas/`
-  - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
+- `host.enabled` is the single Canvas host switch and defaults to enabled. It
+  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
+  assets under `/__openclaw__/a2ui/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
-- Non-loopback binds: canvas routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
-- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway advertises node-scoped capability URLs for canvas/A2UI access.
+- Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
+- Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.
 - Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
-- Injects live-reload client into served HTML.
-- Auto-creates starter `index.html` when empty.
-- Also serves A2UI at `/__openclaw__/a2ui/`.
 - Changes require a gateway restart.
-- Disable live reload for large directories or `EMFILE` errors.
 
 ---
 
@@ -63766,11 +63881,14 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 }
 ```
 
-`cron.failureAlert` owns both the alert threshold and the default failure
-destination for every job. The retired `cron.failureDestination` block is merged
-into it by [`openclaw doctor --fix`](/cli/doctor).
+`cron.failureAlert` owns the global alert policy and its default destination. Jobs
+with an existing failure route are covered by default after 2 consecutive
+execution failures with a 1-hour cooldown; a `cron.failureAlert` object explicitly
+activates/tunes the policy even when no route existed. The retired
+`cron.failureDestination` block is merged into it by
+[`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for automation jobs (default: `false`).
+- `enabled`: explicitly enable or disable the global policy. `false` disables inherited notifications unless a job has its own `failureAlert` object; `true` explicitly enables globally. Omitting it preserves route-backed defaults.
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
@@ -63778,8 +63896,10 @@ into it by [`openclaw doctor --fix`](/cli/doctor).
 - `channel`: channel override for announce delivery. `"last"` reuses the last known delivery channel.
 - `to`: explicit announce target or webhook URL. Required for webhook mode.
 - `accountId`: optional account or channel id to scope alert delivery.
-- Per-job `delivery.failureDestination` overrides these global destination fields.
-- When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
+- Route precedence is per-job `failureAlert` route fields, then per-job `delivery.failureDestination` layered over these global destination fields, then the primary announce target.
+- Per-job `failureAlert: false` disables execution and required-delivery failure alerts for that job; the auto-disable safety notification remains active. Any per-job `failureAlert` object explicitly enables and tunes that job.
+- `delivery.bestEffort: true` suppresses inherited/default execution alerts; an explicit per-job `failureAlert` remains authoritative.
+- Required completion-delivery failure (`status: "ok"`, `completionStatus: "failed"`) does not increment execution backoff and may notify immediately only through a resolved alternate failure destination, not the failed primary route.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
@@ -64870,10 +64990,6 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   | `tailnetDns=<magicdns>`     | Optional hint; auto-detected when Tailscale is available.                                                                                                        |
   | `sshPort=<port>`            | Present only when `discovery.mdns.mode="full"`; omitted (SSH defaults to `22`) in the default `"minimal"` mode, on both the LAN advertiser and wide-area DNS-SD. |
   | `cliPath=<path>`            | Same `discovery.mdns.mode="full"` gate as `sshPort`; a remote-install hint for the CLI path.                                                                     |
-
-  A `canvasPort` TXT key is defined in the plugin discovery contract for a
-  future canvas host port, but no current code path sets a value, so it is
-  never emitted today.
 
 Security notes:
 
@@ -66342,6 +66458,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
 - `agents.entries.*.heartbeat` merges on top; if any agent has a `heartbeat` block, **only those agents** run heartbeats.
+- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, the legacy default owner, then the sole agent; when no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
 - `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeatVisibility` overrides channel defaults.
 - `channels.<channel>.accounts.<id>.heartbeatVisibility` (multi-account channels) overrides per-channel settings.
@@ -67443,7 +67560,7 @@ MLX (`mlx_lm.server`), vLLM, SGLang, LiteLLM, OAI-proxy, or any custom gateway w
 }
 ```
 
-Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata/link-local origins are always blocked regardless. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`; set the trust flag to `false` to opt out of exact-origin trust.
+Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`; set the trust flag to `false` to opt out of exact-origin trust.
 
 `models.providers.<id>.models[].id` is provider-local - do not include the provider prefix. For an MLX server started with `mlx_lm.server --model mlx-community/Qwen3-30B-A3B-6bit`:
 
@@ -67907,7 +68024,7 @@ enforces unique state-directory ownership even when
 Base port = `gateway.port` (or `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - Browser control service port = base + 2 (loopback only).
-- Canvas host is served on the Gateway HTTP server itself (same port as `gateway.port`).
+- Hosted widget documents and A2UI renderer assets are served on the Gateway HTTP server itself (same port as `gateway.port`).
 - Browser profile CDP ports auto-allocate from `browser control port + 9` through `+ 108`.
 
 Override any of these in config or env and you must keep them unique per instance.
@@ -69808,12 +69925,18 @@ dispatch so authorization failures have one canonical structured response:
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
   workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
-- `environments.list` needs `operator.read`. Operators with `operator.write`
-  can use administrator-provisioned shared runner infrastructure through
-  `sessions.dispatch`, `sessions.reclaim`, and `sessions.move`; those methods
-  retain session ownership, participation, and commit-time revalidation
-  fences. `operator.read` alone cannot start, stop, or move a session. Cloud
-  profile mutation, pairing and Connect machine, raw `environments.create` or
+- `environments.list` needs `operator.read`. Session placement methods derive
+  their scope from the requested target before schema validation:
+  `sessions.dispatch` needs `operator.write` for `deviceId` and
+  `operator.admin` for `profileId` or a target-less
+  `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
+  for Gateway or device targets and `operator.admin` for profile targets;
+  `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
+  malformed move target use `operator.write` so the handler can return the
+  precise schema error. All three methods retain session ownership,
+  participation, and commit-time revalidation fences. `operator.read` alone
+  cannot start, stop, or move a session. Cloud profile allocation and mutation,
+  pairing and Connect machine, raw `environments.create` or
   `environments.destroy`, incognito sessions, direct `execNode` execution, and
   arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin
@@ -70381,7 +70504,7 @@ A new managed worktree session defaults to `workspace` when no mode is specified
 
 An explicit session mode takes precedence over the session's legacy `execSecurity` and `execAsk` overrides. When the mode is unset, those fields and the normal global or per-agent configuration continue to work as before.
 
-Host approval-file floors, sandbox restrictions, and tool allow/deny policy can only make the effective result stricter. A harness may also clamp an unsupported mode to a compatible safer policy tuple; it does not combine tuple fields into a less restrictive posture.
+An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off. Approval-file floors continue to tighten config-driven exec policy, legacy session overrides, unset modes, and every non-full session mode. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 
 For the independent sandbox, tool-policy, and elevated-exec controls, see [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated).
 
@@ -71410,7 +71533,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
+    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
     - `environments.create` (`{ profileId, idempotencyKey }`) provisions a worker from a configured plugin provider profile; retries with the same key reuse the durable operation. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `worker.desktop.observe` (`{ environmentId, control? }`, `operator.admin`) starts or reuses the environment's desktop forward and returns `{ transport, wsPath, expiresAtMs, control, vncPassword? }`. `wsPath` carries a single-use 60-second token for the Gateway's desktop observer WebSocket; reconnecting requires a fresh observe call. Environments with an observable desktop advertise `worker.desktop: true` in `environments.list`. The method is advertised only when the `cloudWorkers.desktop` lab is enabled. See [Cloud workers](/gateway/cloud-workers#desktop).
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
@@ -71419,29 +71542,29 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` contains known exact active run identities and may be empty while aggregate activity remains true. Omission means exact identities were not projected and is not a replacement value. Incremental merge events can send an empty array as the replacement tombstone that clears previously cached identities. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` is the complete exact active set; an empty array proves the session is idle. If aggregate activity is true while the field is omitted, another runtime owner is active but its exact identities are unavailable. Snapshot omission means identities unavailable. On incremental events, omission means no change, `null` is the event-only tombstone that clears cached exact IDs to unavailable, and an array replaces the cache. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
     - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, or Control UI short ID. Ambiguous short IDs return a bounded candidate list as a successful RPC result.
     - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
-    - `sessions.dispatch` (`operator.write`) moves an authorized local OpenClaw session with a live, registry-owned session managed worktree to administrator-provisioned shared runner infrastructure. Pass `{ key, profileId, agentId? }`. The Gateway does not advertise the method when no worker profile is configured. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active` worker ownership. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
+    - `sessions.dispatch` moves an authorized local OpenClaw session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. Explicit targets take precedence over project-profile lookup. Device dispatch requires `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active` worker ownership. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.reclaim` (`operator.write`) safely stops a session placement by key. It waits for an in-flight dispatch, drains admitted work, reconciles active workspace changes, and retries pending failed-environment teardown through the placement owner. Callers never need raw environment-destroy authority.
-    - `sessions.move` (`operator.write`) moves an authorized active session to the Gateway, a paired device, or a configured profile. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits.
+    - `sessions.move` moves an authorized active session to the Gateway, a paired device, or a configured profile. Gateway and device targets require `operator.write`; profile targets require `operator.admin`; malformed targets use the write scope before schema validation. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). The read-scoped list result is intentionally path-free. `sessions.groups.defaults` and `sessions.groups.update` require `operator.write` and read or replace one custom group's optional working-directory and worktree defaults. Non-admin callers can save only directories inside a configured agent workspace; other absolute Gateway paths require `operator.admin`. Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
-    - `sessions.steer` is the interrupt-and-steer variant for an active session.
+    - `sessions.steer` is a deprecated alias for `chat.send` with `queueMode: "interrupt"`; removal follows the protocol deprecation policy.
     - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Session organization fields and the per-session `model` override require `operator.write`; thinking, fast, verbose, trace, reasoning, and other privileged overrides require `operator.admin`. Only an admin model selection can persist as the configured agent default. Archive and restore patches require the caller-observed `sessionId` from `sessions.list` or `sessions.describe` as `expectedSessionId`; missing or changed targets fail without materializing or mutating a replacement. With `archived: true`, the Gateway protects agent main sessions (including `global` when global scope is configured) and the `unknown` sentinel; for every other real session it first fences new admission, cancels exact-session active, pending, queued, reply, embedded, and worker work, and waits for admission and runtime terminal-persistence drains before committing `archivedAt`. A cancellation, drain, or persistence failure returns retryable `UNAVAILABLE` and leaves the session unarchived. `sessions.patchMany` carries `expectedSessionId` per target, prepares archive targets in input order inside the same batch lifecycle fence, and returns ordered per-target outcomes. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.assignOwner` (`operator.write`) reassigns the session's mutable owner to a person or configured agent (`{ key, owner: { type, id } }`). It requires an identified caller (authenticated profile or trusted agent identity), authorizes by session visibility, and records `assignedBy`/`assignedAt` on the row's `owner` field. The write-once `createdActor` and creator-anchored sharing authority are unchanged; see [Multi-user mode](/concepts/multi-user#assigning-an-owner).
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
-    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. Its `sessionInfo` uses the same aggregate `hasActiveRun` and optional known-exact `activeRunIds` semantics as `sessions.list`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
+    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. Its `sessionInfo` uses the same aggregate `hasActiveRun` and optional complete-exact `activeRunIds` semantics as `sessions.list`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
       Tail responses can include an opaque `deltaCursor`. Pass it back as `cursor` to `chat.history` or `chat.startup` instead of `offset` or `messageId`. A successful catch-up returns `{ kind: "delta", messages, deltaCursor, sessionInfo }`; replay each `messages` entry through the same reducer as a live `session.message` payload. `{ kind: "reset" }` means the cursor is invalid, stale, belongs to another session, crossed a reset or compaction, or is too far behind; fetch a normal tail page. Catch-up never returns a partial page or continuation: more than 200 raw events or the 1 MB payload budget resets to a tail fetch.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
-    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. A steer send targets the selected session's current state: the Gateway atomically injects the message into that session's direct active run, or starts a new turn when the session is idle. Activity in descendant subagent sessions never makes the selected session busy for this decision. `expectedLeafEntryId` is an independent transcript-branch compare-and-swap for non-steer interactive sends: pass the displayed branch leaf (or deliberate `null` for an authoritative empty transcript) and the send rejects with `details.reason: "active-leaf-changed"` if another client switched transcript branches first; steer sends ignore it.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. Interrupt mode captures and aborts the session's current admitted turn, waits for that exact owner to settle, then starts the new turn; an idle session starts normally. A steer send targets the selected session's current state: the Gateway atomically injects the message into that session's direct active run, or starts a new turn when the session is idle. Activity in descendant subagent sessions never makes the selected session busy for this decision. `expectedLeafEntryId` is an independent transcript-branch compare-and-swap for non-steer interactive sends: pass the displayed branch leaf (or deliberate `null` for an authoritative empty transcript) and the send rejects with `details.reason: "active-leaf-changed"` if another client switched transcript branches first; steer sends ignore it.
 
   </Accordion>
 
@@ -71534,8 +71657,9 @@ methods. Treat this as feature discovery, not a full enumeration of
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
 - `sessions.changed`: session index or metadata changed. Active-run fields use the
-  same aggregate and known-exact semantics as `sessions.list`; a present empty
-  `activeRunIds` replaces and clears the client's cached exact-identity list.
+  same aggregate and complete-exact semantics as `sessions.list`; `activeRunIds: null`
+  clears cached exact identities to unavailable, omission leaves the cache unchanged,
+  and an array replaces it.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.
@@ -77202,7 +77326,7 @@ Quick model for triaging risk reports:
 | `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
 | `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
 | Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Browser evaluate                                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 | `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
@@ -77634,7 +77758,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`) and the canvas host (`/__openclaw__/canvas` and `/__openclaw__/a2ui` - arbitrary HTML/JS; treat as untrusted content when loaded in a normal browser; do not expose it to untrusted networks/users or share an origin with privileged web surfaces).
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
@@ -79056,7 +79180,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     the Gateway (models call out to cloud APIs), even a modest Pi handles the load.
 
     A small Pi/VPS can also host just the Gateway while you pair **nodes** on your
-    laptop/phone for local screen/camera/canvas or command execution. See [Nodes](/nodes).
+    laptop/phone for local screen/camera or command execution. A paired Mac can
+    also present hosted widgets in its native panel. See [Nodes](/nodes).
 
     Full setup walkthrough: [Raspberry Pi](/install/raspberry-pi).
 
@@ -79329,7 +79454,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     treat the host as the source of truth and back it up.
 
     Pair **nodes** (Mac/iOS/Android/headless) to that cloud Gateway for local
-    screen/camera/canvas or command execution on your laptop while the Gateway stays in
+    screen/camera or command execution on your laptop while the Gateway stays in
     the cloud.
 
     Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
@@ -79561,7 +79686,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="If I buy a Mac mini to run OpenClaw, can I connect it to my MacBook Pro?">
     Yes. The **Mac mini can run the Gateway**, and your MacBook Pro connects as a **node**
     (companion device). Nodes do not run the Gateway - they add capabilities like
-    screen/camera/canvas and `system.run` on that device.
+    screen/camera and `system.run` on that device. A Mac node can also present
+    hosted widgets in its native panel.
 
     Common pattern: Gateway on the always-on Mac mini; MacBook Pro runs the macOS app or a
     node host and pairs to the Gateway. Check with `openclaw nodes status` / `openclaw nodes list`.
@@ -80329,14 +80455,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
 <AccordionGroup>
   <Accordion title="What is OpenClaw, in one paragraph?">
-    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus hosted widgets in chat, on session dashboards, and in the macOS panel. The **Gateway** is the always-on control plane; the assistant is the product.
   </Accordion>
 
   <Accordion title="Value proposition">
     OpenClaw is not "just a Claude wrapper." It is a **local-first control plane** that runs a capable assistant on **your own hardware**, reachable from the chat apps you already use, with stateful sessions, memory, and tools - without handing your workflows to a hosted SaaS.
 
     - **Your devices, your data**: run the Gateway wherever you want (Mac, Linux, VPS) and keep the workspace and session history local.
-    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and Canvas on supported platforms.
+    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and hosted widgets.
     - **Model-agnostic**: use Anthropic, MiniMax, OpenAI, OpenRouter, etc., with per-agent routing and failover.
     - **Local-only option**: run local models so all data can stay on your device.
     - **Multi-agent routing**: separate agents per channel, account, or task, each with its own workspace and defaults.
@@ -80945,7 +81071,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Common pattern: **one Gateway** (for example a Raspberry Pi) plus **nodes** and **agents**.
 
     - **Gateway (central)**: owns channels (Signal/WhatsApp), routing, sessions.
-    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
+    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools such as `system.run` and `camera`; Macs can also present hosted widgets in the native panel.
     - **Agents (workers)**: separate brains/workspaces for special roles (for example ops vs personal data).
     - **Sub-agents**: spawn background work from a main agent for parallelism.
     - **TUI**: connect to the Gateway and switch agents/sessions.
@@ -81051,7 +81177,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **No inbound SSH required** - nodes connect out to the Gateway WebSocket via device pairing.
     - **Safer execution controls** - `system.run` is gated by node allowlists/approvals on that laptop.
-    - **More device tools** - nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
+    - **More device tools** - nodes expose `camera` and `screen` in addition to `system.run`; Macs also expose the widget panel.
     - **Local browser automation** - keep the Gateway on a VPS but run Chrome locally through a node host, or attach to local Chrome via Chrome MCP.
 
     SSH is fine for ad-hoc shell access; nodes are simpler for ongoing agent workflows and device automation.
@@ -92361,7 +92487,7 @@ summary: "OpenClaw release readiness scores for product areas, integrations, and
 <div className="maturity-hero">
   <p className="maturity-kicker">release readiness - generated from taxonomy + QA evidence</p>
   <p className="maturity-hero-title">A practical view of what is ready, what is proven, and what still needs work.</p>
-  <p>50 surfaces - 281 capability areas - deterministic coverage plus human-reviewed quality and completeness.</p>
+  <p>50 surfaces - 280 capability areas - deterministic coverage plus human-reviewed quality and completeness.</p>
   <p className="maturity-jump-links"><a href="#surface-explorer">Browse surfaces</a> / <a href="#qa-evidence-summary">Inspect QA evidence</a> / <a href="/maturity/taxonomy">Read the taxonomy</a></p>
 </div>
 
@@ -92381,7 +92507,7 @@ Use this page to answer one question: which OpenClaw surfaces are credible choic
     <div className="maturity-summary-meta">
       <span className="maturity-level-pill maturity-level-alpha">Alpha</span>
       <span>Quality + completeness</span>
-      <span>Coverage Experimental - 6%</span>
+      <span>Coverage Experimental - 16%</span>
       <span>Quality Alpha - 64%</span>
       <span>Completeness Beta - 71%</span>
     </div>
@@ -92412,14 +92538,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#cli"><span className="maturity-surface-title">CLI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>47%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "47%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-runtime"><span className="maturity-surface-title">Gateway runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>81%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "81%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 12</span></div>
@@ -92440,7 +92566,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#discord"><span className="maturity-surface-title">Discord</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>28%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "28%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>73%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "73%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 4</span></div>
@@ -92453,7 +92579,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
-        <a className="maturity-surface-name" href="/maturity/taxonomy#ios-app"><span className="maturity-surface-title">iOS app</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>8 areas</span></span></a>
+        <a className="maturity-surface-name" href="/maturity/taxonomy#ios-app"><span className="maturity-surface-title">iOS app</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
@@ -92461,49 +92587,49 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>23%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "23%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>26%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "26%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#channel-framework"><span className="maturity-surface-title">Channel framework</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>8 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>23%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "23%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>22%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "22%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>76%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "76%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#browser-automation-exec-and-sandbox-tools"><span className="maturity-surface-title">Browser automation, exec, and sandbox tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>3 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>42%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "42%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 2</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>11%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "11%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>36%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "36%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openai-and-codex-provider-path"><span className="maturity-surface-title">OpenAI and Codex provider path</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>10%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "10%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-web-app"><span className="maturity-surface-title">Gateway Web App</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>48%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "48%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92517,28 +92643,28 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#plugins"><span className="maturity-surface-title">Plugins</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 7</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#automation-cron-hooks-tasks-polling"><span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>49%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "49%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#docker-and-podman-hosting"><span className="maturity-surface-title">Docker and Podman hosting</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>28%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "28%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>71%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "71%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92566,7 +92692,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#telegram"><span className="maturity-surface-title">Telegram</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-full">Full - 5</span></div>
@@ -92615,7 +92741,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#media-understanding-and-media-generation"><span className="maturity-surface-title">Media understanding and media generation</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>43%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "43%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92643,14 +92769,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#voice-and-realtime-talk"><span className="maturity-surface-title">Voice and realtime talk</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#matrix"><span className="maturity-surface-title">Matrix</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>65%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "65%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92678,7 +92804,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#tui"><span className="maturity-surface-title">TUI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92692,7 +92818,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#clawhub"><span className="maturity-surface-title">ClawHub</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>58%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "58%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>62%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "62%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92720,7 +92846,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openclaw-app-sdk"><span className="maturity-surface-title">OpenClaw App SDK</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92767,105 +92893,105 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#cli"><span className="maturity-surface-title">CLI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>47%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "47%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-runtime"><span className="maturity-surface-title">Gateway runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>81%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "81%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 12</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>23%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "23%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>26%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "26%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#channel-framework"><span className="maturity-surface-title">Channel framework</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>8 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>23%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "23%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>22%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "22%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>76%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "76%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>11%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "11%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>36%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "36%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#gateway-web-app"><span className="maturity-surface-title">Gateway Web App</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>48%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "48%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#plugins"><span className="maturity-surface-title">Plugins</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>4%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "4%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 7</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#automation-cron-hooks-tasks-polling"><span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>49%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "49%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#media-understanding-and-media-generation"><span className="maturity-surface-title">Media understanding and media generation</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>43%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "43%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#voice-and-realtime-talk"><span className="maturity-surface-title">Voice and realtime talk</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>3%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "3%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#tui"><span className="maturity-surface-title">TUI</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#clawhub"><span className="maturity-surface-title">ClawHub</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>2%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "2%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>58%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "58%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>62%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "62%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openclaw-app-sdk"><span className="maturity-surface-title">OpenClaw App SDK</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92897,7 +93023,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
       </div>
       <div className="maturity-surface-row">
-        <a className="maturity-surface-name" href="/maturity/taxonomy#ios-app"><span className="maturity-surface-title">iOS app</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>8 areas</span></span></a>
+        <a className="maturity-surface-name" href="/maturity/taxonomy#ios-app"><span className="maturity-surface-title">iOS app</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas</span></span></a>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
@@ -92905,7 +93031,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#docker-and-podman-hosting"><span className="maturity-surface-title">Docker and Podman hosting</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>28%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "28%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>71%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "71%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -92980,14 +93106,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#discord"><span className="maturity-surface-title">Discord</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>28%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "28%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>73%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "73%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 4</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#telegram"><span className="maturity-surface-title">Telegram</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-full">Full - 5</span></div>
@@ -93015,7 +93141,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#matrix"><span className="maturity-surface-title">Matrix</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>65%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "65%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-none">None</span></div>
@@ -93069,14 +93195,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       <div className="maturity-surface-row maturity-surface-row-header"><span>Surface</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Support</span></div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#browser-automation-exec-and-sandbox-tools"><span className="maturity-surface-title">Browser automation, exec, and sandbox tools</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>3 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>42%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "42%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 2</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#openai-and-codex-provider-path"><span className="maturity-surface-title">OpenAI and Codex provider path</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>10%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "10%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>6%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "6%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
@@ -93141,9 +93267,9 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
 <div className="maturity-evidence-grid">
   <div className="maturity-evidence-card">
     <span className="maturity-evidence-title">Full taxonomy validation</span>
-    <span>2026-08-02T16:03:38.894Z</span>
-    <span>279 checks - 218 passed, 5 failed, 49 blocked, 7 skipped</span>
-    <span>6 of 281 (2.1%) areas - 133 of 2002 (6.6%) features - 133 of 2002 (6.6%) coverage IDs</span>
+    <span>2026-08-16T19:54:39.705Z</span>
+    <span>406 checks - 313 passed, 35 failed, 51 blocked, 7 skipped</span>
+    <span>22 of 281 (7.8%) areas - 402 of 2002 (20.1%) features - 402 of 2002 (20.1%) coverage IDs</span>
   </div>
 </div>
 
@@ -93161,16 +93287,16 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Agent Turn Execution</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>2 of 28 (7.1%) / 2 of 28 (7.1%)</span>
-        <span>26 capability gaps</span>
+        <span>11 of 31 (35.5%) / 11 of 31 (35.5%)</span>
+        <span>20 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">External Runtimes and Subagents</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 10 (30%) / 3 of 10 (30%)</span>
-        <span>7 capability gaps</span>
+        <span>2 of 10 (20%) / 2 of 10 (20%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93217,16 +93343,16 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Tool Calls and Response Handling</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>5 of 26 (19.2%) / 5 of 26 (19.2%)</span>
-        <span>21 capability gaps</span>
+        <span>9 of 26 (34.6%) / 9 of 26 (34.6%)</span>
+        <span>17 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Tool Execution Controls</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>4 of 12 (33.3%) / 4 of 12 (33.3%)</span>
-        <span>8 capability gaps</span>
+        <span>8 of 12 (66.7%) / 8 of 12 (66.7%)</span>
+        <span>4 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -93342,87 +93468,87 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="OpenClaw App SDK - 6 areas">
-    <p className="maturity-readiness-summary">6 needs review</p>
+    <p className="maturity-readiness-summary">1 ready / 5 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Agent Conversations</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>6 of 6 (100%) / 6 of 6 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Client API</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
-        <span>4 capability gaps</span>
+        <span>3 of 4 (75%) / 3 of 4 (75%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Events and Approvals</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Gateway Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>3 of 5 (60%) / 3 of 5 (60%)</span>
+        <span>2 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Resource Helpers</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>4 of 6 (66.7%) / 4 of 6 (66.7%)</span>
+        <span>2 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="Automation: cron, hooks, tasks, polling - 6 areas">
-    <p className="maturity-readiness-summary">5 needs review / 1 partially reviewed</p>
+    <p className="maturity-readiness-summary">2 ready / 2 partially reviewed / 2 needs review</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Automation Hooks</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
-        <span>11 capability gaps</span>
+        <span>11 of 11 (100%) / 11 of 11 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Background Tasks and Flows</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
-        <span>10 capability gaps</span>
+        <span>10 of 10 (100%) / 10 of 10 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Cron Jobs</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 22 (0%) / 0 of 22 (0%)</span>
-        <span>22 capability gaps</span>
+        <span>12 of 22 (54.5%) / 12 of 22 (54.5%)</span>
+        <span>10 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93435,18 +93561,18 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Heartbeat</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
         </div>
-        <span>1 of 7 (14.3%) / 1 of 7 (14.3%)</span>
-        <span>6 capability gaps</span>
+        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Polling Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
-        <span>10 capability gaps</span>
+        <span>4 of 10 (40%) / 4 of 10 (40%)</span>
+        <span>6 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -93476,8 +93602,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>4 of 31 (12.9%) / 4 of 31 (12.9%)</span>
-        <span>27 capability gaps</span>
+        <span>3 of 31 (9.7%) / 3 of 31 (9.7%)</span>
+        <span>28 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93523,7 +93649,7 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="ClawHub - 4 areas">
-    <p className="maturity-readiness-summary">3 needs review / 1 partially reviewed</p>
+    <p className="maturity-readiness-summary">1 needs review / 3 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -93537,32 +93663,32 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Compatibility and Trust</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
-        <span>12 capability gaps</span>
+        <span>1 of 12 (8.3%) / 1 of 12 (8.3%)</span>
+        <span>11 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Plugin Lifecycle and Health</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>2 of 26 (7.7%) / 2 of 26 (7.7%)</span>
-        <span>24 capability gaps</span>
+        <span>4 of 26 (15.4%) / 4 of 26 (15.4%)</span>
+        <span>22 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Publishing</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
-        <span>7 capability gaps</span>
+        <span>4 of 7 (57.1%) / 4 of 7 (57.1%)</span>
+        <span>3 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="CLI - 7 areas">
-    <p className="maturity-readiness-summary">5 needs review / 2 partially reviewed</p>
+    <p className="maturity-readiness-summary">1 needs review / 6 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -93576,50 +93702,50 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">CLI Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>5 of 6 (83.3%) / 5 of 6 (83.3%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Doctor</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 10 (0%) / 0 of 10 (0%)</span>
-        <span>10 capability gaps</span>
+        <span>1 of 10 (10%) / 1 of 10 (10%)</span>
+        <span>9 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Gateway Service Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
-        <span>7 capability gaps</span>
+        <span>4 of 7 (57.1%) / 4 of 7 (57.1%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Onboarding and Auth Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>4 of 5 (80%) / 4 of 5 (80%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Plugin and Channel Setup</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 5 (20%) / 1 of 5 (20%)</span>
-        <span>4 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Updates and Upgrades</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>4 of 5 (80%) / 4 of 5 (80%)</span>
-        <span>1 capability gap</span>
+        <span>3 of 5 (60%) / 3 of 5 (60%)</span>
+        <span>2 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -93664,7 +93790,7 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Docker and Podman hosting - 4 areas">
-    <p className="maturity-readiness-summary">3 partially reviewed / 1 needs review</p>
+    <p className="maturity-readiness-summary">4 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -93680,39 +93806,39 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Container Operations</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 11 (9.1%) / 1 of 11 (9.1%)</span>
-        <span>10 capability gaps</span>
+        <span>2 of 11 (18.2%) / 2 of 11 (18.2%)</span>
+        <span>9 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Container Setup</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>1 of 6 (16.7%) / 1 of 6 (16.7%)</span>
+        <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Image Release and Validation</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>2 of 7 (28.6%) / 2 of 7 (28.6%)</span>
-        <span>5 capability gaps</span>
+        <span>3 of 7 (42.9%) / 3 of 7 (42.9%)</span>
+        <span>4 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="Gateway Web App - 6 areas">
-    <p className="maturity-readiness-summary">5 needs review / 1 partially reviewed</p>
+    <p className="maturity-readiness-summary">4 partially reviewed / 1 needs review / 1 ready</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Browser Access and Trust</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>3 of 5 (60%) / 3 of 5 (60%)</span>
+        <span>2 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93725,26 +93851,26 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Browser UI</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
-        <span>12 capability gaps</span>
+        <span>4 of 12 (33.3%) / 4 of 12 (33.3%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Configuration</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>5 of 5 (100%) / 5 of 5 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Operator Console</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 12 (0%) / 0 of 12 (0%)</span>
-        <span>12 capability gaps</span>
+        <span>10 of 12 (83.3%) / 10 of 12 (83.3%)</span>
+        <span>2 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93758,16 +93884,16 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Discord - 6 areas">
-    <p className="maturity-readiness-summary">2 needs review / 3 partially reviewed / 1 ready</p>
+    <p className="maturity-readiness-summary">4 partially reviewed / 1 needs review / 1 ready</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Access and Identity</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>1 of 6 (16.7%) / 1 of 6 (16.7%)</span>
+        <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93782,8 +93908,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Conversation Routing and Delivery</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 12 (25%) / 3 of 12 (25%)</span>
-        <span>9 capability gaps</span>
+        <span>2 of 12 (16.7%) / 2 of 12 (16.7%)</span>
+        <span>10 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93806,23 +93932,23 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Realtime Voice and Calls</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 5 (20%) / 1 of 5 (20%)</span>
-        <span>4 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="Gateway runtime - 13 areas">
-    <p className="maturity-readiness-summary">10 needs review / 3 partially reviewed</p>
+    <p className="maturity-readiness-summary">7 partially reviewed / 2 needs review / 4 ready</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Approvals and Remote Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>4 of 6 (66.7%) / 4 of 6 (66.7%)</span>
+        <span>2 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93845,8 +93971,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Gateway RPC APIs and Events</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>4 of 22 (18.2%) / 4 of 22 (18.2%)</span>
-        <span>18 capability gaps</span>
+        <span>18 of 22 (81.8%) / 18 of 22 (81.8%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -93859,66 +93985,66 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Hosted Web Surface</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
-        <span>4 capability gaps</span>
+        <span>3 of 4 (75%) / 3 of 4 (75%)</span>
+        <span>1 capability gap</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">HTTP APIs</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
-        <span>4 capability gaps</span>
+        <span>4 of 4 (100%) / 4 of 4 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Network Access and Discovery</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Nodes and Remote Capabilities</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Protocol Compatibility</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 7 (0%) / 0 of 7 (0%)</span>
-        <span>7 capability gaps</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Roles and Permissions</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
+        <span>1 of 6 (16.7%) / 1 of 6 (16.7%)</span>
         <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Security Controls</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-title">Nodes and Remote Capabilities</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>8 of 8 (100%) / 8 of 8 (100%)</span>
+        <span>None</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Protocol Compatibility</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
+        </div>
+        <span>7 of 7 (100%) / 7 of 7 (100%)</span>
+        <span>None</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Roles and Permissions</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 5 (20%) / 1 of 5 (20%)</span>
+        <span>4 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Security Controls</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>1 of 6 (16.7%) / 1 of 6 (16.7%)</span>
+        <span>5 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">WebSocket Connection</span>
-          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>5 of 8 (62.5%) / 5 of 8 (62.5%)</span>
-        <span>3 capability gaps</span>
+        <span>8 of 8 (100%) / 8 of 8 (100%)</span>
+        <span>None</span>
       </div>
     </div>
   </Accordion>
@@ -94489,8 +94615,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Access and Identity</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>5 of 7 (71.4%) / 5 of 7 (71.4%)</span>
-        <span>2 capability gaps</span>
+        <span>4 of 7 (57.1%) / 4 of 7 (57.1%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94583,7 +94709,7 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Media understanding and media generation - 6 areas">
-    <p className="maturity-readiness-summary">3 needs review / 2 partially reviewed / 1 ready</p>
+    <p className="maturity-readiness-summary">2 needs review / 3 partially reviewed / 1 ready</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -94607,24 +94733,24 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Media Generation</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 21 (4.8%) / 1 of 21 (4.8%)</span>
-        <span>20 capability gaps</span>
+        <span>8 of 21 (38.1%) / 8 of 21 (38.1%)</span>
+        <span>13 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Media Intake and Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
+        <span>5 of 8 (62.5%) / 5 of 8 (62.5%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Media Understanding</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 14 (7.1%) / 1 of 14 (7.1%)</span>
-        <span>13 capability gaps</span>
+        <span>8 of 14 (57.1%) / 8 of 14 (57.1%)</span>
+        <span>6 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94732,7 +94858,7 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Observability - 5 areas">
-    <p className="maturity-readiness-summary">3 partially reviewed / 2 needs review</p>
+    <p className="maturity-readiness-summary">5 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -94746,18 +94872,18 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Health and Repair</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 18 (0%) / 0 of 18 (0%)</span>
-        <span>18 capability gaps</span>
+        <span>9 of 18 (50%) / 9 of 18 (50%)</span>
+        <span>9 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Logging</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94772,8 +94898,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Telemetry Export</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>5 of 26 (19.2%) / 5 of 26 (19.2%)</span>
-        <span>21 capability gaps</span>
+        <span>14 of 26 (53.8%) / 14 of 26 (53.8%)</span>
+        <span>12 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -94795,8 +94921,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Model and Auth</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 9 (33.3%) / 3 of 9 (33.3%)</span>
-        <span>6 capability gaps</span>
+        <span>1 of 9 (11.1%) / 1 of 9 (11.1%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94865,32 +94991,32 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Plugins - 9 areas">
-    <p className="maturity-readiness-summary">7 needs review / 2 partially reviewed</p>
+    <p className="maturity-readiness-summary">1 ready / 5 partially reviewed / 3 needs review</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Authoring and Packaging plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
+        <span>8 of 8 (100%) / 8 of 8 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Bundled plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 0 of 5 (0%)</span>
-        <span>5 capability gaps</span>
+        <span>2 of 5 (40%) / 2 of 5 (40%)</span>
+        <span>3 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Canvas plugin</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
-        <span>6 capability gaps</span>
+        <span>2 of 6 (33.3%) / 2 of 6 (33.3%)</span>
+        <span>4 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94905,8 +95031,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Installing and running plugins</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>6 of 24 (25%) / 6 of 24 (25%)</span>
-        <span>18 capability gaps</span>
+        <span>10 of 24 (41.7%) / 10 of 24 (41.7%)</span>
+        <span>14 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -94935,10 +95061,10 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Testing plugins</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 11 (0%) / 0 of 11 (0%)</span>
-        <span>11 capability gaps</span>
+        <span>6 of 11 (54.5%) / 6 of 11 (54.5%)</span>
+        <span>5 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -94983,7 +95109,7 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Security, auth, pairing, and secrets - 6 areas">
-    <p className="maturity-readiness-summary">2 partially reviewed / 4 needs review</p>
+    <p className="maturity-readiness-summary">3 partially reviewed / 3 needs review</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
@@ -95007,8 +95133,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Credential and Secret Hygiene</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 11 (27.3%) / 3 of 11 (27.3%)</span>
-        <span>8 capability gaps</span>
+        <span>5 of 11 (45.5%) / 5 of 11 (45.5%)</span>
+        <span>6 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -95021,10 +95147,10 @@ Open a surface to inspect the evidence state of each category. The list stays co
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Gateway Auth and Remote Access</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 9 (0%) / 0 of 9 (0%)</span>
-        <span>9 capability gaps</span>
+        <span>2 of 9 (22.2%) / 2 of 9 (22.2%)</span>
+        <span>7 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -95038,16 +95164,16 @@ Open a surface to inspect the evidence state of each category. The list stays co
   </Accordion>
 
   <Accordion title="Session, memory, and context engine - 9 areas">
-    <p className="maturity-readiness-summary">6 needs review / 3 partially reviewed</p>
+    <p className="maturity-readiness-summary">2 ready / 4 needs review / 3 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">CLI Session and Transcript Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
-        <span>2 capability gaps</span>
+        <span>2 of 2 (100%) / 2 of 2 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -95102,16 +95228,16 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Token Management</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 10 (30%) / 3 of 10 (30%)</span>
-        <span>7 capability gaps</span>
+        <span>2 of 10 (20%) / 2 of 10 (20%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Transcript Persistence</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 2 (0%) / 0 of 2 (0%)</span>
-        <span>2 capability gaps</span>
+        <span>2 of 2 (100%) / 2 of 2 (100%)</span>
+        <span>None</span>
       </div>
     </div>
   </Accordion>
@@ -95290,86 +95416,86 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Native Controls and Approvals</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>3 of 11 (27.3%) / 3 of 11 (27.3%)</span>
-        <span>8 capability gaps</span>
+        <span>2 of 11 (18.2%) / 2 of 11 (18.2%)</span>
+        <span>9 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="Browser automation, exec, and sandbox tools - 3 areas">
-    <p className="maturity-readiness-summary">3 needs review</p>
+    <p className="maturity-readiness-summary">3 partially reviewed</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Browser Automation</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
-      </div>
-      <div className="maturity-readiness-row">
-        <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Sandbox and Tool Policy</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
-        </div>
-        <span>0 of 6 (0%) / 0 of 6 (0%)</span>
+        <span>2 of 8 (25%) / 2 of 8 (25%)</span>
         <span>6 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
-          <span className="maturity-readiness-title">Tool Invocation and Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-title">Sandbox and Tool Policy</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
+        <span>3 of 6 (50%) / 3 of 6 (50%)</span>
+        <span>3 capability gaps</span>
+      </div>
+      <div className="maturity-readiness-row">
+        <div className="maturity-readiness-area">
+          <span className="maturity-readiness-title">Tool Invocation and Execution</span>
+          <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
+        </div>
+        <span>4 of 8 (50%) / 4 of 8 (50%)</span>
+        <span>4 capability gaps</span>
       </div>
     </div>
   </Accordion>
 
   <Accordion title="TUI - 5 areas">
-    <p className="maturity-readiness-summary">5 needs review</p>
+    <p className="maturity-readiness-summary">5 ready</p>
     <div className="maturity-readiness-list">
       <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Input and Commands</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 8 (0%) / 0 of 8 (0%)</span>
-        <span>8 capability gaps</span>
+        <span>8 of 8 (100%) / 8 of 8 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Local Shell Execution</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
-        <span>4 capability gaps</span>
+        <span>4 of 4 (100%) / 4 of 4 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Rendering and Output Safety</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 4 (0%) / 0 of 4 (0%)</span>
-        <span>4 capability gaps</span>
+        <span>4 of 4 (100%) / 4 of 4 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Runtime Modes</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 14 (0%) / 0 of 14 (0%)</span>
-        <span>14 capability gaps</span>
+        <span>14 of 14 (100%) / 14 of 14 (100%)</span>
+        <span>None</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
           <span className="maturity-readiness-title">Session Management</span>
-          <span className="maturity-readiness-status maturity-readiness-status-needs-review">Needs review - Full taxonomy validation</span>
+          <span className="maturity-readiness-status maturity-readiness-status-ready">Ready - Full taxonomy validation</span>
         </div>
-        <span>0 of 3 (0%) / 0 of 3 (0%)</span>
-        <span>3 capability gaps</span>
+        <span>3 of 3 (100%) / 3 of 3 (100%)</span>
+        <span>None</span>
       </div>
     </div>
   </Accordion>
@@ -95438,8 +95564,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Realtime Talk Sessions</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>2 of 11 (18.2%) / 2 of 11 (18.2%)</span>
-        <span>9 capability gaps</span>
+        <span>1 of 11 (9.1%) / 1 of 11 (9.1%)</span>
+        <span>10 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -95889,7 +96015,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     <a className="maturity-surface-link" href="#ios-app">
       <span className="maturity-surface-title">iOS app</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>8 areas - 80% complete</span></span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas - 80% complete</span></span>
     </a>
 
     <a className="maturity-surface-link" href="#docker-and-podman-hosting">
@@ -96068,7 +96194,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Normal setup and repair paths are documented across install, CLI, and gateway docs. Platform-specific Windows paths are tracked in the Windows via WSL2 and Native Windows rows.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 14%</span><span>Quality Stable - 83%</span><span>Completeness Stable - 90%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 47%</span><span>Quality Stable - 83%</span><span>Completeness Stable - 90%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96077,7 +96203,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">CLI Setup</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96091,7 +96217,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Onboarding and Auth Setup</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96105,7 +96231,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Plugin and Channel Setup</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96119,7 +96245,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Service Management</span>
           <span>7 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>57%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "57%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96147,7 +96273,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Doctor</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>10%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "10%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96161,7 +96287,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Updates and Upgrades</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96179,7 +96305,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core architecture, auth, pairing, protocol docs, daemon docs, and CLI runbooks are broad and current.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 8%</span><span>Quality Stable - 81%</span><span>Completeness Stable - 89%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 12</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Alpha - 53%</span><span>Quality Stable - 81%</span><span>Completeness Stable - 89%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 12</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96188,7 +96314,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Approvals and Remote Execution</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96202,7 +96328,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">HTTP APIs</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96216,12 +96342,12 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Hosted Web Surface</span>
           <span>4 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Canvas](/refactor/canvas)
+    [Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat)
 
     </div>
       </div>
@@ -96230,7 +96356,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway RPC APIs and Events</span>
           <span>22 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>82%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "82%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96258,7 +96384,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Network Access and Discovery</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96272,7 +96398,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Nodes and Remote Capabilities</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96300,7 +96426,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Protocol Compatibility</span>
           <span>7 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96314,7 +96440,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Roles and Permissions</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96342,7 +96468,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Security Controls</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96356,7 +96482,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">WebSocket Connection</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>63%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "63%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96374,21 +96500,21 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Main loop, models, provider routing, and tool streaming are first-class, but provider behavior shifts weekly and needs scenario proof per release.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 16%</span><span>Quality Beta - 78%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 23%</span><span>Quality Beta - 78%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Agent Turn Execution</span>
-          <span>28 capabilities / LTS-supported</span>
+          <span>31 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>36%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "36%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Agent Loop](/concepts/agent-loop), [Agent](/cli/agent), [Agent Runtimes](/concepts/agent-runtimes)
+    [Agent Loop](/concepts/agent-loop), [Agent](/cli/agent), [Agent Runtimes](/concepts/agent-runtimes), [Managed Worktrees](/concepts/managed-worktrees)
 
     </div>
       </div>
@@ -96397,7 +96523,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">External Runtimes and Subagents</span>
           <span>10 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96481,7 +96607,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Calls and Response Handling</span>
           <span>26 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>35%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "35%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96495,7 +96621,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Execution Controls</span>
           <span>12 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96513,7 +96639,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 5%</span><span>Quality Beta - 77%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 26%</span><span>Quality Beta - 77%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96522,7 +96648,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">CLI Session and Transcript Management</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96536,7 +96662,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Token Management</span>
           <span>10 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96611,7 +96737,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Memory Config](/reference/memory-config), [Memory Qmd](/concepts/memory-qmd), [Memory](/concepts/memory), [Discord](/channels/discord)
+    [Memory Config](/reference/memory-config), [Memory](/concepts/memory), [Discord](/channels/discord)
 
     </div>
       </div>
@@ -96634,7 +96760,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Transcript Persistence</span>
           <span>2 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96652,7 +96778,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Many channels share Gateway delivery and routing contracts, but channel behavior varies by upstream API and account-policy constraints.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 23%</span><span>Quality Beta - 76%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 22%</span><span>Quality Beta - 76%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96745,7 +96871,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Conversation Routing and Delivery</span>
           <span>31 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>13%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "13%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>10%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "10%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96777,7 +96903,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     OTel, Prometheus, logging, and diagnostics docs exist. Needs a public "what operators should look at first" maturity pass.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 11%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 36%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96786,7 +96912,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Health and Repair</span>
           <span>18 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96800,7 +96926,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Logging</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96828,7 +96954,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Telemetry Export</span>
           <span>26 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96860,7 +96986,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Web UI is documented with pairing, chat, PWA, Talk, push, and remote Gateway flows. Promote after cross-browser and mobile-PWA scorecards.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 48%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96883,7 +97009,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser Access and Trust</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96897,7 +97023,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Configuration</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96911,7 +97037,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser UI</span>
           <span>12 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96939,7 +97065,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Operator Console</span>
           <span>12 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>83%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "83%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96957,7 +97083,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Broad docs and strong internal runtime evidence exist across manifests, discovery, loading, provider/tool architecture, and approval boundaries. Keep the row at beta until public SDK API/subpaths and external distribution proof are stronger.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 4%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 7</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 32%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 7</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -96966,7 +97092,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Authoring and Packaging plugins</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96980,7 +97106,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Bundled plugins</span>
           <span>5 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -96992,14 +97118,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Canvas plugin</span>
-          <span>6 capabilities</span>
+          <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Canvas](/plugins/reference/canvas), [Canvas](/refactor/canvas), [Configuration Reference](/gateway/configuration-reference)
+    [Canvas](/plugins/reference/canvas), [Configuration Reference](/gateway/configuration-reference)
 
     </div>
       </div>
@@ -97008,7 +97134,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Installing and running plugins</span>
           <span>24 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>42%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "42%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97078,7 +97204,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Testing plugins</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97096,7 +97222,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Good docs and hardening surfaces exist. Promote after regular upgrade/security scenario runs prove no setup regressions.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 7%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 14%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97119,7 +97245,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Auth and Remote Access</span>
           <span>9 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>22%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "22%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97175,7 +97301,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Credential and Secret Hygiene</span>
           <span>11 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>27%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "27%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>46%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "46%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97193,7 +97319,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 49%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97202,7 +97328,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Cron Jobs</span>
           <span>22 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97230,7 +97356,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Automation Hooks</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97244,7 +97370,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Background Tasks and Flows</span>
           <span>10 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97258,7 +97384,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Heartbeat</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97272,7 +97398,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Polling Controls</span>
           <span>10 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97290,7 +97416,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Broad capability surface exists, but provider variance, file limits, and node/app parity make this not stable yet.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 19%</span><span>Quality Alpha - 64%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 43%</span><span>Quality Alpha - 64%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97299,7 +97425,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Intake and Access</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>63%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "63%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97355,7 +97481,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Understanding</span>
           <span>14 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>7%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "7%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>57%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "57%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97369,7 +97495,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Media Generation</span>
           <span>21 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>5%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "5%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>38%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "38%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97387,7 +97513,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Multiple implementations exist across Control UI, apps, and providers. Needs latency, failure-mode, and setup scorecards before beta.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 3%</span><span>Quality Alpha - 61%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Alpha - 61%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97410,7 +97536,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Realtime Talk Sessions</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97484,7 +97610,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Present in docs and source, but less visible as a primary user workflow. Needs explicit scenario definition.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Alpha - 59%</span><span>Completeness Alpha - 66%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Clawesome - 100%</span><span>Quality Alpha - 59%</span><span>Completeness Alpha - 66%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97493,7 +97619,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Runtime Modes</span>
           <span>14 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97507,7 +97633,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Input and Commands</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97521,7 +97647,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Session Management</span>
           <span>3 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97535,7 +97661,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Local Shell Execution</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97549,7 +97675,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Rendering and Output Safety</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>59%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "59%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97567,7 +97693,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Public docs and ecosystem concept exist. Needs install, trust, update, rollback, and compatibility scorecards.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 2%</span><span>Quality Alpha - 58%</span><span>Completeness Alpha - 62%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 20%</span><span>Quality Alpha - 58%</span><span>Completeness Alpha - 62%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97576,7 +97702,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Publishing</span>
           <span>7 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>57%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "57%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97604,7 +97730,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Compatibility and Trust</span>
           <span>12 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>56%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "56%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97618,7 +97744,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Plugin Lifecycle and Health</span>
           <span>26 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>8%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "8%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>15%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "15%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97636,7 +97762,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Alpha - 54%</span><span>Completeness Alpha - 53%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Alpha - 64%</span><span>Quality Alpha - 54%</span><span>Completeness Alpha - 53%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -97645,7 +97771,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Client API</span>
           <span>4 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>51%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "51%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97659,7 +97785,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Gateway Access</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97673,7 +97799,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Agent Conversations</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97687,7 +97813,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Events and Approvals</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97701,7 +97827,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Resource Helpers</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>62%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "62%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -97715,7 +97841,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Compatibility</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -98038,7 +98164,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="iOS app - M4 Stable - 8 areas">
+  <Accordion title="iOS app - M4 Stable - 7 areas">
     <a id="ios-app" />
 
     Official App Store distribution exists, relay-backed push is documented, and the iOS app is documented as a normal companion node for users.
@@ -98058,20 +98184,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Ios](/platforms/ios), [Camera](/nodes/camera)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Canvas and Screen</span>
-          <span>1 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>80%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "80%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Ios](/platforms/ios), [Canvas](/plugins/reference/canvas)
 
     </div>
       </div>
@@ -98168,7 +98280,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 18%</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 28%</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -98177,7 +98289,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Container Setup</span>
           <span>6 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -98191,7 +98303,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Container Operations</span>
           <span>11 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>9%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "9%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -98205,7 +98317,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Image Release and Validation</span>
           <span>7 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>43%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "43%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -98410,7 +98522,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Canvas</span>
-          <span>4 capabilities</span>
+          <span>3 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
@@ -98978,7 +99090,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Desktop Tools and Permissions</span>
-          <span>10 capabilities</span>
+          <span>9 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
@@ -99003,7 +99115,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Deep docs and broad feature coverage. Voice/delegation paths should stay separately scored as beta/alpha.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 28%</span><span>Quality Beta - 73%</span><span>Completeness Stable - 87%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 4</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 32%</span><span>Quality Beta - 73%</span><span>Completeness Stable - 87%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 4</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -99026,7 +99138,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Access and Identity</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>73%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "73%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -99040,7 +99152,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Conversation Routing and Delivery</span>
           <span>12 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>17%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "17%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>73%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "73%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -99082,7 +99194,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Realtime Voice and Calls</span>
           <span>5 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>20%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "20%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>40%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "40%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>73%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "73%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -99100,7 +99212,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core channel is mature enough for regular use, but high-variance UX and media edge cases need recurring scenario proof.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 9%</span><span>Quality Alpha - 68%</span><span>Completeness Beta - 78%</span><span><span className="maturity-lts maturity-lts-full">Full - 5</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 8%</span><span>Quality Alpha - 68%</span><span>Completeness Beta - 78%</span><span><span className="maturity-lts maturity-lts-full">Full - 5</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -99165,7 +99277,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Native Controls and Approvals</span>
           <span>11 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>27%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "27%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -99432,7 +99544,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Supported via bundled plugin. Needs bridge, auth, and room lifecycle scorecards.
 
-    <div className="maturity-surface-rollup"><span>Coverage Alpha - 67%</span><span>Quality Alpha - 60%</span><span>Completeness Alpha - 67%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Alpha - 65%</span><span>Quality Alpha - 60%</span><span>Completeness Alpha - 67%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -99455,7 +99567,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Access and Identity</span>
           <span>7 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>71%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "71%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>57%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "57%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>60%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "60%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -100004,7 +100116,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core tools are documented, but host security and permission UX should stay under active scorecard review.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 2</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 42%</span><span>Quality Beta - 75%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 2</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -100013,7 +100125,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Browser Automation</span>
           <span>8 capabilities</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>25%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "25%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -100027,7 +100139,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Tool Invocation and Execution</span>
           <span>8 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -100041,7 +100153,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Sandbox and Tool Policy</span>
           <span>6 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -100059,7 +100171,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Deep docs, OAuth/subscription path, realtime voice, image, and compatibility behavior. Provider churn keeps this from Stable without release-scorecard proof.
 
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 10%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 6%</span><span>Quality Beta - 74%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 3</span></span></div>
 
     <div className="maturity-category-list">
       <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
@@ -100068,7 +100180,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
           <span className="maturity-category-title">Model and Auth</span>
           <span>9 capabilities / LTS-supported</span>
         </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>11%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "11%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
@@ -100932,7 +101044,7 @@ All camera access is gated behind a user-controlled setting per platform.
 
 ### iOS foreground requirement
 
-Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
+The iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI helper
 
@@ -100965,7 +101077,7 @@ The app prompts for runtime permissions when possible.
 
 ### Android foreground requirement
 
-Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
+The Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
 
 ### Android commands (via Gateway `node.invoke`)
 
@@ -101455,21 +101567,22 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 # Section: nodes/index.md
 
 ---
-summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
   - Pairing iOS/watchOS/Android nodes to a gateway
-  - Using node canvas/camera for agent context
+  - Using node camera or screen capture for agent context
+  - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
 ---
 
-A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
-adds native Canvas, camera, screen, notification, and computer-control commands
+adds native widget-panel, camera, screen, notification, and computer-control commands
 to the same node-host command surface used by `openclaw node run`. Do not start a
 second CLI node on that Mac; the app runs the matching CLI node-host runtime as
 an internal worker and remains the sole Gateway connection and node identity.
@@ -101924,6 +102037,14 @@ contains its complete JavaScript dependency closure; the node does not install
 packages or execute lifecycle scripts. Later turns reuse the immutable artifact
 while its receipt still matches the Gateway's current build.
 
+You can also enroll and enable a service host in one step with
+`openclaw connect --service --session-host`. In Control UI New Session, a
+write-scoped operator selects a Gateway project or folder and then the paired
+device. OpenClaw creates a session-owned managed worktree on the Gateway,
+dispatches it with the exact `deviceId`, and sends the first turn only after the
+device placement becomes active. New Session does not bind `execNode` or browse
+the device filesystem.
+
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the retained artifact is missing or fails validation, Devices shows
 a **worker missing** warning; start a new session on that device to reinstall the
@@ -101942,6 +102063,24 @@ Gateway-owned workspace transfer and result reconciliation. Each node runs at
 most two worker processes by default. A third launch waits up to 10 seconds for
 a durable slot; while both slots are occupied, the node remains available for
 status and cancellation but is not selected for a new session turn.
+
+The picker derives every device row from `environments.list`. A device is
+selectable only when current inventory reports status `available`,
+`sessionHost: true`, valid exact worker slots, and at least one available slot.
+Connected non-hosts, saturated hosts, hosts without current capacity,
+update-required or otherwise outdated hosts, and unavailable hosts remain
+visible but disabled with an actionable reason. Enable hosting with
+`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
+setting, then restart the node host. Update-required hosts must be upgraded and
+restarted before selection.
+
+When a known session host disconnects, its paired-device record preserves only
+the last accepted current-v6 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v6
+publication records false; older v1-v5 and update-required dialects do not
+overwrite the last current fact. Connected inventory always wins over stored
+history, a missing stored value means false, and exact worker slots are never
+persisted or shown as offline capacity.
 
 If the device is offline before a turn is dispatched, the Gateway waits up to
 10 seconds and then returns a visible retry/reconnect error while keeping the
@@ -101994,10 +102133,10 @@ Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`
 Low-level (raw RPC):
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+openclaw nodes invoke --node <idOrNameOrIp> --command device.info --params '{}'
 ```
 
-`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (canvas, camera, screen, location, below).
+`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (camera, screen, location, below).
 
 Long-running streaming node commands use additive `node.invoke.progress`
 events. Each event carries the invoke ID, a zero-based sequence number, and a
@@ -102030,7 +102169,16 @@ Default allowlists by platform (before plugin defaults and `commands.allow`/`com
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, Android advertises mobile UI commands only while Accessibility Control is enabled, and desktop nodes advertise `computer.act` only while their local Computer Control fulfiller is enabled. The current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
+Plugin-owned defaults extend the platform table only for the plugin's supported
+surface:
+
+| Plugin | Platform | Commands allowed by default                        |
+| ------ | -------- | -------------------------------------------------- |
+| Canvas | macOS    | `canvas.present`, `canvas.hide`, `canvas.navigate` |
+
+The Canvas commands present hosted widget documents in the macOS app's native
+panel. iOS, Android, Windows, Linux, and unknown platforms do not receive Canvas
+plugin defaults.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -102101,46 +102249,26 @@ Per-agent exec node override:
 }
 ```
 
-## Screenshots (canvas snapshots)
-
-If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
-
-CLI helper (writes to a temp file and prints the saved path):
+## macOS widget panel
 
 ```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
-```
-
-### Canvas controls
-
-```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
+openclaw nodes canvas present --node <idOrNameOrIp>
 openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+openclaw nodes canvas navigate "/__openclaw__/canvas/documents/<document-id>/index.html" --node <idOrNameOrIp>
 ```
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
-- `canvas eval` accepts inline JS (`--js`) or a positional arg.
-
-### A2UI (Canvas)
-
-```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
-```
-
-Notes:
-
-- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
-- Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
-- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
-- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
-- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
+- `canvas present` accepts the existing optional target plus
+  `--x/--y/--width/--height` placement arguments.
+- `canvas navigate` accepts a hosted widget-document path or an app-local
+  Canvas URL. The macOS app resolves hosted paths through its current scoped
+  Canvas capability URL.
+- The agent-facing path is [`show_widget`](/tools/show-widget) with
+  `presentation.target: "node_panel"`; use the CLI helpers for direct operator
+  control.
+- A2UI renders on [session dashboards](/web/dashboards), not through node
+  Canvas commands.
 
 ## Photos + videos (node camera)
 
@@ -102163,7 +102291,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 Notes:
 
-- The node must be **foregrounded** for `canvas.*` and `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
+- The node must be **foregrounded** for `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
 - Nodes clamp clip duration to keep the base64 payload manageable (see [Camera capture](/nodes/camera) for exact per-platform limits). The `nodes` agent tool additionally caps requested `durationMs` at 300000 (5 minutes) before forwarding the call; the node itself enforces the tighter limit.
 - Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
 
@@ -103463,7 +103591,7 @@ to waitlist-enabled Platform access.
 ---
 summary: "Troubleshoot node pairing, foreground requirements, permissions, and tool failures"
 read_when:
-  - Node is connected but camera/canvas/screen/exec tools fail
+  - Node is connected but camera/screen/exec tools fail
   - You need the node pairing versus approvals mental model
 title: "Node troubleshooting"
 ---
@@ -103532,13 +103660,12 @@ Healthy signals:
 
 ## Foreground requirements
 
-`canvas.*`, `camera.*`, and `screen.*` are foreground-only on iOS/Android nodes.
+`camera.*` and `screen.*` are foreground-only on iOS/Android nodes.
 
 Quick check and fix:
 
 ```bash
 openclaw nodes describe --node <idOrNameOrIp>
-openclaw nodes canvas snapshot --node <idOrNameOrIp>
 openclaw logs --follow
 ```
 
@@ -104158,7 +104285,7 @@ advances a milestone.
 | 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                                                                                                                                                                            |
 | 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664, #122870                                                                                                                                                                   |
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                                                                                                                                                                   |
-| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774, #122923                                                                                                                                        |
+| 4   | Picker: grouping, placement, liveness, enrichment          | landed      | #120804, #122531, #122635, #122774, #122923, #123198, #125708, #126118                                                                                                             |
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                            |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                                   |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901, #125708 |
@@ -104500,15 +104627,25 @@ Revision 1's design rule stands: normal state is silent; only exceptions
 speak. Additions:
 
 - **Use the existing environment type discriminant** for picker grouping:
-  local gateway, execution-capable nodes, worker environments, and the
-  separate cloud profiles list. Device-runner inventory adds `sessionHost`
-  without creating another place ontology.
-- **Where picker regrouped** (`ui/src/pages/new-session/place-picker-sections.ts`):
-  sections "This gateway" / "Devices" / "Cloud". Device rows intersect the
-  environment catalog with execution-capable paired nodes; connected rows are
-  selectable, while remembered offline rows stay visible but disabled. Cloud
-  profiles remain their separate list. Folder and destination stay
-  orthogonal.
+  local gateway, node environments, worker environments, and the separate
+  cloud profiles list. Device-runner inventory adds `sessionHost` without
+  creating another place ontology.
+- **Where picker regrouped** (`ui/src/pages/new-session/device-placement.ts`):
+  sections "This gateway" / "Devices" / "Cloud". Device rows come only from
+  node entries in `environments.list`. A device is selectable only when its
+  current status is available, `sessionHost` is true, and its exact bounded
+  worker slots are valid with `available > 0`. Offline known session hosts,
+  connected non-hosts, saturated hosts, hosts without capacity, outdated
+  hosts, and unavailable hosts stay visible but disabled with a next step.
+  Cloud profiles remain their separate list.
+- **Remote placement uses one session path.** Device and cloud selections use
+  a Gateway project or folder, force a managed worktree, create the session
+  without `execNode`, dispatch by exact `{ deviceId }` or `{ profileId }`, and
+  send the first turn only after placement becomes active. Write-scoped
+  operators can place on devices; cloud profiles and "Connect a machine…"
+  remain admin-only. Gateway-local selection keeps the normal optional
+  worktree flow. New Session no longer browses node paths or restores node
+  folder recents.
 - **Node connection history is server-owned.** Successful node hello records
   `lastConnectedAtMs`; retiring that exact pairing generation and connection
   records `lastDisconnectedAtMs` in the existing node surface. `node.list` and
@@ -104516,13 +104653,20 @@ speak. Additions:
   topology refresh events and distinguishes "Never connected", "Offline for
   …", and the legacy/unclean-exit fallback "Last seen …". Connected rows stay
   silent. This adds no config, event, or SQLite schema-version surface.
+- **Offline host identity is producer-owned.** After accepting the current
+  generation's current v6 runner inventory, the paired-node transaction
+  records its exact `workerHost.enabled` consent. An explicit disabled or
+  empty current publication records false; legacy v1-v5 and update-required
+  dialects never overwrite the last current fact. Live inventory remains
+  authoritative while connected. Offline catalog rows use the stored boolean,
+  missing means false, and exact worker slots are never persisted. This adds
+  one optional paired-node field without a schema-version bump or migration.
 - **Placement chip** on the session header: shows quiet current placement;
   active cloud placements reclaim through `sessions.reclaim` with "Bring
   home". Stop-and-continue moves arrive with milestone 8.
-- **Remaining milestone work**: the admin-gated "Connect a machine…" foot and
-  durable `runner-offline` recovery actions. Pre-dispatch
-  offline attempts already fail visibly after a 10-second grace without
-  terminalizing the placement.
+- **Separate follow-up**: durable `runner-offline` session status and explicit
+  "Wait for device" / "Continue on Gateway" recovery actions remain owned by
+  placement recovery. This picker cutover does not synthesize that state.
 
 ### Cloud convergence (milestone 10)
 
@@ -104624,10 +104768,12 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine
    pairs against a remote gateway with one pasted command and one admin
    click, no manual approval steps.
-4. **Picker** (in progress): regrouped sections, quiet placement + reclaim,
-   and the observed projects read model land first; live presence subscription,
-   the admin-gated "Connect a machine…" foot, additive `EnvironmentSummary`
-   enrichment, and never-connected vs lost states complete the milestone.
+4. **Picker** (landed): grouped Gateway/device/cloud sections, quiet placement
+   and reclaim, the observed projects read model, live environment facts,
+   admin-gated "Connect a machine…", exact slot eligibility, durable offline
+   session-host identity, and full device dispatch through the shared placement
+   startup/recovery owner. Durable runner-offline recovery actions remain a
+   separate placement-owner follow-up.
 5. **Public worker ingress**: path-tagged worker upgrade on the main TLS
    endpoint; opaque admission failure; shared preauth budgets. Exit: a worker
    process on any internet host with a valid dispatch credential completes
@@ -104975,7 +105121,7 @@ Add or update:
 # Section: platforms/android.md
 
 ---
-summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice/Canvas command surface"
+summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice command surface"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -105281,31 +105427,7 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
-### 7. Canvas + camera
-
-#### Gateway Canvas Host (recommended for web content)
-
-To have the node show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
-
-<Note>
-Nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-</Note>
-
-1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
-2. Navigate the node to it (LAN):
-
-```bash
-openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__openclaw__/canvas/"}'
-```
-
-Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__openclaw__/canvas/`.
-
-This server injects a live-reload client into HTML and reloads on file changes. The Gateway also serves `/__openclaw__/a2ui/`, but the Android app treats remote A2UI pages as render-only. Action-capable A2UI commands use the bundled app-owned A2UI page.
-
-Canvas commands (foreground only):
-
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).
-- A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias). These use the bundled app-owned A2UI page for action-capable rendering.
+### 7. Camera
 
 Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camera.clip` (mp4). See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
@@ -105924,12 +106046,12 @@ summaries are not supported.
 # Section: platforms/ios.md
 
 ---
-summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshooting"
+summary: "iOS node app: connect to the Gateway, pairing, device capabilities, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
-  - Debugging gateway discovery or canvas commands
+  - Debugging gateway discovery or iOS node commands
 title: "iOS app"
 ---
 
@@ -105938,7 +106060,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
+- Exposes node capabilities: Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
@@ -106122,9 +106244,6 @@ Direct watchOS node commands:
 | Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
 | Notifications | `system.notify`                | While the app is active; requires watch permission.     |
 
-watchOS does not expose WebKit to third-party apps, so the direct watch node
-does not advertise Canvas commands.
-
 ## Relay-backed push for official builds
 
 Official distributed iOS builds use an external push relay instead of publishing the raw APNs token to the gateway. Official App Store builds from the public release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`; this base URL is hardcoded for App Store distribution and does not read any override.
@@ -106237,36 +106356,11 @@ The app keeps a registry of every gateway it has paired with, so you can switch 
 - Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
 - Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
 
-## Canvas + A2UI
-
-The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18789/__openclaw__/canvas/"}'
-```
-
-Notes:
-
-- The Gateway canvas host serves `/__openclaw__/canvas/` and `/__openclaw__/a2ui/`, from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-- The iOS node keeps the built-in scaffold as the connected default view. `canvas.a2ui.push` and `canvas.a2ui.reset` use the bundled app-owned A2UI page.
-- Remote Gateway A2UI pages are render-only on iOS; native A2UI button actions are accepted only from bundled app-owned pages.
-- Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
-
 ## Computer Use relationship
 
-The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex Computer Use and `cua-driver mcp` control a local macOS desktop through MCP tools; the iOS app exposes iPhone capabilities through OpenClaw node commands such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
+The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex Computer Use and `cua-driver mcp` control a local macOS desktop through MCP tools; the iOS app exposes iPhone capabilities through OpenClaw node commands such as `camera.*`, `screen.*`, `location.*`, and `talk.*`.
 
 Agents can still operate the iOS app through OpenClaw by invoking node commands, but those calls go through the gateway node protocol and follow iOS foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use) for local desktop control and this page for iOS node capabilities.
-
-### Canvas eval / snapshot
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__openclaw; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
-```
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"maxWidth":900,"format":"jpeg"}'
-```
 
 ## Voice wake + talk mode
 
@@ -106277,8 +106371,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 
 ## Common errors
 
-- `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
+- `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
@@ -106326,7 +106419,6 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
   offers to import detected Claude Code, Codex, or Hermes memories into the
   agent workspace (the same import stays available later under
   Settings → Import Memory)
-- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
 ### Host sleep
@@ -106416,14 +106508,6 @@ the shortcut settings are hidden and the tray item remains the entry point.
 After an accepted send, Quick Chat stays open and streams the selected agent's
 plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
 `Ctrl+Enter` still opens the dashboard.
-
-### Canvas
-
-Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
-
-The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
-
-Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
 
 ## CLI and SSH alternative
 
@@ -106610,8 +106694,8 @@ title: "macOS app"
 ---
 
 The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
-permission prompts, notifications, WebChat, voice input, Canvas, and
-Mac-hosted node tools such as `system.run`.
+permission prompts, notifications, WebChat, voice input, a hosted-widget panel,
+and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
@@ -106725,7 +106809,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 - Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
-- One Mac node that combines native Canvas, camera/screen capture, notifications,
+- One Mac node that combines the native widget panel, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
   plugin, skill, and MCP commands.
 - Exec approval prompts for Mac-hosted commands.
@@ -106754,7 +106838,7 @@ own docs.
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
 | Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
-| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Present hosted widgets in the Mac panel  | [Widget panel](/platforms/mac/canvas)                                                       |
 | Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
 | Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
@@ -106853,8 +106937,8 @@ Check for Updates, and uninstall.
 - Native chat window plus access to the browser Control UI.
 - Command Center diagnostics for sessions, usage, channels, nodes, pairing,
   and repair commands.
-- Windows node mode for agent-controlled canvas, screen, camera,
-  notifications, device status, talk, and controlled `system.run`.
+- Windows node mode for screen, camera, notifications, device status, talk,
+  and controlled `system.run`.
 - Local MCP server mode for MCP clients such as Claude Desktop, Claude Code,
   and Cursor.
 
@@ -106885,14 +106969,13 @@ declared by the node and allowed by Gateway policy before they run; see
 
 Common commands:
 
-| Family | Commands                                                                             |
-| ------ | ------------------------------------------------------------------------------------ |
-| Canvas | `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot` |
-| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                          |
-| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                  |
-| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                  |
-| Device | `location.get`, `device.info`, `device.status`                                       |
-| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak`  |
+| Family | Commands                                                                            |
+| ------ | ----------------------------------------------------------------------------------- |
+| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                         |
+| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                 |
+| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                 |
+| Device | `location.get`, `device.info`, `device.status`                                      |
+| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak` |
 
 Node mode requires Gateway pairing. If the app shows a pairing request,
 approve it from the Gateway host:
@@ -107299,140 +107382,102 @@ openclaw gateway call health --port 18999 --timeout 3000
 # Section: platforms/mac/canvas.md
 
 ---
-summary: "Agent-controlled Canvas panel embedded via WKWebView + custom URL scheme"
+summary: "Present hosted widgets in the macOS panel"
 read_when:
-  - Implementing the macOS Canvas panel
-  - Adding agent controls for visual workspace
-  - Debugging WKWebView canvas loads
-title: "Canvas"
+  - Showing an agent-created widget on a Mac
+  - Controlling the macOS widget panel from a paired node
+  - Debugging hosted widget navigation
+title: "Widget panel"
+doc-schema-version: 1
 ---
 
-The macOS app embeds an agent-controlled **Canvas panel** using `WKWebView`, a
-lightweight visual workspace for HTML/CSS/JS, A2UI, and small interactive UI
-surfaces.
+The macOS app includes a native panel for presenting hosted widget documents.
+The Canvas plugin owns this presentation path; it is not a standalone visual
+workspace or an A2UI push target.
 
-## Where Canvas lives
+The recommended agent path is [`show_widget`](/tools/show-widget) with
+`presentation.target: "node_panel"`. OpenClaw stores the widget as a hosted
+document, selects a connected macOS node, opens the panel, and navigates it to
+that document. If no eligible Mac is connected or presentation fails, the
+widget still appears inline in chat and the tool result explains how to retry.
 
-Canvas state is stored under Application Support:
-
-- `~/Library/Application Support/OpenClaw/canvas/<session>/...`
-
-The Canvas panel serves those files via a custom URL scheme,
-`openclaw-canvas://<session>/<path>`:
-
-- `openclaw-canvas://main/` -> `<canvasRoot>/main/index.html`
-- `openclaw-canvas://main/assets/app.css` -> `<canvasRoot>/main/assets/app.css`
-- `openclaw-canvas://main/widgets/todo/` -> `<canvasRoot>/main/widgets/todo/index.html`
-
-If no `index.html` exists at the root, the app shows a built-in scaffold page.
+Widgets in the native panel are render-only. Host-integrated widget actions
+remain available in Control UI chat and [session dashboard](/web/dashboards)
+surfaces, not in the panel.
 
 ## Panel behavior
 
-- Borderless, resizable panel anchored near the menu bar (or mouse cursor).
-- Presenting Canvas does not switch apps or steal keyboard focus.
-- Remembers size/position per session.
-- Auto-reloads when local canvas files change.
-- Only one Canvas panel is visible at a time (session switches as needed).
+- The panel is borderless, resizable, and anchored near the menu bar or mouse
+  cursor.
+- Presenting a widget does not switch apps or take keyboard focus.
+- Only one widget panel is visible at a time.
+- The app remembers the panel's size and position per session.
 
-Canvas can be disabled from Settings -> **Allow Canvas**. When disabled,
-canvas node commands return `CANVAS_DISABLED`.
+Canvas can be disabled from **Settings -> Allow Canvas**. When it is disabled,
+panel commands return `CANVAS_DISABLED`.
 
-## Agent API surface
+## Agent path
 
-Canvas is exposed via the Gateway WebSocket, so the agent can show/hide the
-panel, navigate to a path or URL, evaluate JavaScript, and capture a
-snapshot image:
+Ask the agent to use `show_widget` and target the node panel. The tool exposes
+`node_panel` only while a widget presenter plugin is active.
+
+```json
+{
+  "title": "Build status",
+  "widget_code": "<main><h1>Build passed</h1></main>",
+  "presentation": { "target": "node_panel" }
+}
+```
+
+The result identifies the selected Mac when presentation succeeds. OpenClaw
+currently selects only a connected macOS node that declares `canvas.present`.
+
+## Node commands
+
+The paired-node command surface contains three commands:
 
 ```bash
 openclaw nodes canvas present --node <id>
-openclaw nodes canvas navigate --node <id> "/"
-openclaw nodes canvas eval --node <id> --js "document.title"
-openclaw nodes canvas snapshot --node <id>
+openclaw nodes canvas navigate --node <id> "/__openclaw__/canvas/documents/<document-id>/index.html"
+openclaw nodes canvas hide --node <id>
 ```
 
-`eval` and `a2ui.*` update content without opening or revealing the panel. Only
-`present`, `navigate`, or a user action shows it; after a hide, content updates
-continue to apply to the hidden panel. `snapshot` needs a visible panel and
-returns `CANVAS_HIDDEN` otherwise; run `present` first.
+- `canvas.present` shows the panel. It also accepts the existing optional
+  target and placement arguments.
+- `canvas.navigate` loads a hosted widget-document path or an app-local Canvas
+  URL.
+- `canvas.hide` hides the panel without changing its current document.
 
-`canvas.navigate` accepts local canvas paths, `http(s)` URLs, and `file://`
-URLs. Passing `"/"` shows the local scaffold or `index.html`.
+Hosted paths under `/__openclaw__/canvas/` are resolved through the node
+session's current scoped `pluginSurfaceUrls.canvas` URL. The app refreshes that
+short-lived capability before navigation; callers should pass the document
+path, not construct or copy a capability URL.
 
-Gateway-hosted targets under `/__openclaw__/canvas/` and
-`/__openclaw__/a2ui/` are resolved through the node session's current scoped
-Canvas URL. The app refreshes that short-lived capability before navigation;
-you do not need to construct or copy a capability URL yourself.
+The app-local scheme remains available for app-owned content:
 
-`show_widget` can target `node_panel` to open its hosted document in this panel. These widget documents are render-only in the panel; interactive widget actions remain disabled.
-
-## A2UI in Canvas
-
-A2UI is hosted by the Gateway canvas host and rendered inside the Canvas
-panel. When the Gateway advertises a Canvas host, the macOS app auto-navigates
-to the A2UI host page on first open.
-
-The advertised URL is capability-scoped, for example
-`http://<gateway-host>:18789/__openclaw__/cap/<token>/__openclaw__/a2ui/?platform=macos`.
-Treat it as ephemeral credentials, not a stable link.
-
-### A2UI commands (v0.8)
-
-Canvas accepts A2UI v0.8 server-to-client messages: `beginRendering`,
-`surfaceUpdate`, `dataModelUpdate`, `deleteSurface`. `createSurface` (v0.9) is
-not supported yet.
-
-```bash
-cat > /tmp/a2ui-v0.8.jsonl <<'EOFA2'
-{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","content"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Canvas (A2UI v0.8)"},"usageHint":"h1"}}},{"id":"content","component":{"Text":{"text":{"literalString":"If you can read this, A2UI push works."},"usageHint":"body"}}}]}}
-{"beginRendering":{"surfaceId":"main","root":"root"}}
-EOFA2
-
-openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
+```text
+openclaw-canvas://<session>/<path>
 ```
 
-Quick smoke test:
+Files addressed by that scheme must remain inside the session's Canvas root in
+Application Support. Directory traversal is blocked.
 
-```bash
-openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"
-```
+## A2UI belongs on session dashboards
 
-## Triggering agent runs from Canvas
+A2UI widgets render on [session dashboards](/web/dashboards), where they share
+the same pinning, layout, approval, and interaction model as other dashboard
+widgets. Their renderer bundles continue to load from the Gateway's
+`/__openclaw__/a2ui/` asset route.
 
-Canvas can trigger new agent runs via `openclaw://agent?...` deep links:
-
-```js
-window.location.href = "openclaw://agent?message=Review%20this%20design";
-```
-
-Supported query parameters:
-
-| Parameter                  | Meaning                                               |
-| -------------------------- | ----------------------------------------------------- |
-| `message`                  | Prefilled agent prompt.                               |
-| `sessionKey`               | Stable session identifier.                            |
-| `thinking`                 | Optional thinking profile.                            |
-| `deliver`, `to`, `channel` | Delivery target.                                      |
-| `timeoutSeconds`           | Optional run timeout.                                 |
-| `key`                      | App-generated safety token for trusted local callers. |
-
-The app prompts for confirmation unless a valid key is provided. Unkeyed
-links show the message and URL before approval, and ignore delivery routing
-fields; keyed links use the normal Gateway run path.
-
-## Security notes
-
-- Canvas scheme blocks directory traversal; files must live under the session root.
-- Local Canvas content uses a custom scheme (no loopback server required).
-- External `http(s)` URLs are allowed only when explicitly navigated.
-- Ordinary web pages are render-only. Agent actions are accepted only from the
-  app-owned Canvas scheme or the exact capability-scoped Gateway A2UI document
-  selected by the app; subframes, redirects, stale capabilities, and changed
-  queries cannot dispatch actions.
+The macOS panel does not accept A2UI push/reset commands and does not
+automatically navigate to an A2UI page.
 
 ## Related
 
+- [Show widget](/tools/show-widget)
+- [Session dashboards](/web/dashboards)
 - [macOS app](/platforms/macos)
-- [WebChat](/web/webchat)
+- [Nodes](/nodes)
 
 
 
@@ -108482,7 +108527,7 @@ The dashboard header shows a Gateway picker when the Mac app has at least two
 configured Gateways. Choose a Gateway to replace the current dashboard in the
 same window, or Option-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
-Gateway after confirmation; this resets Talk Mode, canvas, and chat
+Gateway after confirmation; this resets Talk Mode, the widget panel, and chat
 connections. While connected, the sidebar footer also shows the current Gateway
 and marks it when it is primary. Password-only profiles can be viewed but cannot
 be made primary.
@@ -108574,8 +108619,8 @@ A local Unix socket connects the node host service to the macOS app for exec app
 ### Gateway + node transport
 
 - The app runs the Gateway (local mode) and connects to it as a node.
-- Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
-- Node commands include `canvas.*`, `camera.list`, `camera.snap`, `camera.clip`, `camera.ptz.status`, `camera.ptz.control`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
+- Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.present`).
+- Node commands include `canvas.present`, `canvas.hide`, `canvas.navigate`, `camera.list`, `camera.snap`, `camera.clip`, `camera.ptz.status`, `camera.ptz.control`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
 - The node reports a `permissions` map so agents can see whether screen, camera, microphone, speech, automation, or accessibility access is available.
 
 ### Node service + app IPC
@@ -112188,7 +112233,7 @@ available before the turn starts.
 The iOS app is separate from Codex Computer Use. It does not install or proxy
 the Codex `computer-use` MCP server and it is not a desktop-control backend.
 Instead, the iOS app connects as an OpenClaw node and exposes mobile
-capabilities through node commands such as `canvas.*`, `camera.*`, `screen.*`,
+capabilities through node commands such as `camera.*`, `screen.*`,
 `location.*`, and `talk.*`.
 
 Use [iOS](/platforms/ios) when you want an agent to drive an iPhone node
@@ -112258,9 +112303,19 @@ With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
 re-enable the plugin and reload MCP servers. Before starting an isolated
-Codex app-server on macOS, auto-install also copies the official signed
+Codex app-server on macOS, auto-install also provisions the official signed
 Computer Use service app from the selected desktop app bundle into that
-Codex home's `computer-use` directory when the native client is missing.
+Codex home's `computer-use` directory. OpenClaw verifies the outer service and
+nested client signatures, bundle identities, versions, builds, and code hashes.
+It installs a missing or incomplete copy, or stages and verifies a replacement
+before swapping out a complete copy whose signed identity no longer matches the
+selected desktop distribution. Failed swaps roll back without changing the
+rest of the isolated Codex home. This native-app synchronization runs only for
+OpenClaw-owned isolated agent homes. User-scoped homes and explicit
+`CODEX_HOME` overrides retain their existing native bundle ownership.
+The agent directory is the trusted ownership boundary. Within it, native-service
+provisioning rejects symlinked Codex-home, `computer-use`, and service-app paths,
+and revalidates the owned parent around each staged swap.
 On macOS, when no matching
 marketplace is registered and a standard desktop app bundle exists, OpenClaw
 also tries to register the bundled Codex marketplace from
@@ -112295,7 +112350,10 @@ OpenClaw serializes native Codex config reads and Computer Use installation
 inside one running Gateway. A separate Codex process or another Gateway is not
 part of that fence. After changing native Codex plugin config outside the
 Gateway, restart the Gateway and start a new chat before relying on the new
-selection.
+selection. Restart the Gateway after updating the selected ChatGPT or Codex
+desktop app as well; cold app-server startup then verifies and, when needed,
+refreshes each isolated home's signed Computer Use service before launching it.
+Warm clients are intentionally not polled for desktop bundle changes.
 
 ## Commands
 
@@ -112863,10 +112921,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin accepts exactly stable Codex app-server `0.147.0`. Older or newer
-versions, prereleases, build-suffixed versions, and unversioned app-server
-handshakes are rejected. The same exact-version requirement applies to explicit
-custom executables, remote app-servers, and macOS desktop binaries.
+The plugin ships Codex app-server `0.147.0` and accepts external versions at or
+above that minimum. Older, malformed, and unversioned handshakes are rejected.
+Build metadata does not affect SemVer precedence. The same minimum applies to
+explicit custom executables, remote app-servers, and macOS desktop binaries;
+admission is not readiness proof.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -112915,7 +112974,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a `0.147.0` remote app-server trusted to accept
+Only connect OpenClaw to a remote app-server in the supported range trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 
@@ -113675,15 +113734,48 @@ intentionally exact-match only: a changed command, arguments, tool payload, or
 cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
-flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` registers a provider-neutral gateway question for the
-originating session. The Control UI renders the gateway question card, and a
-single non-secret choice uses typed channel buttons when the channel supports
-them. Button taps, Control UI answers, and the next queued plain-text reply all
-resolve the same gateway record before OpenClaw returns the app-server answer.
-Codex auto-resolution and attempt aborts bound the wait and cancel the record.
-Secret questions stay entirely on the warned text-reply path. Other MCP
-elicitation requests fail closed.
+flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`.
+Plugin, account, Computer Use, and MCP approval classification runs before
+ordinary input handling. A denied policy or unmappable approval schema returns
+an explicit decline and never becomes a general-purpose form.
+
+OpenClaw supports app-server MCP elicitation modes `form`, `openai/form`, and
+`url`. Standard and extended forms can contain at most 12 fields. OpenClaw
+normalizes field names to Gateway-safe question IDs, retains the original names
+in accepted content, and presents fields in sequential batches of up to three.
+Each field may offer at most four choices; fields and choices over those limits
+are declined rather than truncated. Supported fields are free-form strings,
+string `enum` or `oneOf` choices, booleans, numbers and integers, and
+multi-select string arrays. Free-form string values are limited to 4,096
+characters. String length, `email`, `uri`, `date`, and
+`date-time` constraints and numeric or array bounds are validated before an
+accepted response is returned. Optional fields, required fields, and valid
+defaults retain their schema meaning.
+
+`openai/form` also supports a single-select `openai/imagePicker` field with up
+to four bounded item IDs and titles. OpenClaw uses only those IDs and titles; it
+does not fetch or render item images. An unknown extended field type produces a
+visible operator message and an explicit decline. This visible fallback is part
+of the `openai/form` capability contract.
+
+URL elicitations are shown as literal text with explicit Continue and Decline
+choices. OpenClaw does not fetch or open the URL. URLs are limited to 2,048
+characters, must use HTTP or HTTPS, cannot include credentials, and cannot
+contain control or invisible characters. Invalid URLs produce a visible
+explanation and an explicit decline.
+
+Codex `request_user_input` and ordinary MCP elicitations share one per-turn
+interactive queue. The Control UI renders each non-secret Gateway question, and
+a single choice uses typed channel buttons when the channel supports them.
+Button taps, Control UI answers, and the next queued plain-text reply resolve
+the same exact app-server request. `serverRequest/resolved` selects a request by
+its outer string-or-integer JSON-RPC ID; attempt abort, timeout, and cleanup
+cancel the current owner. Late answers cannot resolve a queued replacement.
+
+Only an explicit field `isSecret: true` or Codex question
+`isSecret: true` enables secret handling. Secret form fields are requested one
+at a time through the warned ephemeral text-reply path and never create durable
+Gateway question records. OpenClaw does not infer secrecy from field names.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).
@@ -113849,18 +113941,19 @@ existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
-Codex also receives `node_exec` and `node_process` tools for commands on paired
-nodes. Native shell remains on the Codex app-server host and workspace
+Codex also receives `node_exec` for commands on paired nodes. Native shell
+remains on the Codex app-server host and workspace
 (Gateway-local for the default stdio deployment); `node_exec` selects a node by
-name or id and keeps OpenClaw's node approval policy in force. If a finite
-runtime allowlist disables native Code Mode and leaves the turn without an
-execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
-tools available instead for direct, unsandboxed execution.
+name or id, keeps OpenClaw's node approval policy in force, and waits for the
+remote command to finish. Remote-node background follow-up is not available. If
+a finite runtime allowlist disables native Code Mode and leaves the turn without
+an execution environment, OpenClaw keeps its policy-filtered `exec` and
+`process` tools available instead for direct, unsandboxed execution.
 
 When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
-default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
-`node_process` as the shell path. This keeps the configured execution host from
-silently falling back to the app-server or Gateway machine.
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` as the
+shell path. This keeps the configured execution host from silently falling
+back to the app-server or Gateway machine.
 
 `gateway_exec` is not exposed when an active OpenClaw sandbox, a node-default
 execution policy, memory-flush restrictions, tool allow/deny policy, or
@@ -113880,10 +113973,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0`. The plugin ships and manages `@openai/codex`
-  `0.147.0` by default, so a `codex` command on `PATH` does not affect normal
-  startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.147.0` version.
+- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
+  exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
+  not affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report valid SemVer at or above that managed baseline.
+  Newer versions initialize with a warning; acceptance permits an attempt and
+  is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -115144,11 +115239,12 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.147.0`. Older or
-newer versions, prereleases, build-suffixed versions, and unversioned servers
-are rejected because OpenClaw validates generated schemas and runtime contracts
-against the Codex version it ships. Update or remove custom, remote, or desktop
-binary overrides that select another version.
+**The app-server is rejected:** use Codex `0.147.0` or newer. OpenClaw rejects
+older, malformed, and unversioned servers. Same-version prereleases such as
+`0.147.0-alpha.2` remain below the stable minimum; build metadata such as
+`0.147.0+desktop` does not affect precedence. A newer external version is
+permitted to initialize rather than treated as proof of compatibility, so
+startup and capability operations can still fail with their normal diagnostics.
 
 **`/codex status` cannot connect:** check that the `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is
@@ -115280,9 +115376,9 @@ working.
 - The agent runtime must be the native Codex harness.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
-- Codex app-server reports exactly stable `0.147.0`. The official plugin ships
-  `@openai/codex` `0.147.0`; custom, remote, and macOS desktop-owned binaries
-  must use the same exact version.
+- Codex app-server reports version `0.147.0` or newer. The official plugin
+  still ships `@openai/codex` `0.147.0`; accepted external versions remain
+  subject to normal startup and capability validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
@@ -118408,13 +118504,14 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option             | Effect                                                                                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
-| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
-| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
-| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| Option                  | Effect                                                                                                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matcher`               | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                           |
+| `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
+| `timeoutMs`             | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
+| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
@@ -118486,16 +118583,16 @@ observation-only.
 
 **Agent turn**
 
-| Hook                            | Purpose                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Override provider or model before session messages load                                  |
-| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
-| `before_prompt_build`           | Add prompt context or narrow the current turn's submitted tool surface                   |
-| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
-| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
-| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
-| `agent_end`                     | Observe final messages, success state, and run duration                                  |
-| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                  |
+| Hook                            | Purpose                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`          | Override provider or model before session messages load                                                     |
+| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks                         |
+| `before_prompt_build`           | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
+| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run                    |
+| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                                              |
+| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                                            |
+| `agent_end`                     | Observe final messages, success state, and run duration                                                     |
+| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                                     |
 
 **Conversation observation**
 
@@ -118928,9 +119025,64 @@ Use the phase-specific hooks for new plugins:
   dynamic tools are thread-scoped and Codex `turn/start` has no tool-surface
   override; use the embedded or Copilot runtime when a plugin requires this
   policy.
+- `before_prompt_build` with `{ requiresToolAuthority: true }`: runs in a
+  second, post-policy phase. Use it when prompt enrichment reads data through
+  a tool-backed capability and the same turn must be allowed to call that
+  tool. See [Authorized prompt enrichment](#authorized-prompt-enrichment).
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
+
+### Authorized prompt enrichment
+
+Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
+must verify the finalized per-turn tool policy before retrieving context:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event, ctx) => {
+    const authority = ctx.toolAuthority;
+    if (!authority?.allows("memory_search")) {
+      return;
+    }
+
+    const recalledContext = await recallForPrompt(event.prompt);
+    authority.assertActive();
+    return { prependContext: recalledContext };
+  },
+  { requiresToolAuthority: true },
+);
+```
+
+The host excludes this handler from the ordinary prompt-build phase. After all
+ordinary hooks and tool restrictions settle, a supported runtime invokes it
+with `ctx.toolAuthority` bound to that exact active turn and finalized tool
+surface. Embedded, CLI, Copilot, and Codex runtimes support this phase. If a
+runtime cannot prove the authority, it skips the handler.
+
+Treat `toolAuthority` as an ephemeral capability:
+
+- `allows(toolName)` checks a canonical tool id against the finalized surface
+  and also verifies that the capability is still active.
+- `assertActive()` rejects after abort, cancellation, run replacement,
+  lifecycle rotation, or hook dispatch completion. Call it after awaited work
+  and before committing plugin-owned side effects.
+- `fingerprint` is opaque cache-partitioning input. It is not a bearer token or
+  authorization proof; never persist, transmit, or compare it as authority.
+- Return only `prependContext` or `appendContext` from this phase. It cannot
+  replace the system prompt or change `toolsAllow` after policy has settled.
+
+The host revalidates authority after each awaited handler and discards stale
+enrichment. A retained `toolAuthority` object fails closed after dispatch.
+
+This option requires a host that implements the post-policy phase. Published
+plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
+with the first OpenClaw version they build against for this contract. Older
+hosts skip incompatible packages during discovery and reject incompatible
+installs or updates. Do not publish a package that uses this option while
+claiming compatibility with an older plugin API; an older host may otherwise
+treat an unknown option as an ordinary pre-policy hook.
 
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
@@ -119517,76 +119669,53 @@ source and whether the key was present.
 # Section: plugins/llama-cpp.md
 
 ---
-summary: "Run local GGUF chat and memory embeddings with an OpenClaw-managed llama.cpp server"
+summary: "Run GGUF chat with managed or existing llama.cpp servers and managed local embeddings"
 read_when:
-  - You want local text inference without an API key or separately managed model server
+  - You want OpenClaw to install and manage a local llama.cpp server
+  - You want OpenClaw to connect to an existing llama-server
   - You want memory search embeddings from a local GGUF model
   - You are configuring memory.search.provider = "local"
-  - You need to inspect or repair OpenClaw's managed llama.cpp server
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
 ---
 
-The `llama-cpp` plugin manages a loopback-only `llama-server` for local GGUF
-chat and embeddings. OpenClaw installs a pinned, integrity-verified llama.cpp
-release, starts it only when a request needs it, reuses it across concurrent
-chat and embedding requests, and stops it after an idle period.
-
-Install the official plugin before using either local inference or local memory
-embeddings:
+The `llama-cpp` plugin provides one `llama-cpp` model provider. OpenClaw can
+manage a local `llama-server` or connect to one that you operate. Both choices
+use `llama-cpp/<model>` references and the OpenAI-compatible transport.
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
+openclaw onboard
 ```
 
-## Guided setup
+## Choose server ownership
 
-Choose **llama.cpp** once during interactive onboarding or configuration.
-OpenClaw then:
+| Setup choice          | Process owner                 | Local embeddings |
+| --------------------- | ----------------------------- | ---------------- |
+| Managed local server  | OpenClaw                      | Yes              |
+| Existing llama-server | You or an external supervisor | No               |
 
-1. Selects the verified llama-server build for the Gateway platform.
-2. Verifies the archive SHA-256 and the extracted server version.
-3. Downloads and verifies the default chat and embedding models after consent.
-4. Writes a durable OpenAI-compatible provider with a loopback `baseUrl` and
-   `localService` process definition.
-5. Live-tests the candidate before saving it.
+`models.providers.llama-cpp.localService` is the ownership discriminator. If
+it exists, OpenClaw manages the process. Without it, `baseUrl` identifies an
+existing endpoint. Switching choices rewrites ownership-specific state on the
+same provider; it never creates another provider namespace.
 
-The default chat model remains:
+## Managed local server
 
-`hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf`
+Choose **Managed local server** when OpenClaw should install, start, and stop
+the server. After consent, setup verifies a pinned llama.cpp build, downloads
+verified chat and embedding models, writes the loopback endpoint and
+`localService` definition, and probes the result before saving it.
 
-Gemma 4 E4B IT Q4_K_M is about 5.0 GB. OpenClaw offers that download only on
-machines with at least 16 GiB of RAM. The default context cap is 65,536 tokens,
-which the full agent system prompt requires. The bundled EmbeddingGemma model is
-about 0.3 GB.
+The default chat model is Gemma 4 E4B IT Q4_K_M (about 5.0 GB) with a 65,536
+token context cap. OpenClaw offers it only on machines with at least 16 GiB of
+RAM. The managed EmbeddingGemma model is about 0.3 GB. Setup discovery remains
+read-only and never installs or downloads anything.
 
-Discovery is read-only. It reports a prepared choice only when the managed
-binary, server preset, and selected model already exist; it never installs or
-downloads during discovery.
+### Use another managed GGUF
 
-## How requests run
-
-The provider uses OpenClaw's normal OpenAI-compatible chat, image, streaming,
-and tool transport. `llama-server` applies the GGUF chat template; OpenClaw
-executes tool calls and returns their results to the model. The existing
-`llamacpp-gbnf` tool-schema compatibility profile remains enabled.
-
-One managed router owns separate presets for chat and embeddings. This lets
-`memory.search.provider: "local"` use a dedicated embedding GGUF through
-`/v1/embeddings` without creating a second OpenClaw process supervisor.
-
-## Use another GGUF model
-
-Add the model to `models.providers.llama-cpp.models`, set `params.modelPath`,
-make it the selected `llama-cpp/<model-id>`, then run interactive llama.cpp
-setup again. `modelPath` accepts:
-
-- an absolute or `~/` local GGUF path;
-- a cache-relative GGUF filename;
-- a full `hf:` file URI, including `#branch` when needed;
-- an HTTPS GGUF URL that publishes a SHA-256 response digest.
-
-Example model entry:
+Add a model under `models.providers.llama-cpp.models`, select its
+`llama-cpp/<id>` reference, and run managed setup again:
 
 ```json5
 {
@@ -119605,14 +119734,116 @@ Example model entry:
 }
 ```
 
-The default managed cache is `~/.openclaw/models/llama.cpp`. Existing
-`modelCacheDir` settings still win, and setup recognizes the former
-`~/.node-llama-cpp/models` default cache so upgrades do not redownload a model
-that is already present.
+`modelPath` accepts local paths, cache-relative filenames, full `hf:` file
+URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
+cache is `~/.openclaw/models/llama.cpp`; a configured `modelCacheDir` remains
+authoritative for managed setup.
 
-## Local memory embeddings
+## Existing llama-server
 
-Set the memory provider to `local`:
+Choose **Existing llama-server** when another terminal, container, service
+manager, or machine owns the process.
+
+<Steps>
+  <Step title="Start llama-server">
+    Give the model a stable alias:
+
+    ```bash
+    llama-server \
+      --model /path/to/model.gguf \
+      --alias my-model \
+      --host 127.0.0.1 \
+      --port 8080
+    ```
+
+  </Step>
+  <Step title="Configure OpenClaw">
+    Run `openclaw onboard`, choose **Existing llama-server**, and enter the
+    endpoint. Enable API-key authentication only when the server or proxy
+    requires it.
+
+  </Step>
+  <Step title="Select the model">
+    ```bash
+    openclaw models list --provider llama-cpp
+    openclaw models set llama-cpp/my-model
+    ```
+  </Step>
+</Steps>
+
+OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
+`/props`. Router property probes use `autoload=false`; discovery never loads,
+wakes, unloads, downloads, or reloads models. Explicit configured model rows
+remain authoritative over discovered rows with the same ID.
+
+### Authentication and endpoint replacement
+
+Existing endpoints support no auth, API keys, SecretRefs, auth profiles, and
+explicit authorization headers. An explicit `Authorization` header wins over
+ambient API-key discovery unless setup receives a new key. Choosing no API key
+removes the default llama.cpp auth profile and stale inline key fields while
+preserving an explicit `Authorization` header and unrelated headers. Endpoint
+URLs containing a username or password are rejected.
+
+```bash
+export LLAMA_SERVER_API_KEY="<API_KEY>"
+openclaw onboard
+```
+
+When the endpoint changes, setup does not send the old endpoint's environment,
+profile, configured key, or header credentials to the replacement. Switching
+from managed mode also removes `localService`, managed model/cache parameters,
+and the managed request timeout before discovery.
+
+For non-interactive setup:
+
+```bash
+openclaw onboard \
+  --non-interactive \
+  --accept-risk \
+  --auth-choice llama-cpp-existing-server \
+  --custom-base-url http://127.0.0.1:8080/v1 \
+  --custom-model-id my-model
+```
+
+Use `--llama-server-api-key <API_KEY>` when a replacement endpoint requires a
+new credential. `LLAMA_SERVER_API_KEY` remains available for initial setup and
+unchanged endpoints.
+
+### Manual configuration
+
+Guided setup is recommended because it verifies discovery. The minimal manual
+shape is:
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      "llama-cpp": {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        api: "openai-completions",
+        request: { allowPrivateNetwork: true },
+        models: [],
+      },
+    },
+  },
+}
+```
+
+Custom provider IDs may also point at llama-server through the generic
+OpenAI-compatible path. They remain custom providers and should declare the
+`llamacpp` tool-schema profile explicitly; see [custom provider capability
+declarations](/gateway/config-tools#custom-provider-capability-declarations).
+
+## Requests and local embeddings
+
+Both ownership choices use OpenClaw's normal chat, image, streaming, and tool
+transport. The llama.cpp compatibility family cleans unsupported tool-schema
+constraints, maps thinking-off requests to the Qwen chat-template flag, and
+adapts JSON Schema requests for older llama-server builds.
+
+Local memory embeddings require managed mode:
 
 ```json5
 {
@@ -119627,60 +119858,28 @@ Set the memory provider to `local`:
 }
 ```
 
-The plugin preserves the historical `local` provider/model cache identity, so
-the transport migration does not require a SQLite schema change or automatic
-memory reindex. A custom embedding `modelPath` remains its literal index
-identity. Run `openclaw memory status --index` if you intentionally change it.
-
-## Diagnostics
-
-Run:
-
-```bash
-openclaw memory status --deep
-openclaw doctor
-```
-
-After the managed embedding server has handled a request, deep status reports
-facts observed from `/health`, `/models`, `/props`, and `/metrics`: server build,
-model id and path, endpoint state, and configured capabilities. Vision is
-reported only when `/props` confirms it. Draft and multimodal projector support
-are not currently configured by this plugin and are never inferred from a model
-name.
-
-Local-service startup and exit logs include bounded, redacted stderr tails. See
-[Logging](/logging) and [Local model services](/gateway/local-model-services).
-
-## Platform requirements
-
-- macOS arm64 uses the official Metal build. macOS x64 uses the CPU build.
-- Linux x64 needs glibc 2.34 or newer; Linux arm64 needs glibc 2.38 or newer.
-  Install the OpenMP runtime (`libgomp1` on Debian/Ubuntu or `libgomp` on
-  Fedora) if the version probe reports `libgomp.so.1` missing.
-- Windows x64 and arm64 use the CPU build and require the Microsoft Visual C++
-  2015-2022 Redistributable.
-- Alpine/musl and platforms without a pinned official build fail with an
-  actionable manual-server path rather than silently skipping setup.
-
-OpenClaw intentionally does not auto-select CUDA, ROCm, SYCL, OpenVINO, or
-Vulkan archives. Those builds add driver and companion-runtime contracts that
-cannot be verified safely from onboarding alone.
+The plugin preserves the historical `local` embedding provider and index
+identity. Run `openclaw memory status --index` after intentionally changing the
+embedding model.
 
 ## Troubleshooting
 
-**Binary missing or wrong version:** run interactive llama.cpp setup again. It
-reinstalls the pinned build and rewrites the absolute `localService.command`.
+- Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
+- Existing server: inspect `/health`, `/models`, and `/props`; HTTP 503 means
+  the model is still loading.
+- Missing tools: verify both tool capability flags in `/props` and use a
+  tool-capable Jinja chat template.
+- Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
+  builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- Platforms without a verified managed build should use an existing server.
 
-**Model missing:** configure a local GGUF path or rerun setup and approve the
-verified default download.
+OpenClaw does not auto-select CUDA, ROCm, SYCL, OpenVINO, or Vulkan archives.
 
-**Server starts but the model fails to load:** inspect `openclaw logs --follow`
-and `openclaw memory status --deep`. The managed service error includes the
-bounded server stderr tail.
+## Related
 
-**Only keyword memory matches:** run `openclaw memory status --deep`, repair the
-reported endpoint/model issue, then run `openclaw memory index --force` only if
-status reports an index identity mismatch.
+- [Local model services](/gateway/local-model-services)
+- [Model providers](/concepts/model-providers)
+- [LM Studio](/providers/lmstudio)
 
 
 
@@ -124210,7 +124409,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-58 plugins
+57 plugins
 
 - **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
@@ -124228,7 +124427,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[browser](/plugins/reference/browser)** (`@openclaw/browser-plugin`) - included in OpenClaw. Adds agent-callable tools.
 
-- **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Experimental Canvas control and A2UI rendering surfaces for paired nodes.
+- **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Presents hosted widget documents on paired macOS panels.
 
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
 
@@ -124255,8 +124454,6 @@ Each entry lists the package, distribution route, and description.
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
 
 - **[huggingface](/plugins/reference/huggingface)** (`@openclaw/huggingface-provider`) - included in OpenClaw. Adds Hugging Face model provider support to OpenClaw.
-
-- **[linux-canvas](/plugins/reference/linux-canvas)** (`@openclaw/linux-canvas`) - included in OpenClaw. Canvas rendering bridge for the OpenClaw Linux desktop app.
 
 - **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
@@ -124416,7 +124613,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
 
-- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Managed local llama.cpp server for GGUF chat and embeddings.
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
@@ -124747,7 +124944,7 @@ Regenerate it with:
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 149
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 148
 generated plugin reference pages by distribution, package, and description.
 
 
@@ -125075,8 +125272,8 @@ For operator setup, model prefix examples, and Codex-only configs, see
 
 The Codex plugin enforces the minimum app-server version documented in
 [Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
-blocks older or unversioned servers, so OpenClaw only runs against the protocol
-surface it has tested.
+blocks older, malformed, or unversioned servers. Admission permits startup to
+continue; it does not prove later runtime or capability operations will succeed.
 
 ### Tool-result middleware
 
@@ -125129,6 +125326,15 @@ the prompt, deliver it through OpenClaw's blocking reply path, and normalize
 choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
+
+For schema-backed forms and literal URL confirmation, use the
+`agentHarnessStructuredInput` runtime surface from the same subpath. It
+snapshots bounded own data without invoking accessors, compiles supported
+primitive fields into Gateway questions, and executes them with batching,
+secret-input, timeout, and cancellation fencing. Harnesses keep ownership of
+their protocol envelope and must pass the exact turn signal and active-owner
+check; `run(...)` returns an answered, declined, cancelled, or unsupported
+outcome for the adapter to translate.
 
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
@@ -126043,9 +126249,14 @@ the channel boundary instead of rewriting marker text after sanitization.
 A `MessageReceipt` records the result returned by a channel adapter. Concrete
 platform message identifiers show that the platform send path accepted the
 message; they do not prove that a recipient's device displayed or read it.
-Receipts without platform message identifiers are local receipt metadata only.
-Channels with read receipts or device-delivery state should track those facts
-through a separate channel-specific path.
+Destination and routing identifiers such as chat, channel, room, conversation,
+or recipient JID are metadata, never `platformMessageIds`. Receipts without
+platform message identifiers are local receipt metadata only. A
+provider-observed receipt thread overrides the requested route thread. If a
+batch contains conflicting provider threads, each part retains its thread and
+the aggregate receipt omits `threadId`. Channels with read receipts or
+device-delivery state should track those facts through a separate
+channel-specific path.
 
 If a channel adapter can prove that retrying a failure cannot duplicate a
 recipient-visible send and no finalization-capable call began, throw
@@ -127965,6 +128176,20 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Memory read missing results
+
+Memory managers now return `status: "ok"` for successful excerpts and
+`status: "not_found"` when an allowed file is missing. This keeps empty files
+and empty ranges distinct from missing files without relying on pagination
+metadata.
+
+At registration, every statusless result from an older external memory manager
+preserves its legacy successful-read semantics and becomes `status: "ok"`,
+including empty results without range metadata. Only an explicit
+`status: "not_found"` reports absence. New producers must emit that status for
+missing files; registered-input normalization remains available through the
+next Plugin SDK major.
+
 ### Channel state migration declarations
 
 Channel plugins should declare `doctorContract.stateMigrations: true` in
@@ -129106,9 +129331,9 @@ persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases, while `remote-exec` providers return SSH leases. Omission advertises no placement modes while preserving direct environment lifecycle calls. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
+Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases, while `remote-exec` providers return SSH leases. Omission advertises no placement modes while preserving direct environment lifecycle calls. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
-`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The Gateway reads the password file over the provider's SSH endpoint when needed and never persists the password. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
@@ -129139,9 +129364,11 @@ or fully dynamic tool registration.
 | `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
 | `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
 | `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
-| `api.registerWidgetPresenter(presenter)` | Destination that can present a hosted `show_widget` document                                                                             |
+| `api.registerWidgetPresenter(presenter)` | Explicit or current-channel destination behind the core `show_widget` tool                                                               |
 
-Widget presenters declare a model-visible target, a short description, current availability, and a `present(...)` callback. Return the closed presentation result codes (`no_eligible_node` or `node_error`) instead of throwing for expected device failures; core then keeps the widget available inline and gives the agent a recovery step.
+Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
+
+Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
@@ -129204,30 +129431,32 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                                      |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
-| `api.registerService(service)`                  | Background service                                                     |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
-| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
-| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+| Method                                            | What it registers                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`        | Event hook                                                             |
+| `api.registerHttpRoute(params)`                   | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler, opts?)` | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`    | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`               | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`    | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                    | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`    | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`      | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+
+Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
 #### Post-ack webhook work
 
@@ -129596,7 +129825,7 @@ api.registerCli(
     descriptors: [
       {
         name: "canvas",
-        description: "Capture or render canvas content from a paired node",
+        description: "Present hosted widgets on a paired Mac",
         hasSubcommands: true,
       },
     ],
@@ -132950,7 +133179,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
-    | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
+    | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/native-hook-relay-runtime` | Private-local bundled runtime helper for retained native direct-child hook policy; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
@@ -132960,8 +133189,9 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; Process exec helpers |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, and configurable TERM-to-KILL grace |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
+    | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
     | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
     | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
@@ -133027,7 +133257,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
-    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, temp-root, media-source path, and directory-durability helpers |
+    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, and directory-durability helpers |
     | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
@@ -133048,7 +133278,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/context-visibility-runtime` | Private-local after July 2026; Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/html-entity-runtime` | Private-local after July 2026; Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
-    | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including five-entity HTML escaping |
+    | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including UTF-8 prefix truncation and five-entity HTML escaping |
     | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |
     | `plugin-sdk/host-runtime` | Private-local after July 2026; Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Private-local after July 2026; Retry config and retry runner helpers |
@@ -136776,7 +137006,7 @@ providers: `byteplus`, `byteplus-plan`; contracts: `videoGenerationProviders`
 # Section: plugins/reference/canvas.md
 
 ---
-summary: "Experimental Canvas control and A2UI rendering surfaces for paired nodes."
+summary: "Presents hosted widget documents on paired macOS panels."
 read_when:
   - You are installing, configuring, or auditing the canvas plugin
 title: "Canvas plugin"
@@ -136784,7 +137014,7 @@ title: "Canvas plugin"
 
 # Canvas plugin
 
-Experimental Canvas control and A2UI rendering surfaces for paired nodes.
+Presents hosted widget documents on paired macOS panels.
 
 ## Distribution
 
@@ -137375,7 +137605,7 @@ OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: `discord`; contracts: `tools`, `transcriptSourceProviders`; skills
+channels: `discord`; contracts: `transcriptSourceProviders`; skills
 
 ## Related docs
 
@@ -138079,30 +138309,6 @@ channels: `line`
 
 
 
-# Section: plugins/reference/linux-canvas.md
-
----
-summary: "Canvas rendering bridge for the OpenClaw Linux desktop app."
-read_when:
-  - You are installing, configuring, or auditing the linux-canvas plugin
-title: "Linux Canvas plugin"
----
-
-# Linux Canvas plugin
-
-Canvas rendering bridge for the OpenClaw Linux desktop app.
-
-## Distribution
-
-- Package: `@openclaw/linux-canvas`
-- Install route: included in OpenClaw
-
-## Surface
-
-plugin
-
-
-
 # Section: plugins/reference/linux-node.md
 
 ---
@@ -138158,7 +138364,7 @@ providers: `litellm`; contracts: `imageGenerationProviders`
 # Section: plugins/reference/llama-cpp.md
 
 ---
-summary: "Managed local llama.cpp server for GGUF chat and embeddings."
+summary: "Managed and external llama.cpp servers for GGUF chat and embeddings."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
 title: "Llama Cpp plugin"
@@ -138166,7 +138372,7 @@ title: "Llama Cpp plugin"
 
 # Llama Cpp plugin
 
-Managed local llama.cpp server for GGUF chat and embeddings.
+Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 ## Distribution
 
@@ -147276,6 +147482,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [inferrs (local models)](/providers/inferrs)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [LM Studio (local models)](/providers/lmstudio)
 - [LongCat](/providers/longcat)
 - [MiniMax](/providers/minimax)
@@ -148218,7 +148425,8 @@ loopback on that machine:
 ```
 
 `lmstudio` automatically trusts its configured endpoint for model requests, including loopback,
-LAN, and tailnet hosts (except metadata/link-local origins). Any custom/local OpenAI-compatible
+LAN, and tailnet hosts (except metadata, link-local, and local-use NAT64
+`64:ff9b:1::/48` origins). Any custom/local OpenAI-compatible
 provider entry gets the same exact-origin trust. Requests to a different private host or port still
 require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `false` to opt out of
 the default trust.
@@ -156660,7 +156868,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     curl http://127.0.0.1:8000/v1/models
     ```
 
-    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata/link-local origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
+    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
 
   </Accordion>
 
@@ -158621,145 +158829,6 @@ can be deleted without reducing orphan cleanup coverage.
 
 
 
-# Section: refactor/canvas.md
-
----
-summary: "Plan and audit checklist for moving Canvas out of core and into a bundled experimental plugin."
-read_when:
-  - Moving Canvas host, tools, commands, docs, or protocol ownership
-  - Auditing whether Canvas is still core-owned
-  - Preparing or reviewing the experimental Canvas plugin PR
-title: "Canvas plugin refactor"
----
-
-# Canvas plugin refactor
-
-Canvas is low-use and experimental. Treat it as a bundled plugin, not a core feature. Core may keep generic gateway, node, HTTP, auth, config, and native-client plumbing, but Canvas-specific behavior should live under `extensions/canvas`.
-
-## Goal
-
-Move Canvas ownership to `extensions/canvas` while preserving the current paired-node behavior:
-
-- the agent-facing `canvas` tool is registered by the Canvas plugin
-- Canvas node commands are allowed only when the Canvas plugin registers them
-- A2UI host/source files live under the Canvas plugin
-- Canvas document materialization lives under the Canvas plugin
-- CLI command implementation lives under the Canvas plugin, or delegates through a plugin-owned runtime barrel
-- docs and plugin inventory describe Canvas as experimental and plugin-backed
-
-## Non-goals
-
-- Do not redesign the native app Canvas UI in this refactor.
-- Do not remove Canvas protocol/client support from iOS, Android, or macOS unless a separate product decision says Canvas should be deleted.
-- Do not build a broad plugin service framework only for Canvas unless at least one other bundled plugin needs the same seam.
-
-## Current branch state
-
-Done:
-
-- Added bundled plugin package in `extensions/canvas`.
-- Added `extensions/canvas/openclaw.plugin.json`.
-- Moved the agent `canvas` tool from `src/agents/tools/canvas-tool.ts` to `extensions/canvas/src/tool.ts`.
-- Removed core registration of `createCanvasTool` from `src/agents/openclaw-tools.ts`.
-- Moved Canvas host implementation from `src/canvas-host` to `extensions/canvas/src/host`.
-- Kept `extensions/canvas/runtime-api.ts` as the plugin-owned compatibility barrel for tests, packaging, and external public Canvas helpers.
-- Moved Canvas document materialization from `src/gateway/canvas-documents.ts` to `extensions/canvas/src/documents.ts`.
-- Moved Canvas CLI implementation and A2UI JSONL helpers into `extensions/canvas/src/cli.ts`.
-- Moved Canvas host URL and scoped capability helpers into `extensions/canvas/src`.
-- Moved Canvas node command defaults out of hardcoded core lists and into plugin `nodeInvokePolicies`.
-- Added plugin-owned Canvas host config at `plugins.entries.canvas.config.host`.
-- Registered A2UI as a sandboxed board widget source kind through the generic
-  Plugin SDK content-kind seam. The capability-scoped A2UI asset route remains
-  available when the optional Canvas file host is disabled.
-- Moved Canvas and A2UI HTTP serving behind Canvas plugin HTTP route registration.
-- Added generic plugin WebSocket upgrade dispatch for plugin-owned HTTP routes.
-- Replaced Canvas-specific gateway host URL and node capability auth with generic hosted plugin surface and node capability helpers.
-- Added plugin-owned hosted media resolvers so Canvas document URLs resolve through the Canvas plugin instead of core importing Canvas document internals.
-- Added `api.registerNodeCliFeature(...)` so Canvas can declare `openclaw nodes canvas` as a plugin-owned node feature without manually spelling the parent command path.
-- Removed production `src/**` imports of `extensions/canvas/runtime-api.js`.
-- Moved the A2UI bundle source from `apps/shared/OpenClawKit/Tools/CanvasA2UI` to `extensions/canvas/src/host/a2ui-app`.
-- Moved A2UI build/copy implementation under `extensions/canvas/scripts` and replaced root build wiring with generic bundled-plugin asset hooks.
-- Removed the runtime legacy top-level `canvasHost` config alias.
-- Kept the Canvas doctor migration so `openclaw doctor --fix` rewrites old `canvasHost` configs into `plugins.entries.canvas.config.host`.
-- Removed old-agent Canvas protocol compatibility behind gateway protocol v4. Native clients and gateways now use only `pluginSurfaceUrls.canvas` plus `node.pluginSurface.refresh`; the deprecated `canvasHostUrl`, `canvasCapability`, and `node.canvas.capability.refresh` path is intentionally unsupported in this experimental refactor.
-- Updated generated plugin inventory to include Canvas.
-- Added plugin reference docs at `docs/plugins/reference/canvas.md`.
-
-Known remaining core-owned Canvas surfaces:
-
-- Native app Canvas handlers under `apps/` still intentionally consume the Canvas plugin surface
-- native app Canvas protocol/client handlers under `apps/`
-- published artifact output still uses `dist/canvas-host/a2ui` for backwards-compatible runtime lookup, but the copy step is now plugin-owned
-
-## Target shape
-
-`extensions/canvas` should own:
-
-- plugin manifest and package metadata
-- agent tool registration
-- node invoke command policy
-- Canvas host and A2UI runtime
-- Canvas A2UI bundle source and asset build/copy scripts
-- Canvas document creation and asset resolution
-- Canvas CLI implementation
-- Canvas docs page and plugin inventory entry
-
-Core should own only generic seams:
-
-- plugin discovery and registration
-- generic agent tool registry
-- generic node invoke policy registry
-- generic gateway HTTP/auth and WebSocket upgrade dispatch
-- generic hosted plugin surface URL resolution
-- generic hosted media resolver registration
-- generic node capability transport
-- generic config plumbing
-- generic bundled-plugin asset hook discovery
-
-Native apps may keep Canvas command handlers as clients of the protocol. They are not the plugin runtime owner.
-
-## Migration steps
-
-1. Treat `plugins.entries.canvas.config.host` as the plugin-owned config surface.
-2. Update docs so Canvas is described as an experimental bundled plugin.
-3. Run focused Canvas tests, plugin inventory checks, plugin SDK API checks, and build/type gates affected by runtime boundaries.
-
-## Audit checklist
-
-Before calling the refactor complete:
-
-- `rg "src/canvas-host|../canvas-host"` returns no live source imports.
-- `rg "canvas-tool|createCanvasTool" src` finds no core-owned Canvas tool implementation.
-- `rg "canvas.present|canvas.snapshot|canvas.a2ui" src/gateway` finds no hardcoded allowlist defaults outside generic plugin policy tests.
-- `rg "extensions/canvas/runtime-api" src --glob '!**/*.test.ts'` is empty.
-- `rg "canvas-documents" src` is empty.
-- `rg "registerNodesCanvasCommands|nodes-canvas" src` is empty; the Canvas plugin registers `openclaw nodes canvas` through nested plugin CLI metadata.
-- `rg "createCanvasHostHandler|handleA2uiHttpRequest" src/gateway` returns no gateway runtime ownership.
-- `rg "apps/shared/OpenClawKit/Tools/CanvasA2UI|canvas-a2ui-copy|extensions/canvas/src/host/a2ui" scripts .github package.json` finds only compatibility wrappers or plugin-owned paths.
-- `pnpm plugins:inventory:check` passes.
-- `pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD` reports the intended API changes.
-- Targeted Canvas tests pass.
-- Changed-lanes tests pass for Canvas host/A2UI paths.
-- PR body explicitly says Canvas is experimental and plugin-backed.
-
-## Verification commands
-
-Use targeted local checks while iterating:
-
-```sh
-pnpm test extensions/canvas/src/host/server.test.ts extensions/canvas/src/host/server.state-dir.test.ts extensions/canvas/src/host/file-resolver.test.ts
-pnpm test src/gateway/server.plugin-node-capability-auth.test.ts src/gateway/server-import-boundary.test.ts
-pnpm test extensions/canvas/src/config-migration.test.ts src/commands/doctor-legacy-config.migrations.test.ts
-pnpm test test/scripts/changed-lanes.test.ts test/scripts/build-all.test.ts extensions/canvas/scripts/bundle-a2ui.test.ts test/scripts/bundled-plugin-assets.test.ts extensions/canvas/scripts/copy-a2ui.test.ts src/infra/run-node.test.ts
-pnpm tsgo:extensions
-pnpm plugins:inventory:check
-pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
-```
-
-Run `pnpm build` before push if runtime barrel, lazy import, packaging, or published plugin surfaces change.
-
-
-
 # Section: refactor/database-first.md
 
 ---
@@ -159952,10 +160021,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   stay temp materializations because channel delivery still needs a file path;
   their expiry metadata is SQLite-owned without JSON sidecars.
 - Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
-  of a default `state/canvas/documents` directory. The Canvas host serves those
-  blobs directly; local files are created only for explicit `host.root`
-  operator content or temporary materialization when a downstream media reader
-  requires a path.
+  of a default `state/canvas/documents` directory. The hosted document route
+  serves those blobs directly; local files are created only for temporary
+  materialization when a downstream media reader requires a path.
 - File Transfer audit decisions now use shared SQLite `plugin_state_entries`
   instead of the unbounded `audit/file-transfer.jsonl` runtime log. Doctor
   imports the legacy JSONL audit file into plugin state and removes the source
@@ -161713,7 +161781,6 @@ Example roster for a personal-assistant workspace; swap in whichever skills fit 
 - Prefer the `openclaw` CLI for scripting; the desktop app handles permissions.
 - Run installs from the Skills tab; the install button is hidden once a required binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
-- Canvas UI runs full-screen with native overlays. Avoid placing critical controls at the top-left/top-right/bottom edges; add explicit layout gutters instead of relying on safe-area insets.
 - For browser-driven verification, use the `openclaw browser` CLI (bundled `browser` plugin) with the OpenClaw-managed Chrome/Brave/Edge/Chromium profile.
 - Manage: `status`, `doctor [--deep]`, `start [--headless]`, `stop`, `tabs`, `tab [new|select|close]`, `open <url>`, `focus <id>`, `close <id>`.
 - Inspect: `screenshot [--full-page|--ref|--labels]`, `snapshot [--format ai|aria|--interactive|--efficient]`, `console`, `errors`, `requests`, `pdf`, `responsebody`.
@@ -165088,9 +165155,11 @@ The lists below are generated from the source target registry and checked agains
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
+- `channels.discord.voice.realtime.providers.*.apiKey`
 - `channels.discord.voice.tts.providers.*.apiKey`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
+- `channels.discord.accounts.*.voice.realtime.providers.*.apiKey`
 - `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`
@@ -165377,7 +165446,7 @@ More on limits: [/reference/token-use](/reference/token-use).
 
 Compaction summarizes older conversation into a persisted `compaction` entry in the transcript and keeps recent messages intact. After compaction, future turns see the compaction summary plus messages after `firstKeptEntryId`. Compaction is **persistent**, unlike session pruning - see [/concepts/session-pruning](/concepts/session-pruning).
 
-Embedded OpenClaw compaction inherits the session thinking level by default. Set `agents.defaults.compaction.thinkingLevel` to use a separate level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
+Embedded OpenClaw compaction uses `low` thinking by default. Set `agents.defaults.compaction.thinkingLevel: "inherit"` to reuse the session level, or choose another explicit level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
 
 AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
@@ -172442,7 +172511,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS voice wake](/platforms/mac/voicewake)
 - [macOS voice overlay](/platforms/mac/voice-overlay)
 - [macOS WebChat](/platforms/mac/webchat)
-- [macOS Canvas](/platforms/mac/canvas)
+- [macOS widget panel](/platforms/mac/canvas)
 - [macOS gateway (launchd)](/platforms/mac/bundled-gateway)
 - [macOS health](/platforms/mac/health)
 - [macOS icon](/platforms/mac/icon)
@@ -174633,9 +174702,13 @@ not install or modify anything on the remote host.
     - With a configured default model, **Keep existing model config** appears
       first and becomes the default, followed by **QuickStart (recommended)**
       and **Manual setup**.
-    - Each detected migration source adds an **Import from &lt;source&gt;** choice
-      after those setup choices. Explicit import flags dispatch the import
-      directly and skip this menu.
+    - When a migration provider is available, **Import from another agent**
+      appears after those setup choices. Selecting it opens a provider list
+      with entries such as **Import from Claude**, **Import from Codex**, and
+      **Import from Hermes**. Detected sources appear first with their paths;
+      other available providers ask for a source path. Explicit import flags
+      dispatch the import directly and skip this menu. Use Back from the
+      provider list to return to **Setup mode** before an import begins.
     - Re-running the wizard does not wipe anything unless you pass `--reset`.
       Reset is a command flag, not a setup-mode choice.
     - `--reset-scope` accepts `config` (config only),
@@ -175176,8 +175249,12 @@ menu is built from the current installation:
 - With a configured default model, **Keep existing model config** appears first
   and is selected by default, followed by **QuickStart (recommended)** and
   **Manual setup**.
-- Each detected migration source adds an **Import from &lt;source&gt;** choice
-  after the setup choices.
+- When a migration provider is available, **Import from another agent** appears
+  after the setup choices. Selecting it opens provider-specific entries such as
+  **Import from Claude**, **Import from Codex**, and **Import from Hermes**.
+  Detected sources appear first with their paths; other available providers ask
+  for a source path. Use Back from the provider list to return to **Setup mode**
+  before an import begins.
 
 Pass `--flow quickstart` or `--flow manual` (alias `advanced`) to select a
 classic setup flow and skip that prompt. Import flags select the import flow
@@ -175598,7 +175675,10 @@ Restart the gateway after changing this value.
 
 ## Permission configuration
 
-ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+ACP sessions run without an interactive TTY for file-write and shell-exec
+permission prompts. This does not disable ACP form or URL elicitation during a
+channel-delivered turn: those requests use transient Gateway questions instead.
+The acpx plugin provides two config keys that control harness permissions:
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 
@@ -176285,6 +176365,15 @@ work. The delivery path depends on that shape.
     session, and ACP output is delivered back to that same
     channel/thread/topic.
 
+    When an ACP agent requests structured input during a delivered turn,
+    OpenClaw presents supported form fields as transient Gateway questions in
+    batches of up to three. Single- and multi-select fields support up to four
+    choices. URL requests show the literal HTTP(S) URL with explicit Continue
+    and Decline choices; OpenClaw does not fetch or open it. Explicitly secret
+    fields use a warned, ephemeral text-reply prompt and are never stored in a
+    Gateway question record. Malformed or unsupported requests produce a
+    visible explanation and are declined instead of returning empty answers.
+
     What OpenClaw sends to the harness:
 
     - Normal bound follow-ups are sent as prompt text, plus attachments only when the harness/backend supports them.
@@ -176494,6 +176583,7 @@ see [ACP agents - setup](/tools/acp-agents-setup).
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`                   | `sandbox="require"` requested for ACP runtime.                                                                         | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
 | `Cannot apply --model ... did not advertise model support`                                | The target harness does not expose generic ACP model switching.                                                        | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
 | Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
+| ACP input request is declined or cancelled                                                | The form/URL is malformed, exceeds field/choice limits, uses unsupported constraints, or the owning turn ended.        | Read the visible decline reason, retry with a standard primitive form or valid HTTP(S) URL, and keep the originating turn active while answering.                        |
 | `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                                | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |
 | ACP session stalls indefinitely after completing work                                     | Harness process finished but ACP session did not report completion.                                                    | Update OpenClaw; current acpx cleanup reaps OpenClaw-owned stale wrapper and adapter processes on close and Gateway startup.                                             |
@@ -181023,6 +181113,84 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 
 
 
+# Section: tools/custodian-skills.md
+
+---
+title: "Custodian skills"
+sidebarTitle: "Custodian skills"
+summary: "Release-versioned operational skills that only the configured Custodian agent can discover and use."
+read_when:
+  - Configuring or extending the Custodian agent
+  - Reviewing agent-only skill loading
+  - Planning operational skill coverage
+---
+
+Custodian skills are release-versioned operational playbooks shipped with OpenClaw. They live under `custodian-skills/` in the package and load at the bundled-skill precedence tier, but only for the agent resolved by `agents.defaults.systemAgent.agentId`.
+
+When that setting is absent, OpenClaw falls back to a retained legacy default owner, the sole configured agent, or legacy `main` when no explicit agent roster exists. If several agents are configured without a system agent or retained legacy owner, no agent receives the library. For every other agent, Custodian skills are absent from discovery, snapshots, slash-command catalogs, sandbox sync, and the model-facing skills prompt.
+
+Normal skill controls still apply. `skills.entries.<name>.enabled: false` disables an individual Custodian skill, and agent skill allowlists can narrow the final set. See [Skills config](/tools/skills-config).
+
+## Workflow contract
+
+Every shipped Custodian skill uses the same five sections in this order:
+
+1. **Gather** reads redacted current config and probes live state.
+2. **Mutate** uses validated non-interactive writes — `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows — never a direct file edit.
+3. **Repair** runs `openclaw doctor` and separates diagnosis from any approved repair.
+4. **Prove** exercises one live end-to-end outcome.
+5. **Report** records what changed, what was observed, and what remains.
+
+All five-section playbooks keep secret values out of prompts, logs, and files. Credentials use SecretRefs or credential stores. A workflow never claims success without its Prove outcome; it reports the exact blocker when live proof is unavailable.
+
+## First wave
+
+| Skill                | Outcome                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `configure-channel`  | Configure and send a confirmed test message through a channel family such as Discord, Slack, Telegram, or WhatsApp. |
+| `add-model-provider` | Configure API-key or subscription/OAuth provider access and run one live Gateway inference.                         |
+| `diagnose-gateway`   | Perform read-only Gateway, config, SecretRef, channel-auth, log, and port triage.                                   |
+| `cloud-image-bake`   | Bake a Cloud Worker image, prove it with a timed dispatch, and safely retire the superseded snapshot.               |
+
+## Roadmap catalog
+
+The following catalog documents intended later tiers. These names are roadmap entries, not bundled skills or promises of current behavior.
+
+### Tier 2: common operations
+
+- `configure-search`: configure and live-prove a search provider.
+- `create-agent`: create an agent, verify its workspace, and prove one turn.
+- `manage-plugin`: install, configure, verify, or remove an approved plugin.
+- `rotate-credential`: rotate one supported credential through its owning store and prove the consumer.
+- `upgrade-openclaw`: stage an upgrade, run health checks, and verify rollback readiness.
+
+### Tier 3: advanced operations
+
+- `fleet-rollout`: roll out one verified config or release across managed Gateways.
+- `incident-response`: collect redacted evidence, contain an incident, and verify recovery.
+- `migrate-gateway`: move a Gateway while preserving explicit state and identity contracts.
+- `release-validation`: run release-track package, install, and live behavior proof.
+- `restore-backup`: restore into an isolated target, validate state, and cut over deliberately.
+
+## Add an operator skill
+
+Put local additions in the configured Custodian agent's workspace, not in the release-owned package directory:
+
+```text
+<custodian-workspace>/skills/<skill-name>/SKILL.md
+```
+
+Workspace skills already have higher precedence than the bundled tier and are scoped to that agent's workspace. Follow the same Gather → Mutate → Repair → Prove → Report contract, keep the description short, and start a new session after changing the skill. See [Creating skills](/tools/creating-skills) for the full format.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Skills config](/tools/skills-config)
+- [Cloud Workers](/gateway/cloud-workers)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+
+
+
 # Section: tools/diffs.md
 
 ---
@@ -181031,7 +181199,7 @@ title: "Diffs"
 sidebarTitle: "Diffs"
 read_when:
   - You want agents to show code or markdown edits as diffs
-  - You want a canvas-ready viewer URL or a rendered diff file
+  - You want a browser-ready viewer URL or a rendered diff file
   - You need controlled, temporary diff artifacts with secure defaults
 ---
 
@@ -181039,7 +181207,7 @@ read_when:
 
 Input: `before` + `after` text, or a unified `patch` (mutually exclusive).
 
-Output: a gateway viewer URL for canvas presentation, a rendered PNG/PDF file path for message delivery, or both.
+Output: a gateway viewer URL for browser presentation, a rendered PNG/PDF file path for message delivery, or both.
 
 ## Quick start
 
@@ -181065,7 +181233,7 @@ Output: a gateway viewer URL for canvas presentation, a rendered PNG/PDF file pa
   <Step title="Pick a mode">
     <Tabs>
       <Tab title="view">
-        Canvas-first flows: agents call `diffs` with `mode: "view"` and open `details.viewerUrl` with `canvas present`.
+        Browser flows: agents call `diffs` with `mode: "view"` and open `details.viewerUrl` in a browser.
       </Tab>
       <Tab title="file">
         Chat file delivery: agents call `diffs` with `mode: "file"` and send `details.filePath` with `message` using `path` or `filePath`.
@@ -181411,7 +181579,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
 
 ## Operational guidance
 
-- Prefer `mode: "view"` for local interactive reviews in canvas.
+- Prefer `mode: "view"` for local interactive reviews in a browser.
 - Prefer `mode: "file"` for outbound chat channels that need an attachment.
 - Keep `allowRemoteViewer` disabled unless your deployment requires remote viewer URLs.
 - Set an explicit short `ttlSeconds` for sensitive diffs.
@@ -184544,8 +184712,8 @@ Common plugin-provided tools include:
   output
 - [Tool Search](/tools/tool-search) for discovering and calling large tool
   catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for node Canvas control and A2UI
-  rendering
+- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter and
+  A2UI dashboard content
 
 ## Configure access and approvals
 
@@ -187300,7 +187468,10 @@ For app-server setup, auth order, and native Codex runtime details, see [Codex h
 
 ## ACPX harness permissions
 
-ACPX sessions are non-interactive, so they cannot click a TTY permission prompt. ACPX uses separate harness-level settings under `plugins.entries.acpx.config`:
+ACPX sessions have no interactive TTY for permission prompts. Supported ACP
+form and URL requests can still reach the operator as Gateway questions during
+a channel-delivered turn; those are separate from permission approval. ACPX
+uses separate harness-level settings under `plugins.entries.acpx.config`:
 
 | Setting                     | Values          | Meaning                                     |
 | --------------------------- | --------------- | ------------------------------------------- |
@@ -188097,7 +188268,7 @@ The current chat shows exactly one live card:
 - When the session rail is visible, the card appears in the rail.
 - At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
 
-The two placements are mutually exclusive. In chat content, hover a session-reference link to see that referenced session's latest card. Sidebar rows intentionally have no hover surface. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The two placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
 
 ## Pin the card to the dashboard
 
@@ -188372,10 +188543,12 @@ Set `SEARXNG_BASE_URL` as an alternative to config:
 export SEARXNG_BASE_URL="http://localhost:8888"
 ```
 
-Resolution order: configured `baseUrl` string, then an inline env SecretRef on
-`baseUrl`, then `SEARXNG_BASE_URL`. When none of the config paths are set and
-`SEARXNG_BASE_URL` is present with no explicit provider chosen, auto-detection
-picks SearXNG.
+Resolution order: configured `baseUrl` (a string or an allowed env SecretRef),
+then `SEARXNG_BASE_URL` only when `baseUrl` is missing. An explicit SecretRef
+that read-only config inspection blocks does not fall through to the ambient
+environment; fix its provider, default-provider, or env allowlist policy
+instead. When none of the config paths are set and `SEARXNG_BASE_URL` is
+present with no explicit provider chosen, auto-detection picks SearXNG.
 
 ## Plugin config reference
 
@@ -188788,7 +188961,9 @@ read_when:
 
 ## How widgets work
 
-When the agent calls `show_widget`, OpenClaw core wraps `widget_code` in a minimal HTML document, stores it as a Canvas document, and returns a preview handle. The Control UI renders that handle in a sandboxed iframe, while iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
+When the agent calls `show_widget`, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI renders the handle in a sandboxed iframe, while iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
+
+Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call; there is no transport-specific widget tool or content kind.
 
 In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinned HTML runs behind the same dedicated-origin, double-iframe sandbox host used by MCP Apps; the browser never resolves a widget data binding inside the untrusted frame.
 
@@ -188801,9 +188976,9 @@ For browser embedding, the wrapper document injects four small host bridges arou
 
 Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
 
-The core implementation is available only when the originating Gateway client declares the `inline-widgets` capability. The Control UI and supported native apps declare this capability automatically. Linux Quick Chat stays text-only for Gateway connections that require a custom TLS leaf pin because its platform WebView cannot bind that pin. The Discord implementation is available only in Discord sessions with Activities configured. Other channel runs do not receive `show_widget`.
+OpenClaw exposes `show_widget` only when the originating Gateway client declares the `inline-widgets` capability or exactly one registered current-channel presenter synchronously matches trusted run context. The Control UI and supported native apps declare the inline capability automatically. Linux Quick Chat stays text-only for Gateway connections that require a custom TLS leaf pin because its platform WebView cannot bind that pin. Discord matches only when Activities are configured for the current account and a concrete channel is available. Other channel runs without an inline client or matching presenter do not receive the tool.
 
-Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers and direct HTTP tool-invoke callers remain fail closed because they do not declare client capabilities.
+Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` remain fail closed unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
 
 ## Design system
 
@@ -188852,19 +189027,19 @@ Author widgets with three rules:
 
 ## Use the tool
 
-Both implementations use the same required fields:
+The core tool uses these required fields on every destination:
 
 <ParamField path="title" type="string" required>
-  Short title shown with the inline preview and in the hosted document title.
+  Short title shown with the inline preview and in the hosted document title. Discord accepts up to 80 characters.
 </ParamField>
 
 <ParamField path="widget_code" type="string" required>
-  Self-contained HTML or SVG. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. Discord accepts a complete HTML document or body fragment up to 48 KiB.
+  Self-contained HTML or SVG. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
 </ParamField>
 
 Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
 
-The core Canvas tool accepts these optional dashboard placement fields:
+The core `show_widget` tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
 
 - `pin`: also place the widget on the session dashboard.
 - `name`: stable widget name; defaults to a slug of `title`.
@@ -188874,13 +189049,13 @@ The core Canvas tool accepts these optional dashboard placement fields:
 - `after`: sibling widget name after which to place the widget.
 - `capabilities`: access requested by a pinned widget. `netOrigins` contains exact HTTPS origins; `tools` contains `prompt`, an allowlisted read binding, or an exact `cron.trigger:<jobId>` action.
 
-The core result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Pinned results also retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload. Discord returns the stored widget and posted-message identifiers.
+An inline result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. A successful current-channel presentation returns a generic message receipt describing what became visible. Pinned results retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload.
 
-`discord_widget` remains registered as a deprecated alias for one release. New agent calls should use `show_widget`.
+If current-channel presentation fails, core falls back inline only when the originating client actually supports inline widgets. Otherwise the tool fails visibly. When `pin: true` succeeded before presentation failed, the result is explicitly partial and names the durable board widget; presentation failure never rolls back that unrelated board state.
 
 ## Show on a device
 
-When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected macOS Canvas node, and opens its native panel at that document. The tool result names the selected Mac.
+When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected widget-panel-capable Mac, and opens its native panel at that document. The tool result names the selected Mac.
 
 If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only in this first version; widget actions remain disabled there.
 
@@ -188930,7 +189105,7 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 - [Control UI hosted embeds](/web/control-ui#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
-- [Canvas node controls](/plugins/reference/canvas)
+- [macOS widget panel](/platforms/mac/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
 
 
@@ -188973,6 +189148,11 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   critical findings block apply; warn-level findings remain visible but do not
   block it.
 - **Recoverable:** apply writes rollback metadata before touching live files.
+- **Revision atomic:** create and revise flush a complete immutable proposal
+  generation, publish it with an atomic rename, then sync its parent directory
+  where supported before publishing the SQLite record and event together.
+  Process interruption exposes either the complete previous generation or the
+  complete new one.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
 ## Lifecycle
@@ -189369,19 +189549,34 @@ proposals.
 <OPENCLAW_STATE_DIR>/
   state/openclaw.sqlite
   skill-workshop/proposals/<proposal-id>/
-    PROPOSAL.md
-    assets/
-    examples/
-    references/
-    scripts/
-    templates/
+    generations/<generation-id>/
+      PROPOSAL.md
+      assets/
+      examples/
+      references/
+      scripts/
+      templates/
 ```
 
 Default state directory: `~/.openclaw`.
 
-- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
-- `PROPOSAL.md`: pending skill proposal.
-- Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
+- `state/openclaw.sqlite`: canonical proposal records, the active generation
+  reference, lifecycle status, origin attribution, and apply rollback metadata.
+- Each generation contains one `PROPOSAL.md` and all of that revision's support
+  files. Revision publication never overwrites the active generation in place.
+- Generation files are flushed before publication. After the complete bundle is
+  renamed into place, OpenClaw syncs the `generations/` parent directory where
+  the platform supports directory flushing, before committing SQLite state.
+  Platforms that report directory synchronization as unsupported retain atomic
+  rename and process-interruption safety, but do not claim power-loss durability
+  for that directory entry.
+- Support files remain beside their generation's `PROPOSAL.md` so operators can
+  review the proposed skill as a normal directory.
+
+Proposals created by older releases can still reference the earlier root-level
+`PROPOSAL.md` layout. The stored record identifies that bundle directly; the
+next successful revision moves the proposal onto the generation layout and
+retires the previous bundle.
 
 `openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
 `rollback.json` metadata into SQLite after verifying each proposal, then removes
@@ -189917,9 +190112,13 @@ workspace/skills      (highest)
 workspace/.agents/skills
 ~/.agents/skills
 ~/.openclaw/skills
-bundled skills
+bundled + Custodian skills
 skills.load.extraDirs (lowest)
 ```
+
+Custodian skills share bundled precedence but load only for the agent selected
+by `agents.defaults.systemAgent.agentId` (or the existing sole-agent fallback).
+See [Custodian skills](/tools/custodian-skills).
 
 Changes to skills and config take effect on the next new session when the
 watcher is enabled, or on the next agent turn when the watcher detects a
@@ -189985,14 +190184,15 @@ binary presence.
 OpenClaw loads from these sources, **highest precedence first**. When the same
 skill name appears in multiple places, the highest source wins.
 
-| Priority    | Source                 | Path                                    |
-| ----------- | ---------------------- | --------------------------------------- |
-| 1 — highest | Workspace skills       | `<workspace>/skills`                    |
-| 2           | Project agent skills   | `<workspace>/.agents/skills`            |
-| 3           | Personal agent skills  | `~/.agents/skills` (default state only) |
-| 4           | Managed / local skills | `<state-dir>/skills`                    |
-| 5           | Bundled skills         | shipped with the install                |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
+| Priority    | Source                 | Path                                     |
+| ----------- | ---------------------- | ---------------------------------------- |
+| 1 — highest | Workspace skills       | `<workspace>/skills`                     |
+| 2           | Project agent skills   | `<workspace>/.agents/skills`             |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
+| 4           | Managed / local skills | `<state-dir>/skills`                     |
+| 5           | Bundled skills         | shipped with the install                 |
+| 5           | Custodian skills       | shipped; configured Custodian agent only |
+| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -190005,6 +190205,10 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is
 missing). Agent allowlists (below) also match on this `name`.
+
+The release-versioned [Custodian skill library](/tools/custodian-skills) shares
+the bundled precedence tier but is absent for every agent except the configured
+system/Custodian agent.
 
 <Note>
   Codex CLI's native `$CODEX_HOME/skills` directory is **not** an OpenClaw
@@ -196319,9 +196523,9 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 ## Personal identity
 
-Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional GitHub identity. Open **Settings → Profile → Identity** to update it. The profile follows the authenticated person across browsers and supplies attribution in shared sessions; clearing browser site data does not delete it.
+Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
-Linking GitHub opts the profile into public commit co-author credit for agent sessions that person prompts. The row shows GitHub's public account avatar and link without replacing a custom OpenClaw avatar. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for the noreply privacy and eligibility rules.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate, default-off toggle for future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
 The assistant avatar override follows the same browser-local pattern: uploaded overrides overlay the gateway-resolved identity locally and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients that write the field directly.
 
@@ -196443,7 +196647,7 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 ### Session placement
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** or **Stop cloud worker…**; both actions use the session-scoped `sessions.move` and `sessions.reclaim` lifecycle rather than raw environment destruction. Move continues on the Gateway, an eligible paired device, or a configured cloud profile. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
 ### Session icons
 
@@ -196451,11 +196655,15 @@ Choose **Set icon** from a single session's context menu to give its sidebar row
 
 ## New session page
 
-The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses the working folder and execution destination. Connections with `operator.write` can choose **Gateway · local** or a configured cloud profile discovered through read-scoped `environments.list`; cloud submission uses `sessions.dispatch`. The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. When the selected Gateway folder is a Git checkout, the same picker offers optional **Worktree** isolation with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Cloud workers require that managed-worktree path. Administrators additionally see direct execution on paired nodes that expose `system.run` and **Connect machine**; pairing, profile configuration, raw environment lifecycle, incognito sessions, direct `execNode` execution, arbitrary host or node paths, and paired-node filesystem browsing remain admin-only. The composer footer chooses the new session's model and reasoning level.
+The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local** or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. The device list stays authoritative to that environment catalog: only an available current session host with valid worker capacity and at least one free slot is selectable. Offline known hosts, connected non-hosts, saturated hosts, hosts without current capacity, outdated hosts, and unavailable hosts remain visible with a reason and next step.
 
-Canceling or recovering an interrupted cloud startup reclaims the placement by session key. Cleanup archives a newly created draft before deleting it with the write-scoped archived-only contract, and any cleanup error remains visible for recovery.
+The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source. **Start in terminal** is available only for local placement.
 
-Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory until the Gateway restarts; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Cloud starts persist their model and reasoning choices before dispatching the session to its worker.
+For a remote target, the Control UI creates the managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId` or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Device dispatch requires `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
+
+Canceling or recovering an interrupted remote-placement startup reclaims the placement by session key. Cleanup archives a newly created draft before deleting it with the write-scoped archived-only contract, and any cleanup error remains visible for recovery.
+
+Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory until the Gateway restarts; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
 
 **Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
 
@@ -196465,7 +196673,7 @@ For agent GitHub CLI identity and Git author setup, see [`tools.github`](/gatewa
 
 On multi-user gateways, only admin-scope connections can create or view incognito threads, and other sessions cannot reach them through agent session tools or transcript search. Incognito protects against storage and other gateway-mediated users, not against the gateway owner or process operator, who can always observe live sessions.
 
-**Browse folders** opens the Place picker's inline directory browser through `fs.listDir`. Write-scope Gateway browsing starts at the configured agent workspace and cannot navigate above it; realpath checks also reject symlinks that escape the workspace. Admin connections can browse arbitrary Gateway paths and browse-capable nodes. An execution-capable node without `fs.listDir` still accepts a typed absolute path for admins. Recent places restore only folders the current connection can submit, and node recents remain admin-only. Submitting calls `sessions.create` with the first message, so the run starts in the same round-trip and the UI jumps to the new session's chat. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
+**Browse folders** opens the Place picker's inline Gateway directory browser through `fs.listDir`. Write-scope browsing starts at the configured agent workspace and cannot navigate above it; realpath checks also reject symlinks that escape the workspace. Admin connections can browse arbitrary Gateway paths. Recent places restore only Gateway folders the current connection can submit; New Session does not browse or remember node filesystem paths. Local submission can call `sessions.create` with the first message in the same round-trip. Remote submission uses the create, dispatch, then send sequence described above. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
 
 Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
 
@@ -196519,7 +196727,7 @@ select it to open the owning Approvals page.
     - Notifications: browser web-push status, subscribe/unsubscribe, and a test send.
     - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode).
     - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header.
-    - Agents: a settings page (**Settings → Agents**, `/settings/agents`) with an **Agent defaults** row for the shared template plus per-agent tabs (Overview, Files, Tools, Skills, Channels, Automations, Memory). The Overview tab edits the agent's identity — display name, emoji, and an avatar image that is downscaled and size-bounded in the browser before `agents.update`. Saving stores configured identity fields and mirrors them to the workspace `IDENTITY.md`; configured values take precedence over manual edits to the same file fields.
+    - Agents: a settings page (**Settings → Agents**, `/settings/agents`) with an **Agent defaults** row for the shared template plus per-agent tabs (Overview, Files, Tools, Skills, Channels, Automations, Memory). The Overview tab edits the agent's identity — display name, emoji, and an avatar image that is downscaled and size-bounded in the browser before `agents.update`. Saving stores configured identity fields and mirrors them to the workspace `IDENTITY.md`; configured values take precedence over manual edits to the same file fields. The Tools tab connects a system or per-agent GitHub identity through a user-clicked device-authorization link, shows the one-time code and credential health, and keeps one-use PAT setup as an explicit fallback.
     - Profile: a settings page showing the default agent's identity with all-time usage stats — lifetime tokens, peak day, longest session, activity streaks, a year-long token heatmap, top tools, and channel highlights (`usage.cost`, `sessions.usage`).
     - MCP has a dedicated settings page with server rows (transport, enablement, OAuth/filter/parallel summaries), direct add/enable/disable/remove controls, common operator commands, and the scoped `mcp` config editor. The Plugins page remains the home for one-click connectors and discovery.
     - Model Providers: a settings page listing every configured model provider with its brand icon, auth state (`models.authStatus`), model availability (`models.list`), live plan/quota/billing data where the provider reports it (`usage.status`), and local session spend for the last 30 days (`sessions.usage`). The initial page reuses the Gateway's prepared model catalog. **Refresh** explicitly discovers the live provider catalog, then re-reads credential state and provider usage; discovery failures stay visible without discarding the last successful model list.
@@ -196650,14 +196858,14 @@ Codex and Claude Code sessions discovered in the sessions sidebar can open in th
 
 Eligibility is per session and per host. Gateway-local sessions start the provider-owned resume command on the Gateway host. Paired-node sessions start an allowlisted provider command on the owning node and relay only that PTY's output, input, and resize events; this does not expose a general node shell or accept browser-supplied commands. File uploads use the separate, size-bounded `terminal.upload` node command and remain bound to the already-open terminal session. Approve the node pairing upgrade when that command first appears. Nodes that do not advertise the matching terminal-resume command, including embedded worker bridges without duplex streaming, keep the viewer available and show terminal opening as unavailable; older nodes can still run a terminal but cannot receive dragged files.
 
-Standalone operator sessions, including the full-screen terminal document, are connection-owned. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
+Standalone operator sessions, including the terminal focus presentation, are connection-owned. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
 Conversation-owned sessions, whether opened by the agent tool or from that Chat session's Terminal panel, are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing a viewer tab detaches only that browser. Conversation-owned PTYs remain until the agent closes them, their process exits, policy disables them, or the Gateway shuts down. PTYs opened by a detached task close automatically when that task succeeds, fails, times out, is cancelled, or is lost. `terminal.list` marks each entry as connection- or agent-owned.
 
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
 
-The terminal is also available as a [full-screen terminal document](/web/urls#special-documents-and-startup-modes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
+The terminal is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
 
 ## Browser panel
 
@@ -196717,7 +196925,7 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
     - The session header shows a small facepile beside the workspace chip when other people are viewing the same session; it lists up to four viewer avatars with an overflow count and disappears when you are alone. On multi-user gateways the header also carries the permanent session owner chip and a facepile of up to four participants who have prompted the session (owner excluded); sidebar rows compress the same information into a pair-stack — owner in front, one peeking participant or a +N count behind (see [Multi-user mode](/concepts/multi-user#reading-the-avatars)).
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - User-message bubbles carry transcript actions: a hover rewind button (confirm popover with a "Don't ask again" option) plus right-click **Rewind to here** and **Fork from here**. Rewind repoints the session to the state just before that message and returns its text to the composer for edit and resend (`sessions.rewind`, `operator.admin`); fork creates a new session from the active-path prefix before the message, opens it, and seeds its composer with the same text (`sessions.fork`, `operator.write`). Both actions disable with an explanatory tooltip while the agent is working, apply only to persisted user messages, and are rejected for sessions whose conversation is owned by an external agent harness. Rewind moves chat context only — files and other tool side effects are not reverted — and the pre-rewind transcript remains preserved in the append-only session store. When that store contains multiple transcript branches, the chat title bar shows a branch menu with each branch's latest message, message count, and recency; selecting an inactive branch switches the current session back to that preserved path (`sessions.branches.list`, `operator.read`; `sessions.branches.switch`, `operator.admin`). Branch switching is also unavailable while the agent is working, and selecting the already-active branch is a typed no-op error at the RPC boundary.
-    - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). Once the pushed branch has commits to compare, the row adds a Create PR button that opens GitHub's new-pull-request page; before that, a session with changed files (committed, uncommitted, or untracked) still gets the row without the button. The row hides itself while an open or draft PR exists; once the branch's PR is merged and the pushed tip still matches the merged head, the row disappears too (returning without the Create PR button only when new local work appears, and with it once new commits are pushed past the merged head). The branch row comes from local git only, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
+    - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback for this read-only preview. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). **Publish PR** sends only the session key and bounded presentation text to the Gateway-owned publication broker. The broker derives the repository and branch from session ownership, uses the effective agent GitHub identity rather than the preview credential, and returns the draft pull request URL or an actionable typed failure. The row hides itself while an open or draft PR exists; once the branch's PR is merged and the pushed tip still matches the merged head, the row disappears too. The branch row comes from local git, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
     - The session diff panel shows what a session's checkout actually changed: the branch button in the workspace rail or chat title bar opens a dense per-file viewer with normalized added/deleted/modified counts, collapsible files, wrapping and unified/split layouts, file copy/open/editor actions, and "N unmodified lines" markers between hunks. The footer switches between all changes, uncommitted work, and individual commits while showing how far the branch is ahead of its merge base; committed branches also provide a copyable local sync command. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
     - Every Chat pane has a title bar. Click the session title to rename it; the workspace chip copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
     - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Reopen it with ⇧⌘B, the files toggle in the title bar, or the panel's **+** menu; the title-bar toggle carries a changed-file count badge.
@@ -196825,7 +197033,7 @@ Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway
 
 Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
 
-The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Discord Activities provide the same tool name on Discord; other channel-originated runs do not receive it.
+The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel plugins such as Discord Activities can register contextual presenters behind that same tool. Channel-originated runs without an eligible presenter or inline client do not receive it.
 
 <Tabs>
   <Tab title="strict">
@@ -196910,13 +197118,14 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Content security policy
 
-The Control UI ships a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
+The Control UI ships a tight `img-src` policy: **same-origin** assets, `data:` URLs, locally generated `blob:` URLs, and the fixed GitHub avatar and Gravatar hosts are allowed. Other remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
 
 In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
 - Local `blob:` URLs created by the Control UI still render.
+- Verified GitHub account avatars render from `avatars.githubusercontent.com`; arbitrary avatar hosts remain blocked.
 - GitHub link preview avatars are fetched by the Gateway from GitHub's fixed avatar host and returned as bounded `data:` URLs; the operator browser never contacts the remote avatar host.
 - Link favicons are on by default. The authenticated Control UI requests them through the Gateway; the browser never contacts link destinations directly. The Gateway requests only each public hostname's HTTPS `/favicon.ico`, with strict DNS-pinned SSRF checks on the original URL and every redirect plus bounded time, bytes, concurrency, and image validation. Private, internal, and IP-literal destinations are rejected. This discloses linked hostnames and the Gateway's network address to those sites. Set `gateway.controlUi.automaticallyFetchFavicons: false` to prevent all favicon route requests and destination fetches.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
@@ -197095,9 +197304,11 @@ Principles:
 
 ## UX flows
 
-- **Graduation:** agent calls `show_widget` in any chat → widget renders inline
-  in the transcript exactly as today → hover shows **Pin to dashboard** → widget
-  appears on the session's board. The agent can pass `pin: true` to do the same.
+- **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
+  renders in the transcript → hover shows **Pin to dashboard** → widget appears
+  on the session's board. The agent can pass `pin: true` to do the same. A
+  channel presenter can instead make the same core document visible on the
+  current transport.
 - **Board view:** a session with a board gets a view switch (Chat / Split /
   Dashboard). Split = tab strip (only when >1 tab) + fluid grid + docked chat
   pane; Dashboard is the same without the chat. The chat dock is resizable and
@@ -197375,11 +197586,11 @@ Widget bytes are served over the authenticated HTTP surface, not the socket.
 
 ## Agent tools
 
-Three tools total (core, always registered; rendering gated on the
-`inline-widgets` client cap as today):
+Three tools total (core; `show_widget` is exposed only for an `inline-widgets`
+client or one unambiguous matching current-channel presenter):
 
 - `show_widget { title, widget_code, kind?, name?, pin?, size?, tab?, after?,
-capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
+presentation?, capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
   includes active registered kinds; `pin` places it on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
@@ -197400,10 +197611,11 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   binding gating, rate limits), byte-frozen approval.
 - **Widget hosting moves from `extensions/canvas` to core.** The canvas doc
   store, document wrapper, HTTP serving, and the `show_widget` tool become core
-  (`src/canvas/`); the plugin keeps the node-canvas control tool (`canvas`) and
-  A2UI. The `pluginSurfaceUrls["canvas"]` advertisement and
+  (`src/canvas/`); the plugin keeps the macOS node-panel presenter and the A2UI
+  dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
-  stable. Discord sessions keep the Discord-owned `show_widget` variant.
+  stable. Discord Activities register a contextual presenter behind core's
+  canonical `show_widget` tool.
 
 ## Non-goals (this program)
 
@@ -197420,7 +197632,7 @@ Independent worktrees, Codex-built, review+land sequentially. Land-then-fix.
 | #   | Branch                               | Scope                                                                                                                                                                              | Depends on                       |
 | --- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | T1  | `claude/dashboard-remove-workspaces` | Delete workspaces plugin + UI + docs + i18n keys; doctor cleanup rule                                                                                                              | —                                |
-| T2  | `claude/dashboard-canvas-core`       | Promote widget hosting + `show_widget` to core; canvas plugin keeps node tool; zero behavior change                                                                                | —                                |
+| T2  | `claude/dashboard-canvas-core`       | Promote widget hosting + `show_widget` to core; Canvas plugin keeps the node-panel presenter and A2UI dashboard kind; zero behavior change                                         | —                                |
 | T3  | `claude/dashboard-domain`            | Agent-DB tables (schema bump), `board.*` RPCs + events, `dashboard` tool, `show_widget` pin/name/manifest args, tier-1 notices, reset-keeps-board                                  | T2                               |
 | T4  | `claude/dashboard-ui`                | Board face + tab strip + fluid auto-compact grid + chat dock (left/right/bottom/hidden) + transcript pin affordance + sidebar board face + reset confirm                           | T3 (mock-first via dev fixtures) |
 | T5  | `claude/dashboard-capabilities`      | Grant store/UI + byte freezing; move `html` widgets onto the shared sandbox host; host tools (`openclaw.prompt.send/state.emit/data.read/cron.trigger`); `net` CSP; authoring shim | T3, T4                           |
@@ -197570,11 +197782,12 @@ thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
 as threads are renamed, archived, deleted, or switched between Chat and
 Dashboard, including after a Gateway reconnect.
 
-Use **Open full-screen dashboard** on a row to open its board as a standalone
-browser document with no sidebar, top bar, or chat. The close button returns to
-the previous page. Inside a session, use the fullscreen button beside the
-Chat / Split / Dashboard switch to enter or leave browser fullscreen while the
-board is visible.
+Use **Open dashboard in focus mode** on a row to open its board as a standalone
+browser document at `/focus/dashboard/<agent>/<sessionRef>`, with no sidebar,
+top bar, or chat. This focus presentation does not invoke browser fullscreen;
+the close button returns to the previous page. Inside a session, use the
+fullscreen button beside the Chat / Split / Dashboard switch to enter or leave
+browser fullscreen while the board is visible.
 
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.
@@ -197665,8 +197878,9 @@ one-tap, revision-bound approval as everything else.
 When the Canvas plugin is enabled, agents can render A2UI JSONL as a dashboard
 widget. A2UI widgets use the same stable name, tab, size, pinning, sandbox, and
 update-in-place behavior as HTML widgets. The renderer is loaded from the
-Gateway's capability-scoped A2UI asset route; the renderer bundle is not copied
-into each widget, and the Canvas file host does not need to be enabled.
+Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
+copied into each widget. The Canvas plugin and its hosted routes must be
+enabled; both are enabled by default.
 
 A2UI actions use the normal widget bridge. By default, clicks become quiet
 session notices that the agent sees on its next turn. If the widget declares
@@ -198231,11 +198445,11 @@ No output after sending a message:
 # Section: web/urls.md
 
 ---
-summary: "Control UI URL routes, stable session-link grammar, and connection handoff parameters"
+summary: "Control UI routes, focus presentations, stable session links, and connection handoff parameters"
 read_when:
   - You need to bookmark or share a Control UI session
   - You are adding or changing a Control UI route
-  - You need a terminal, approval, onboarding, or remote Gateway URL
+  - You need a terminal, desktop, approval, onboarding, or remote Gateway URL
 title: "Control UI URLs"
 ---
 
@@ -198355,10 +198569,70 @@ own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
 
-This canonical-link restriction applies to application routes. The standalone
-dashboard document described below intentionally uses
-`/?view=dashboard&session=<sessionKey>` because it is a special document, not a
-session route.
+## Focus presentation routes
+
+A focus route renders one supported content surface without the normal Control
+UI application chrome. Focus presentation is separate from browser fullscreen:
+opening a focus route does not invoke the browser Fullscreen API.
+
+Insert `/focus` immediately after the configured Control UI base path. Removing
+it returns the corresponding normal route when one exists:
+
+```text
+/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+
+/openclaw/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+/openclaw/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+```
+
+Dashboard focus routes use the complete canonical `/dashboard` grammar above:
+
+```text
+/focus/dashboard/<agentId>
+/focus/dashboard/<agentId>/<sessionRef...>
+```
+
+The Control UI removes the focus modifier before passing the dashboard route to
+the canonical session resolver. Canonical address replacement and ambiguity
+candidate links preserve `/focus`. Missing, ambiguous, and unavailable sessions
+remain visible, and the dashboard is not read until the session resolves to a
+canonical key.
+
+The other focus targets are:
+
+```text
+/focus/terminal
+
+/focus/desktop
+/focus/desktop/source/<encodedSource>
+/focus/desktop/session/<encodedExactSessionKey>
+/focus/desktop/control
+/focus/desktop/control/source/<encodedSource>
+/focus/desktop/control/session/<encodedExactSessionKey>
+```
+
+Encode desktop source and exact-session-key values with `encodeURIComponent` so
+each occupies one path segment. Empty source and session values are omitted. If
+a native caller supplies both non-empty values, the source form wins. The
+optional `control` segment requests initial control; it does not grant control
+or authorize the connection.
+
+The focus target and desktop identity or options are path-only. Credentials do
+not belong in these URLs. Each target keeps the startup, authentication,
+permission, and capability checks of its normal or embedded surface. In
+particular, the terminal still requires `gateway.terminal.enabled` and an
+`operator.admin` connection.
+
+Stable releases previously emitted `/?view=terminal`. The Control UI accepts
+that form only at the application root (or `<basePath>/?view=terminal`) and
+immediately replaces it in browser history with `/focus/terminal` under the
+same base path, removing the legacy `view` parameter. New links must use
+`/focus/terminal`. The query form is not recognized on other application
+paths, and the removed desktop and dashboard query forms are not accepted.
+
+`/focus` and unsupported `/focus/*` targets show an error without the ordinary
+application shell. They do not open a normal application route.
 
 ## Route table
 
@@ -198432,23 +198706,21 @@ Agent selection and its `overview|files|tools|skills|channels|cron|memory`
 panels use paths. Older links with `?agent=<agentId>` are replaced once with
 the agent path while keeping other query parameters and the fragment.
 
-## Special documents and startup modes
+## Other special documents and startup modes
 
 These Gateway-served documents sit outside the application route table:
 
 - `/?onboarding=1` opens the first-run onboarding presentation.
-- `/terminal` opens the user-facing full-screen terminal. With a base path, use
-  `<basePath>/terminal`.
-- `/?view=terminal` opens the same terminal-only document in the WebView/embed
-  form used by the mobile apps. Terminal availability in either form still
-  requires `gateway.terminal.enabled` and `operator.admin`.
-- `/?view=dashboard&session=<sessionKey>` opens that session's interactive
-  dashboard full-window without application or chat chrome. The document stays
-  connected to live board updates and shows a visible empty state when the
-  session or board is unavailable.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.
+
+Registered exact and prefix plugin HTTP routes can own `/focus` and
+`/focus/*`. After plugin authentication and dispatch decline a request, the
+Gateway uses those paths as the Control UI focus fallback: unclaimed `GET` and
+`HEAD` requests serve the Control UI document, while other methods return
+`404`. Every unclaimed method returns `404` when Control UI serving is
+disabled. Lookalikes such as `/focused` are not part of the focus fallback.
 
 The approval namespace is reserved ahead of plugin HTTP routes for all HTTP
 methods. When Control UI serving is disabled, it returns `404` instead of
