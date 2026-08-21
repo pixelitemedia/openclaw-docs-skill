@@ -345,6 +345,7 @@ dispatch.
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                                                                                                      | Node-relevant changes                                  |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                                                                                                     | Node-relevant changes                                  |
 | `checks-node-*`                    | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                  |
+| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, and `mcp-code-mode-gateway` owner lanes                                                                                                                                                                                  | PR changes to their seed helpers or CI gate owners     |
 | `check-*`                          | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                  |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                  |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                                                                                                               | Full Release Validation and manual dispatches only     |
@@ -359,6 +360,14 @@ dispatch.
 | `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; accepts skips only for manifest-disabled downstream lanes                                                                                                                                                                                              | Every non-draft CI run                                 |
 | `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                                                                                                             | Main CI success or manual dispatch                     |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
+
+The rare path-triggered `docker-seed-e2e` job selects only the executable
+owners of changed seed helpers and runs them through one scheduler invocation.
+Trusted same-repository pull requests use one 16-vCPU Blacksmith runner with
+main and tail parallelism set to 3; GitHub-hosted, fork, and retry paths run the
+same selected lanes serially. The job is part of `openclaw/ci-gate`. It adds at
+most one runner registration during an affected pull-request window and adds no
+registrations for unrelated pull requests.
 
 Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
 
@@ -695,14 +704,22 @@ For pinned commit proof on a fast-moving branch, use the helper instead of
 `gh workflow run ... --ref main -f ref=<sha>`:
 
 ```bash
-pnpm ci:full-release --sha <full-sha>
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+VALIDATION_SHA="<full-release-candidate-sha>"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
 SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
-`headSha` matches the Tooling SHA.
+`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
+it from moving `main`. Regular release branches accept only their final package
+version or a matching beta prerelease; Tideclaw alpha validation uses its exact
+alpha tag and matching alpha branch.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
@@ -2790,12 +2807,14 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
   schedule: { kind: "every", everyMs: 30000 },
   trigger: {
     // Fires only when the observed status differs from the last evaluation.
-    script: "const res = await tools.call('exec', { command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.result?.details?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
+    script: "const res = await exec({ command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
     once: false,
   },
   payload: { kind: "agentTurn", message: "Investigate the CI status change." },
 }
 ```
+
+When upgrading, run `openclaw doctor --fix` to migrate persisted trigger scripts that call `tools.call('exec', args)` and read the legacy `.result.details` envelope. Doctor leaves custom or ambiguous legacy scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not migrated.
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
@@ -2950,18 +2969,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                     | Best for                        |
-| --------------- | ------------------- | --------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
-| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                              | Best for                        |
+| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
+| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
-  <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+  <Accordion title="Main session vs current vs isolated vs custom">
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -2991,6 +3010,12 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
+For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+
+WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+
+If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -3016,7 +3041,7 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
+On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
@@ -3491,7 +3516,7 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import historical `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archive the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.
@@ -11635,11 +11660,23 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - `chat_guid:...`
     - `chat_identifier:...`
 
-    Handle targets are also supported:
+    Direct handles are also supported:
 
+    - `+1555...`
+    - `tel:+1555...`
     - `imessage:+1555...`
     - `sms:+1555...`
     - `user@example.com`
+
+    Use a service-qualified target for a contact name or mixed alphanumeric alias:
+
+    - `auto:<contact>` lets Messages choose iMessage or SMS
+    - `imessage:<contact>` requires iMessage
+    - `sms:<contact>` requires SMS
+
+    Bare contact names and mixed alphanumeric aliases are rejected instead of being converted to
+    a phone number. If an existing automation uses one, add `auto:`, `imessage:`, or `sms:` to
+    make the intended delivery service explicit.
 
     ```bash
     imsg chats --limit 20
@@ -19331,7 +19368,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `off`: disable live preview streaming.
 - `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
 - `block`: append chunked preview updates.
-- `progress` (default): maintain one live Block Kit session card in the thread while work runs, finalize that card in place, and send the assistant's final text as a separate message.
+- `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
 - `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 - `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
@@ -19359,6 +19396,28 @@ In `progress` mode, Slack's native agent card is the default: the whole turn is 
 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, recent activity, tool/file totals, and elapsed time, and finalizes to success or error.
 
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. With the other progress controls below, commentary appears as italic text only, and an eligible final text answer replaces that same Slack message:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          style: "compact",
+          label: false,
+          commentary: true,
+          toolProgress: false,
+        },
+      },
+    },
+  },
+}
+```
+
+Slack still uses normal final delivery when the reply cannot safely replace the draft, including media, errors, oversized text, split block payloads, custom outbound identity, or an edit failure.
+
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
@@ -19384,7 +19443,7 @@ Use draft preview instead of Slack native text streaming:
 }
 ```
 
-Opt in to Slack native progress task cards:
+Select Slack native progress task cards explicitly:
 
 ```json5
 {
@@ -28499,7 +28558,7 @@ The scheduler does not classify final-output prose or approval-looking refusal p
 Retention behavior:
 
 - `cron.sessionRetention` (default `24h`, or `false` to disable; a zero duration such as `"0h"` also disables) prunes completed isolated run sessions.
-- Run history keeps the newest 2000 terminal rows per job. Lost rows retain the standard 24-hour lost-task cleanup window.
+- Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
 ## Migrating older jobs
 
@@ -29637,7 +29696,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
-- If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` preserves the original as `openclaw.json.clobbered.<timestamp>`, leaves the current file unchanged, and exits with an error instead of writing a partial replacement.
+- If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
@@ -31913,6 +31972,8 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
     - older transcript history is read with `messages_read`
     - Claude push notifications only exist while the MCP session is alive
     - when the client disconnects, the bridge exits and the live queue is gone
+    - cancelling an `events_wait` request immediately releases its server-side wait and timeout
+    - bridge or MCP transport close failures make `openclaw mcp serve` fail instead of reporting a clean shutdown
     - one-shot agent entry points such as `openclaw agent` and `openclaw infer model run` retire any bundled MCP runtimes they open when the reply completes, so repeated scripted runs do not accumulate stdio MCP child processes
     - stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn down as a process tree on shutdown, so child subprocesses started by the server do not survive after the parent stdio client exits
     - deleting or resetting a session disposes that session's MCP clients through the shared runtime cleanup path, so there are no lingering stdio connections tied to a removed session
@@ -31994,15 +32055,16 @@ This gives MCP clients one place to:
     Reads recent transcript messages for one session-backed conversation. `limit` defaults to 20, max 200.
   </Accordion>
   <Accordion title="attachments_fetch">
-    Extracts non-text message content blocks from one transcript message. This is a metadata view over transcript content, not a standalone durable attachment blob store.
+    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
   </Accordion>
   <Accordion title="events_poll">
-    Reads queued live events since a numeric cursor. `limit` max 200.
+    Reads queued live events since a numeric cursor. `limit` max 200. If the requested cursor predates retained queue history, the result also includes `gap.requested_after_cursor` and `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="events_wait">
     Long-polls until the next matching queued event arrives or a timeout expires (default 30s, max 300s).
 
     Use this when a generic MCP client needs near-real-time delivery without a Claude-specific push protocol.
+    A known cursor gap returns immediately with the same additive `gap` metadata, even when no matching event is currently retained.
 
   </Accordion>
   <Accordion title="messages_send">
@@ -32044,6 +32106,7 @@ Current event types:
 <Warning>
 - the queue is live-only; it starts when the MCP bridge starts
 - `events_poll` and `events_wait` do not replay older Gateway history by themselves
+- the queue is bounded; when `gap` is present, read durable history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`
 - durable backlog should be read with `messages_read`
 
 </Warning>
@@ -32166,7 +32229,7 @@ For broader testing context, see [Testing](/help/testing).
     Usually means the Gateway session is not already routable. Confirm that the underlying session has stored channel/provider, recipient, and optional account/thread route metadata.
   </Accordion>
   <Accordion title="events_poll or events_wait misses older messages">
-    Expected. The live queue starts when the bridge connects. Read older transcript history with `messages_read`.
+    The live queue starts when the bridge connects and retains a bounded window. If a result includes `gap`, read durable transcript history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="Claude notifications do not show up">
     Check all of these:
@@ -34294,7 +34357,7 @@ not overwrite the existing skill.
 - `--flow manual` (alias `advanced`): opens the classic wizard's **Manual
   setup** flow with full prompts for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. Credentials stay masked in prompts and follow the wizard's existing plaintext or SecretRef storage choice.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--agent-name`, `--accept-risk`,
@@ -34482,13 +34545,15 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --secret-input-mode ref
 ```
 
-With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+With `--secret-input-mode ref`, onboarding stores new credentials as refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
 
 - `--gateway-auth token --gateway-token <token>` stores a plaintext token. `token` is the default auth mode.
 - `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef. Requires a non-empty env var of that name in the onboarding process environment.
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
+- Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.
+- With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
 - With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
 - Local onboarding installs downloadable plugins the chosen setup path requires (for example a Codex or Copilot runtime plugin for those auth choices). Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
@@ -36215,7 +36280,7 @@ conformance layer over existing OpenClaw settings, not a second configuration
 system. You author requirements in `policy.jsonc`; OpenClaw observes the active
 workspace as evidence; policy reports drift through `doctor --lint`. Policy
 does not enforce tool calls or rewrite runtime behavior at request time, and it
-does not attest per-agent credential stores such as `auth-profiles.json`.
+does not attest per-agent credential stores such as `openclaw-agent.sqlite`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
@@ -36400,7 +36465,7 @@ Cross-cutting notes not obvious from the rule tables below:
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
-  per-agent credential stores such as `auth-profiles.json`.
+  per-agent credential stores such as `openclaw-agent.sqlite`.
 - Data-handling evidence is config-level posture (telemetry capture toggle,
   session maintenance mode, transcript-indexing setting) plus the always-on log
   redaction invariant. It does not inspect logs, telemetry exports,
@@ -38061,7 +38126,7 @@ Scans OpenClaw state for:
 
 - plaintext secret storage
 - unresolved refs
-- precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- precedence drift (auth profile store credentials shadowing `openclaw.json` refs)
 - store residue (a team store value duplicated by plaintext in `openclaw.json`)
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
@@ -38104,7 +38169,7 @@ Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping
 - `--skip-provider-setup`: skip provider setup, map credentials to existing providers
-- `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store
+- `--agent <id>`: scope auth profile target discovery and writes to one agent store
 - `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands)
 
 `--providers-only` and `--skip-provider-setup` cannot be combined.
@@ -38112,8 +38177,8 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for the selected agent scope; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
-- Supports creating new `auth-profiles.json` mappings directly in the picker flow.
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
 - `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
@@ -38142,7 +38207,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
-- `auth-profiles.json` (provider-target scrubbing)
+- auth profile store (provider-target scrubbing)
 - legacy `auth.json` residues
 - `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 
@@ -38536,8 +38601,10 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
-  prune cron run history, which automatically keeps the newest 2000 rows per job
-  ([Cron configuration](/automation/cron-jobs#configuration)).
+  prune cron run history. Task maintenance retains terminal cron history for 7
+  days (`lost` rows for 24 hours) and enforces the newest 2000 rows per job and
+  history class as an additional ceiling ([Task maintenance](/automation/tasks#automatic-maintenance),
+  [Cron configuration](/automation/cron-jobs#configuration)).
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
@@ -38746,34 +38813,39 @@ entry for the same inference-gated OpenClaw assistant.
 
 ## Options
 
-| Flag                       | Description                                                                                          |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `-m, --message <text>`     | Run one OpenClaw request.                                                                            |
-| `--yes`                    | Approve persistent config writes for one `--message` request.                                        |
-| `--workspace <dir>`        | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
-| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                 |
-| `--wizard`                 | Force interactive onboarding.                                                                        |
-| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                               |
-| `--non-interactive`        | Run onboarding without prompts.                                                                      |
-| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
-| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                |
-| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
-| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
-| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
-| `--import-from <provider>` | Migration provider to run during onboarding.                                                         |
-| `--import-source <path>`   | Source agent home for `--import-from`.                                                               |
-| `--import-secrets`         | Import supported secrets during onboarding migration.                                                |
-| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                        |
-| `--remote-token <token>`   | Remote Gateway token (optional).                                                                     |
-| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
+| Flag                           | Description                                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`         | Run one OpenClaw request.                                                                            |
+| `--yes`                        | Approve persistent config writes for one `--message` request.                                        |
+| `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
+| `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
+| `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
+| `--non-interactive`            | Run onboarding without prompts.                                                                      |
+| `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
+| `--mode <mode>`                | Onboarding mode: `local` or `remote`.                                                                |
+| `--flow <flow>`                | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
+| `--reset`                      | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
+| `--reset-scope <scope>`        | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
+| `--import-from <provider>`     | Migration provider to run during onboarding.                                                         |
+| `--import-source <path>`       | Source agent home for `--import-from`.                                                               |
+| `--import-secrets`             | Import supported secrets during onboarding migration.                                                |
+| `--remote-url <url>`           | Remote Gateway WebSocket URL.                                                                        |
+| `--remote-token <token>`       | Remote Gateway token (optional).                                                                     |
+| `--remote-password <password>` | Remote Gateway password (optional).                                                                  |
+| `--json`                       | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
-In interactive onboarding, `--remote-url` and `--remote-token` prefill the
-remote Gateway step and take precedence over stored remote values for that run.
-Changing the URL does not reuse stored credentials unless you also pass a token.
-The token remains masked and uses the wizard's selected plaintext or SecretRef
-storage mode.
+In interactive onboarding, `--remote-url`, `--remote-token`, and
+`--remote-password` prefill the remote Gateway step and take precedence over
+stored remote values for that run. Pass either a token or a password, not both.
+Changing the URL does not reuse stored credentials unless you also provide a new
+token or password. The credential remains masked and uses the wizard's selected
+plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
+and `--gateway-password` configure a local Gateway and are not valid in remote
+mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
+`--remote-token` with `--secret-input-mode ref`.
 
 ### Baseline mode
 
@@ -38796,6 +38868,7 @@ openclaw setup --baseline
 openclaw setup --workspace ~/.openclaw/workspace
 openclaw setup --import-from hermes --import-source ~/.hermes
 openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://gateway-host:18789 --remote-token <token>
+openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://gateway-host:18789 --remote-password <password>
 ```
 
 ## Notes
@@ -45565,9 +45638,9 @@ cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
 those two verbs works, including this repo's
 `scripts/e2e/telegram-user-driver.py`.
 
-Nothing in this repository invokes it yet: the `Mantis Telegram Desktop Proof`
-workflow still runs its own container-based proof runner, and moving that
-workflow onto the recorder is a separate change.
+The `Mantis Telegram Desktop Proof` workflow invokes the recorder with its
+local Docker provider. Its OpenClaw SUT remains isolated in the lane-attested
+container boundary while Telegram Desktop runs in the prebaked local image.
 
 Start a fresh authorized desktop and begin recording:
 
@@ -45708,44 +45781,39 @@ Comments post through the Mantis GitHub App (`MANTIS_GITHUB_APP_ID` /
 `MANTIS_GITHUB_APP_PRIVATE_KEY`), not `github-actions[bot]`, using a hidden
 marker comment as the upsert key.
 
-| Workflow                          | Trigger                                                                                    | What it does                                                                                                                                                                                                                                                                                                     |
-| --------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Mantis Discord Smoke`            | manual dispatch                                                                            | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                       |
-| `Mantis Discord Status Reactions` | PR comment or manual dispatch                                                              | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
-| `Mantis Scenario`                 | manual dispatch                                                                            | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
-| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                            | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                      |
-| `Mantis Telegram Live`            | PR comment or manual dispatch                                                              | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
-| `Mantis Telegram Desktop Proof`   | maintainer PR label (`mantis: telegram-visible-proof`) plus PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs the real-user Crabbox Telegram Desktop proof lane for both refs and posts a 2-column PR evidence table.                                                              |
-| `Mantis Web UI Chat Proof`        | PR comment or manual dispatch                                                              | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
+| Workflow                          | Trigger                                                                                         | What it does                                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Mantis Discord Smoke`            | manual dispatch                                                                                 | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                       |
+| `Mantis Discord Status Reactions` | manual dispatch                                                                                 | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
+| `Mantis Scenario`                 | manual dispatch                                                                                 | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
+| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                                 | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                      |
+| `Mantis Telegram Live`            | manual dispatch                                                                                 | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
+| `Mantis Telegram Desktop Proof`   | ClawSweeper label (`mantis: telegram-visible-proof`), maintainer PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs each container-isolated SUT against a local Docker desktop recorder and posts a 2-column PR evidence table.                                                          |
+| `Mantis Web UI Chat Proof`        | manual dispatch                                                                                 | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
 
 `Mantis Discord Status Reactions` and `Mantis Telegram Live` both accept
-`baseline_ref`/`candidate_ref` (or `baseline=`/`candidate=` in a PR comment)
-and validate that the resolved SHA is either an ancestor of `origin/main`, a
-release tag (`v*`), or the head of an open PR before running with
-secret-bearing credentials.
+`baseline_ref`/`candidate_ref` and validate that the resolved SHA is either an
+ancestor of `origin/main`, a release tag (`v*`), or the head of an open PR
+before running with secret-bearing credentials.
 
 Comment triggers, from a PR with write/maintain/admin access:
 
 ```text
-@openclaw-mantis discord status reactions
-@openclaw-mantis discord status reactions baseline=origin/main candidate=HEAD
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-@openclaw-mantis web ui chat
-@openclaw-mantis web-ui-chat candidate=HEAD
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
 
-Telegram comment triggers default to the PR head SHA as candidate and
-`telegram-status-command` as scenario; they accept `provider=aws|hetzner` and
-`lease=<cbx_...>` to target a specific Crabbox provider or a pre-warmed
-desktop. `Mantis Telegram Desktop Proof` only responds to a PR comment when
-the PR already carries the `mantis: telegram-visible-proof` label.
+`Mantis Telegram Desktop Proof` only responds to a PR comment when
+the commenter has write, maintain, or admin access. A bare mention starts the
+desktop proof; any remaining text becomes optional proof guidance. Mantis
+reacts with 👀 when it accepts the request, then posts the active run link in
+its evidence comment and replaces that same comment with the result. ClawSweeper's
+`mantis: telegram-visible-proof` label starts the proof automatically for
+branches in `openclaw/openclaw`; fork PRs still require an explicit maintainer
+comment. Manual runs first inspect the diff and stop before desktop setup when
+there is no Telegram-visible behavior to test.
 
-Web UI chat comment triggers default to the PR head SHA as candidate. They run
-the Control UI mocked-Gateway chat proof and publish browser artifacts; use
-normal Playwright/browser proof, maintainer screenshots, Crabbox, or local
-artifacts for other web pages and native app surfaces.
+The other scenario workflows remain available through manual Actions dispatch.
 
 ClawSweeper can also dispatch a scenario directly:
 
@@ -49847,6 +49915,8 @@ The Control UI keeps ownership and presence visually distinct:
 - When other people or agents have prompted the session, the row avatar becomes a **pair-stack**: the owner stays in front, and either the single other participant peeks out behind, or a **+N** count summarizes several. The chat header shows the owner chip plus a participant facepile of up to four avatars. The owner is excluded from the participant display.
 - Ringed or translucent presence avatars show people who are currently connected or watching; they come from live presence, not ownership, and disappear when those viewers leave.
 
+When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into the indicator bubble as they type; other typists show a three-dot bubble. Drafts are ephemeral presence: they are never persisted, never enter the session transcript or the model's context, and fade a moment after the typist pauses or sends.
+
 When the loaded session list contains fewer than two distinct owner identities and no session has recorded outside participants, OpenClaw hides all ownership and owner-filter chrome. A single-user gateway therefore looks unchanged.
 
 ## Agent-spawned sessions
@@ -49957,9 +50027,20 @@ Older installations may still contain `auth-profiles.json`, `auth-state.json`,
 per-agent `auth.json`, or shared `credentials/oauth.json`. Run
 `openclaw doctor --fix` once after upgrading. Doctor imports verified values,
 records a migration receipt, and renames the original file to a timestamped
-archive. Runtime never reads these retired files and reports
-`AUTH_PROFILE_MIGRATION_REQUIRED` when a legacy credential source has not been
-migrated.
+archive.
+
+Runtime never reads these retired files. What happens when one is still present
+depends on whether the SQLite store can already serve credentials for that
+agent:
+
+- The store holds profiles: the retired file is leftover bytes. Runtime logs a
+  one-time warning naming the file and keeps working; Doctor archives it on the
+  next `--fix`. Doctor never overwrites a usable stored credential with imported
+  values, so the file cannot resurrect a stale token.
+- The store is empty: the credentials still live only in that file, so runtime
+  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
+  falling through to environment auth. Gateway startup degrades this owner to
+  configured-unavailable instead of refusing to start.
 
 The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
 
@@ -50860,7 +50941,7 @@ the final answer, except for the label if one is configured.
 | Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
 | Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
-| Slack           | Native stream or editable draft post.  | Needs a reply thread target; top-level DMs without one still get draft preview posts and edits.                                                           |
+| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses one text draft that an eligible final answer replaces.                                        |
 | Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
 | Mattermost      | Editable draft post.                   | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post.                       |
 
@@ -50878,6 +50959,8 @@ When the final answer is ready, OpenClaw tries to keep the chat clean:
   visible record of the failed turn.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
+- Slack's compact progress style also promotes the progress draft into an
+  eligible final text answer by editing that message in place.
 - If the channel uses native progress streaming, OpenClaw finalizes that
   stream when the native transport accepts the final text.
 - Otherwise (media, an approval prompt, an explicit reply target, too many
@@ -54414,7 +54497,7 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 ## Skills
 
-When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** and a content-derived `<version>sha256:...</version>` marker per skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled), and to re-read a skill when its `<version>` differs from a previous turn. If no skills are eligible, the Skills section is omitted.
+When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
 Native Codex turns receive this list as turn-scoped collaboration developer instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Other harnesses keep the normal prompt section.
 
@@ -54428,7 +54511,6 @@ Eligibility includes skill metadata gates, runtime environment/config checks, an
     <name>...</name>
     <description>...</description>
     <location>...</location>
-    <version>sha256:...</version>
   </skill>
 </available_skills>
 ```
@@ -57109,7 +57191,7 @@ Under a restrictive policy, Claude asks OpenClaw over stdio before using one of 
 
 Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it; register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the gateway host, so someone must be at that machine to approve credential use.
 
-The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
+The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`; positive fixed budgets disable adaptive thinking. Models that require adaptive thinking omit the fixed budget and continue to use `--effort`. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 
@@ -57801,6 +57883,8 @@ While a placement is active, OpenClaw automatically samples available space on t
 - **OpenClaw** uses `worker-turn` placement. The restricted `openclaw worker` process runs each turn on the leased node and proxies inference through the Gateway.
 - **Codex** uses `remote-exec` placement only when the selected provider advertises an SSH-backed execution carrier. The bundled Crabbox node provider does not, so Codex dispatch to Crabbox fails before allocation.
 
+The Control UI disables cloud destinations whose advertised mode does not match the selected runtime.
+
 Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
 
 The equivalent RPC flow is:
@@ -57840,6 +57924,15 @@ While a fenced result is still reconciling, a new turn waits up to 15 seconds fo
 
 To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. An operator with `operator.write` can select the Gateway or an eligible paired device; selecting a configured cloud profile requires `operator.admin`. Profiles may also offer a machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
 
+An active paired-device placement stays `active` when its runner disconnects.
+Control UI shows **Device offline** and **Waiting for device to reconnect; retry
+after it returns**. Waiting is the default and keeps the remote owner and
+workspace intact. **Continue on Gateway…** is explicitly destructive: after a
+data-loss confirmation, it abandons the exact offline device owner and resumes
+from the last Gateway-synced workspace without replay. Unsynced device files
+and in-flight work may be lost. If the device is already available, use the
+ordinary reconcile-first move instead.
+
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
 
 Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
@@ -57865,6 +57958,12 @@ openclaw gateway call sessions.move \
 ```
 
 Worker targets use `{"kind":"profile","profileId":"aws","machineClass":"fast"}` or `{"kind":"device","deviceId":"paired-device-id"}`. Omit `machineClass` to use the profile default. Moving to the same profile with a different class is the resize workflow. A stale source is rejected rather than moving a newer placement. Successful results end in `local` for the Gateway target or `active` for a worker target.
+
+Automation may explicitly abandon an offline paired-device source by adding
+`"abandonSource":true` to the exact-source Gateway request above. The field is
+rejected for profile or device targets and when the source runner is available
+or cannot be proven to be the exact device binding. This path has the same
+unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
@@ -63851,7 +63950,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
 - `triggers.enabled`: run event-driven automation triggers (default: `true`). Set `false` to disable condition triggers, script payloads, and stream schedules.
 - `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` or a zero duration such as `"0h"` to disable (negative durations are invalid).
-- Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
+- Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 - `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhookSsrfPolicy`: shared outbound SSRF policy for primary, completion, failure-destination, and failure-alert webhooks. Private/internal targets are blocked when omitted. Prefer exact `allowedHostnames`; use `dangerouslyAllowPrivateNetwork: true` only for trusted private-network receivers. The narrow fake-IP proxy flags are `allowRfc2544BenchmarkRange` and `allowIpv6UniqueLocalRange`.
 
@@ -64395,7 +64494,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` or a zero duration such as `"0h"` to disable).
-    - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
@@ -69931,6 +70030,8 @@ dispatch so authorization failures have one canonical structured response:
   `operator.admin` for `profileId` or a target-less
   `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
   for Gateway or device targets and `operator.admin` for profile targets;
+  `abandonSource: true` remains `operator.write` but is schema-valid only with
+  a Gateway target and runtime-valid only for an exact offline device source;
   `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,
@@ -71542,7 +71643,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` is the complete exact active set; an empty array proves the session is idle. If aggregate activity is true while the field is omitted, another runtime owner is active but its exact identities are unavailable. Snapshot omission means identities unavailable. On incremental events, omission means no change, `null` is the event-only tombstone that clears cached exact IDs to unavailable, and an array replaces the cache. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` is the complete exact active set; an empty array proves the session is idle. If aggregate activity is true while the field is omitted, another runtime owner is active but its exact identities are unavailable. Snapshot omission means identities unavailable. On incremental events, omission means no change, `null` is the event-only tombstone that clears cached exact IDs to unavailable, and an array replaces the cache. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. An active paired-device placement also includes `runner: { kind: "device", status: "available" | "offline" }`; non-device placements omit it. This availability is process-current, derived from the exact active environment binding and reconnect-scoped node-runner proof, and starts offline after Gateway restart until that runner reconnects. Inventory changes emit `sessions.changed` so clients refresh the canonical row. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
     - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
@@ -71551,7 +71652,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
     - `sessions.dispatch` moves an authorized local OpenClaw session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. Explicit targets take precedence over project-profile lookup. Device dispatch requires `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active` worker ownership. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.reclaim` (`operator.write`) safely stops a session placement by key. It waits for an in-flight dispatch, drains admitted work, reconciles active workspace changes, and retries pending failed-environment teardown through the placement owner. Callers never need raw environment-destroy authority.
-    - `sessions.move` moves an authorized active session to the Gateway, a paired device, or a configured profile. Gateway and device targets require `operator.write`; profile targets require `operator.admin`; malformed targets use the write scope before schema validation. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits.
+    - `sessions.move` moves an authorized active session to the Gateway, a paired device, or a configured profile. Gateway and device targets require `operator.write`; profile targets require `operator.admin`; malformed targets use the write scope before schema validation. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits. Ordinary moves always reconcile the source. Only a Gateway target may add `abandonSource: true`, and only when the exact source is a currently offline paired-device placement. That durable decision force-fences and destroys the remote owner, skips remote workspace reconciliation, and continues from the last Gateway-synced state without replay; unsynced files and in-flight work may be lost. Available, unknown, profile, and other-worker sources reject explicit abandonment.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). The read-scoped list result is intentionally path-free. `sessions.groups.defaults` and `sessions.groups.update` require `operator.write` and read or replace one custom group's optional working-directory and worktree defaults. Non-admin callers can save only directories inside a configured agent workspace; other absolute Gateway paths require `operator.admin`. Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is a deprecated alias for `chat.send` with `queueMode: "interrupt"`; removal follows the protocol deprecation policy.
@@ -73917,6 +74018,7 @@ In interactive onboarding, choosing SecretRef storage runs preflight validation 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
 - Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+- Generated gateway token: setup mints `gateway.auth.token` itself, so reference mode has nothing to prompt for. With `OPENCLAW_GATEWAY_TOKEN` exported it writes an `env` ref to that variable, keeping a later rotation authoritative; otherwise it writes the token to the secret store under `OPENCLAW_GATEWAY_TOKEN` and stores a `store` ref. An existing store entry is reused rather than rotated, so re-running setup never invalidates already-paired clients.
 
 Validation failure shows the error and lets you retry.
 
@@ -74978,6 +75080,11 @@ When a bindable Tailnet IPv4 is present, the Gateway also requires `http://127.0
 
 Prefer `OPENCLAW_GATEWAY_PASSWORD` over committing a password to disk.
 
+The Funnel URL also remains usable from devices inside the tailnet. Tailscale marks public
+requests as Funnel traffic but sends tailnet peers through its Serve identity path instead;
+OpenClaw recognizes both paths on its dedicated listener and still requires the configured
+Funnel password.
+
 ## CLI examples
 
 ```bash
@@ -75030,7 +75137,8 @@ This compatibility path does not grant managed Tailscale semantics: `gateway.aut
 ### Tailscale prerequisites and limits
 
 - Serve requires HTTPS enabled for your tailnet; the CLI prompts if it is missing.
-- Serve injects Tailscale identity headers; Funnel does not.
+- Tailnet Serve traffic injects Tailscale identity headers. Public Funnel traffic uses a Funnel
+  marker instead, while tailnet access to the same Funnel URL follows the Serve identity path.
 - OpenClaw-managed Serve/Funnel proxy to a dedicated `127.0.0.1:<ephemeral-port>` listener while ordinary local clients keep the configured Gateway port. Startup fails closed rather than sharing listener provenance, and the foreground claim releases the route when its Gateway owner disappears.
 - Funnel requires Tailscale v1.38.3+, MagicDNS, HTTPS enabled, and a funnel node attribute.
 - Funnel only supports ports `443`, `8443`, and `10000` over TLS.
@@ -83417,10 +83525,12 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
-soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
-Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
-but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
 nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
@@ -83702,22 +83812,26 @@ redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
 evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
 posts inline PR evidence through the Mantis GitHub App when `pr_number` is
 set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`) or directly from a pull request comment:
-
-```text
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-```
+(`scenario_id: telegram-live`).
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
-@openclaw-mantis telegram desktop proof
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
+posts the active workflow link in its evidence comment and replaces that same
+comment with the result. Any text after the mention is optional proof guidance.
+Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on
@@ -101614,8 +101728,8 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and
   troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
-- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its canonical paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
+- `openclaw nodes remove --node <id|name|ip>` revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -102082,11 +102196,21 @@ overwrite the last current fact. Connected inventory always wins over stored
 history, a missing stored value means false, and exact worker slots are never
 persisted or shown as offline capacity.
 
-If the device is offline before a turn is dispatched, the Gateway waits up to
-10 seconds and then returns a visible retry/reconnect error while keeping the
-session placement available for a later attempt. Gateway restart likewise
-preserves an idle device placement and reconnects its tunnel lazily on the next
-turn. A paired node remains dormant for 14 days after its exact recorded
+If the device is offline, its active placement remains active: availability is
+process-current, not a terminal placement state. `sessions.list` and
+`sessions.describe` project `runner: { kind: "device", status: "offline" }`
+until that exact current-v6 node runner reconnects. Gateway restart therefore
+shows an active device placement as offline until reconnect; current inventory
+then changes the projection to `available` and emits a session refresh. Exact
+worker slots gate new placements only and do not affect availability of a
+session the device already owns.
+
+Control UI shows **Device offline** and waits by default without giving up the
+placement, workspace, or authority. Retry the next turn after the device
+returns. **Continue on Gateway…** is a separate destructive choice: it fences
+the device owner and continues from the last Gateway-synced workspace without
+replaying the interrupted turn. Unsynced device files and in-flight work may be
+lost. A paired node remains dormant for 14 days after its exact recorded
 disconnect; at that boundary its old worker environment is treated as gone and
 the session placement reconciles normally. Pairing itself remains, so a later
 reconnect can provision a fresh environment. Legacy pairings without exact node
@@ -103841,7 +103965,7 @@ read_when:
 
 ## Status
 
-Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
+Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease with current reconnect-scoped v6 supervisor proof, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
 
 The sections below preserve the pre-convergence design record and are not the current runtime contract.
 
@@ -103984,6 +104108,13 @@ Runtime placement is a SQLite-owned state machine keyed to the session, not a pa
 `local → requested → provisioning → syncing → starting → active(worker) → draining → reconciling → local | reclaimed | failed`
 
 It persists environment id, transition generation, active owner epoch, workspace base manifest, worker bundle hash, and last ACK cursors. Turn admission atomically claims placement before either loop starts a turn, so a local message admitted against a stale snapshot can never race a worker turn — exactly one loop owns the session at any time.
+
+Device runner availability is a process-current projection, not another
+placement state. An active device placement stays active while its exact v6
+runner proof is absent. The default is to wait. Explicit Gateway continuation
+persists one abandonment bit on the move intent, force-closes the remote owner,
+and resumes from the last Gateway-synced workspace without replay; the UI warns
+that unsynced device files and in-flight work may be lost.
 
 UI:
 
@@ -104290,8 +104421,8 @@ advances a milestone.
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                                   |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901, #125708 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                                 |
-| 8   | Stop-and-continue moves                                    | landed      | #125036                                                                                                                                                                            |
-| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | in progress | #125503, #125524, #125587                                                                                                                                                          |
+| 8   | Stop-and-continue moves and offline device recovery        | landed      | #125036, #126284                                                                                                                                                                   |
+| 9   | Node exec-server carrier and contract-preserving cleanup   | in progress | #125503, #125524, #125587                                                                                                                                                          |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | landed      | #125288, #125384, #125465                                                                                                                                                          |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
@@ -104314,19 +104445,19 @@ changed the plan:
 - **SSH is not the device transport.** The gateway never dials devices; the
   device always dials out. Revision 1's "ship sshd first" for device runners
   is deleted — it cannot reach a NAT'd machine and no surveyed product uses
-  SSH as control transport. SSH remains only as the legacy cloud-lease
-  transport until milestone 10 retires it.
+  SSH as control transport. The former cloud-lease control carrier is gone;
+  SSH remains where existing remote-exec, desktop, and sandbox contracts
+  explicitly require it.
 
 ## Problem
 
-Unchanged from revision 1 in substance: OpenClaw has disconnected answers to
-"where does work run." Nodes receive forwarded `exec host=node` calls only; a
-user's always-on workstation is less capable as a session host than a
-throwaway cloud lease. Cloud workers host full sessions with a durable
-placement state machine, but only against ephemeral SSH-provisioned leases.
-The ssh sandbox backend is a third remote-execution path. Placement is chosen
-once from a flat list mixing ontologies, then becomes invisible; onboarding a
-new machine takes flags, env vars, and two manual approvals.
+The campaign started with disconnected answers to "where does work run."
+Nodes handled forwarded `exec host=node` calls, cloud workers required
+SSH-provisioned leases, and placement was chosen from a flat list. Paired
+devices and cloud leases now share node-backed session placement, reconnect-
+scoped v6 supervisor proof, and explicit offline recovery. Existing SSH,
+OpenShell, Claude, and exec-host contracts remain separate until a node
+exec-server carrier can replace them without losing behavior.
 
 The bar, stated as product: an admin clicks "Connect a machine…" in the web
 picker, pastes one command on any machine, and seconds later that machine is
@@ -104347,9 +104478,8 @@ Runner    anything that can host a session's turn loop: the gateway itself,
           or a session-capable node. "Runner" is internal/docs vocabulary;
           UI copy says "Runs on …".
 Worker    the per-turn child process (`openclaw worker`) that hosts a
-          session's loop under worker admission. On cloud leases it is
-          launched over SSH today; on nodes it is a supervised child of the
-          node host. Same admission, same protocol, either way.
+          session's loop under worker admission. On paired devices and cloud
+          leases alike, it is a supervised child of the node host.
 Isolation a property OF the runner (none | docker | podman), not a place.
 Project   repo identity: normalized remote.origin.url, with the existing
           16-char repo fingerprint as the no-remote fallback. Derived,
@@ -104459,12 +104589,13 @@ stated honestly (revision 1 undersold this):
   Device-side GC of per-session workspace dirs and superseded bundles is a
   milestone exit gate, not an open question:
   persistent machines otherwise leak the user's own disk.
-- **Placement `runner-offline`.** Pre-dispatch device loss waits up to 10
-  seconds, then returns an operator-visible coordination error without failing
-  the active placement or consuming model fallbacks. Idle active device
-  placements survive Gateway restart and validate their reconnect-scoped
-  tunnel lazily on the next turn. Durable status projection and the explicit
-  "continue on gateway" / "wait for device" actions remain milestone work.
+- **Placement runner availability.** Active device ownership stays `active`
+  while the device is offline. The Gateway derives the optional closed
+  `runner: { kind: "device", status }` projection from the environment's exact
+  device binding and current reconnect-scoped v6 runner proof. Restart begins
+  offline until reconnect. **Wait for device** is the default retained state;
+  explicit **Continue on Gateway…** durably abandons the source, fences its
+  authority, and resumes from the last Gateway-synced workspace without replay.
 - **Dispatch target union.** `sessions.dispatch` accepts
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
@@ -104507,9 +104638,9 @@ snapshot, unions that authority with node-local launch and operation ownership,
 and then removes retired generations, transfer siblings, unreachable manifests,
 and empty workspace parents in bounded passes. The Gateway bundle producer
 also prunes unreferenced local tarballs only after a successful current build,
-while preserving hashes named by durable environments and placements. Isolation,
-checkout ownership, and durable offline recovery actions remain milestone 6
-work.
+while preserving hashes named by durable environments and placements. Durable
+offline recovery is complete; isolation and checkout ownership remain milestone
+6 work.
 
 ### Trust model (operator-decided, v1)
 
@@ -104662,11 +104793,10 @@ speak. Additions:
   missing means false, and exact worker slots are never persisted. This adds
   one optional paired-node field without a schema-version bump or migration.
 - **Placement chip** on the session header: shows quiet current placement;
-  active cloud placements reclaim through `sessions.reclaim` with "Bring
-  home". Stop-and-continue moves arrive with milestone 8.
-- **Separate follow-up**: durable `runner-offline` session status and explicit
-  "Wait for device" / "Continue on Gateway" recovery actions remain owned by
-  placement recovery. This picker cutover does not synthesize that state.
+  available device placements say **Runs on device**, offline placements say
+  **Device offline**, and active placements still stop safely through
+  `sessions.reclaim`. Ordinary moves remain reconcile-first. Only the explicit
+  Gateway continuation path may abandon an offline device source.
 
 ### Cloud convergence (milestone 10)
 
@@ -104677,9 +104807,9 @@ binds the authenticated device identity to the worker environment, pushes the
 current bundle through the node channel, and removes the node role after
 provider teardown. `destroy` = release lease plus pairing cleanup. Codex
 remote-exec fails before allocation because it still requires an SSH-backed
-provider. The remaining milestone work is soak proof and deletion of the
-replaced reverse-tunnel/rsync cloud carrier; distinct SSH sandbox contracts
-stay until their own replacements are proved.
+provider. The replaced reverse-tunnel/rsync cloud carrier has been deleted.
+Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain until
+the missing node exec-server carrier supplies and proves equivalent behavior.
 
 ## What the adversarial reviews killed or reshaped
 
@@ -104772,8 +104902,8 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    and reclaim, the observed projects read model, live environment facts,
    admin-gated "Connect a machine…", exact slot eligibility, durable offline
    session-host identity, and full device dispatch through the shared placement
-   startup/recovery owner. Durable runner-offline recovery actions remain a
-   separate placement-owner follow-up.
+   startup/recovery owner. Durable offline device recovery now preserves the
+   placement by default and offers explicit Gateway continuation.
 5. **Public worker ingress**: path-tagged worker upgrade on the main TLS
    endpoint; opaque admission failure; shared preauth budgets. Exit: a worker
    process on any internet host with a valid dispatch credential completes
@@ -104797,15 +104927,17 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    bytes.
 7. **Bundle push + updates**: consent split, push over paired channel,
    version surfacing, stale-node dispatch refusal.
-8. **Stop-and-continue moves**: drain + reclaim + re-dispatch to another
-   runner, reusing the migration barrier.
-9. **Deletions**: ssh sandbox backend + remote-fs bridge (~2.35k LOC),
-   openshell overlap (~3.4k LOC, verify usage first), exec-host structural
-   clones (~3k of ~5k LOC), one-shot `agent.cli.claude.run` node path
-   (superseded by full session hosting), node/device pairing merge remainder.
-   Each gated on its replacement, each its own PR with proof.
-10. **Cloud convergence**: `--ephemeral` enrollment, provisioners run
-    `openclaw connect`, then delete the SSH tunnel/rsync transport stack.
+8. **Stop-and-continue moves** (landed): drain + reclaim + re-dispatch to
+   another runner, plus durable offline-device waiting and explicit destructive
+   Gateway continuation.
+9. **Node exec-server carrier and contract-preserving cleanup**: the missing
+   node exec-server carrier must first reproduce existing remote-exec and
+   approval behavior. Keep the stable SSH sandbox, OpenShell, Claude one-shot,
+   and exec-host contracts until their individual replacements are proved;
+   none is deletable merely because node-backed session hosting exists.
+10. **Cloud convergence** (landed): `--ephemeral` enrollment, provisioners run
+    `openclaw connect`, and the former worker reverse-tunnel/rsync carrier is
+    removed. Stable SSH-backed remote-exec and desktop contracts remain.
 
 Net production LOC across the plan is targeted negative: milestones 3–5 are
 small additions, 6–7 are mostly a provider + one transport implementation
@@ -107764,6 +107896,12 @@ The macOS app logs through swift-log (unified logging by default) and can also w
 - Clear: **Debug pane -> Logs -> App logging -> "Clear"** deletes the active file and all backups.
 
 Treat the file as sensitive; do not share it without review.
+
+## Export unified logs as JSON
+
+Run `./scripts/clawlog.sh --json` to write recent unified-log events as one JSON array to stdout, or add `--output logs.json` to write the array to a file without printing it. The default output contains the last 50 log records; use `--lines 1` for the most recent record or `--all` for every matching record. `--lines` counts complete records in JSON mode, not physical lines.
+
+JSON export cannot be combined with `--follow` or `--list-categories`. Use those options without `--json`.
 
 ## Unified logging private data on macOS
 
@@ -111977,7 +112115,11 @@ because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
-budget into their CLI-specific launch contract.
+budget into their CLI-specific launch contract. It also receives the optional
+effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
+applied through launch environment or staged configuration; the same field is
+available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
@@ -112453,7 +112595,7 @@ reconciliation so OpenClaw does not override that selection.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.147.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.148.0. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -112776,7 +112918,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.147.0`):
+with the official plugin (currently `@openai/codex` `0.148.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -112921,8 +113063,8 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships Codex app-server `0.147.0` and accepts external versions at or
-above that minimum. Older, malformed, and unversioned handshakes are rejected.
+The plugin ships Codex app-server `0.148.0` and accepts external versions at or
+above `0.147.0`. Older, malformed, and unversioned handshakes are rejected.
 Build metadata does not affect SemVer precedence. The same minimum applies to
 explicit custom executables, remote app-servers, and macOS desktop binaries;
 admission is not readiness proof.
@@ -113050,7 +113192,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.147.0` app-server.
+This preview path uses the pinned Codex `0.148.0` app-server.
 
 ```json5
 {
@@ -113099,6 +113241,20 @@ The managed app-server does not read an existing `codex-home/auth.json` in
 this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
+
+No credential file is written in this mode, in either home. A subscription
+profile is handed over as an `account/login/start` request of type
+`chatgptAuthTokens`, which Codex installs as in-memory external auth rather
+than persisting; the ephemeral credential store covers the API-key login,
+which would otherwise write `CODEX_HOME/auth.json`.
+
+Token refresh is inverted so the long-lived secret never leaves OpenClaw. Codex
+holds only a short-lived access token, and on an unauthorized response it sends
+an `account/chatgptAuthTokens/refresh` request back to OpenClaw over the same
+connection. OpenClaw refreshes against its own auth profile store and returns a
+fresh access token, so the refresh token stays in SQLite. A refresh that does
+not answer within the app-server's timeout fails that turn rather than falling
+back to another credential.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
@@ -113336,21 +113492,17 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.147.0`. A live `model/list`
-probe against the official `0.147.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.148.0`. A live `model/list`
+probe against the official `0.148.0` app-server returned these public picker
 rows:
 
-| Model id        | Input modalities | Reasoning efforts               |
-| --------------- | ---------------- | ------------------------------- |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
@@ -113973,12 +114125,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
-  exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
-  not affect normal startup. Explicit custom, remote, and macOS desktop-owned
-  app-servers must report valid SemVer at or above that managed baseline.
-  Newer versions initialize with a warning; acceptance permits an attempt and
-  is not readiness or capability proof.
+- Codex app-server `0.147.0` or newer. The plugin ships and manages the exact
+  `@openai/codex` `0.148.0` artifact, so a `codex` command on `PATH` does not
+  affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report valid SemVer at or above the supported minimum.
+  Versions newer than the managed artifact initialize with a warning;
+  acceptance permits an attempt and is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -115377,8 +115529,8 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports version `0.147.0` or newer. The official plugin
-  still ships `@openai/codex` `0.147.0`; accepted external versions remain
-  subject to normal startup and capability validation.
+  ships `@openai/codex` `0.148.0`; accepted external versions remain subject to
+  normal startup and capability validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
@@ -129858,8 +130010,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches. It also receives the
-  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
+  own threshold without provider-specific core branches. Its optional
+  `ctx.thinkingLevel` is the effective `off`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `adaptive`, or `max` selection for backends that apply the
+  level through launch environment or staged configuration. It also receives
+  the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
   `ctx.toolAvailability.native` list plus canonical
@@ -134057,7 +134212,8 @@ or sensitive values in schema descriptions because trusted output metadata can
 become model-visible.
 Use `{ additionalProperties: false }` on object layers when you want a complete
 compact output hint; open or truncated schemas remain available through
-`tools.describe(...)` but are not advertised as complete quick-index contracts.
+the callable catalog handle's `describe()` but are not advertised as complete
+quick-index contracts.
 
 Factory tools declare `outputSchema` on the concrete `AnyAgentTool` they
 return. The static `tool({ factory })` declaration does not accept a separate
@@ -136943,7 +137099,7 @@ Adds agent-callable tools.
 
 ## Surface
 
-contracts: `tools`; skills
+CLI commands: `openclaw browser`; contracts: `tools`; skills
 
 ## Related docs
 
@@ -137197,7 +137353,7 @@ Codex app-server harness and native session catalog.
 
 ## Surface
 
-commands: `/codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
+CLI commands: `openclaw codex`; slash commands: `/codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 
@@ -137473,7 +137629,7 @@ Generate setup codes and approve device pairing requests.
 
 ## Surface
 
-commands: `/pair`
+slash commands: `/pair`
 
 
 
@@ -137993,7 +138149,7 @@ OpenClaw Google Meet participant plugin for joining calls through Chrome or Twil
 
 ## Surface
 
-contracts: `tools`, `transcriptSourceProviders`
+CLI commands: `openclaw googlemeet`; contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -138557,7 +138713,7 @@ OpenClaw Matrix channel plugin for rooms and direct messages.
 
 ## Surface
 
-channels: `matrix`
+channels: `matrix`; CLI commands: `openclaw matrix`
 
 ## Related docs
 
@@ -138613,7 +138769,7 @@ Adds agent-callable tools.
 
 ## Surface
 
-commands: `/dreaming`; contracts: `tools`
+CLI commands: `openclaw memory`; slash commands: `/dreaming`; contracts: `tools`
 
 
 
@@ -138637,7 +138793,7 @@ OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, 
 
 ## Surface
 
-contracts: `tools`
+CLI commands: `openclaw ltm`; contracts: `tools`
 
 ## Related docs
 
@@ -138665,7 +138821,7 @@ Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
 ## Surface
 
-contracts: `tools`; skills
+CLI commands: `openclaw wiki`; contracts: `tools`; skills
 
 ## Related docs
 
@@ -139161,7 +139317,7 @@ Adds the openclaw path CLI for oc:// workspace file addressing.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw path`
 
 ## Related docs
 
@@ -139218,7 +139374,7 @@ title: "Onepassword plugin"
 
 ## Surface
 
-contracts: `tools`
+CLI commands: `openclaw onepassword`; contracts: `tools`
 
 ## Related docs
 
@@ -139485,7 +139641,7 @@ Adds policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw policy`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -139601,7 +139757,7 @@ OpenClaw QA lab plugin with private debugger UI and scenario runner.
 
 ## Surface
 
-contracts: `tools`, `webSearchProviders`, `workerProviders`
+CLI commands: `openclaw qa`; contracts: `tools`, `webSearchProviders`, `workerProviders`
 
 
 
@@ -139737,7 +139893,7 @@ Guarded end-to-end encrypted claw channel.
 
 ## Surface
 
-channels: `reef`
+channels: `reef`; CLI commands: `openclaw reef`
 
 ## Related docs
 
@@ -140041,7 +140197,7 @@ Manage Talk voice selection (list/set).
 
 ## Surface
 
-commands: `/voice`
+slash commands: `/voice`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -140109,7 +140265,7 @@ Join Microsoft Teams meetings as a Chrome browser guest.
 
 ## Surface
 
-contracts: `tools`, `transcriptSourceProviders`
+CLI commands: `openclaw teamsmeetings`; contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -140329,7 +140485,7 @@ HashiCorp Vault SecretRef provider integration.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw vault`
 
 ## Related docs
 
@@ -140441,7 +140597,7 @@ OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.
 
 ## Surface
 
-contracts: `tools`; skills
+CLI commands: `openclaw voicecall`; contracts: `tools`; skills
 
 ## Related docs
 
@@ -140629,7 +140785,7 @@ Dashboard workboard for agent-owned issues and sessions.
 
 ## Surface
 
-contracts: `tools`; dashboard data bindings: `workboard.cards.list`, `workboard.stats`, `workboard.boards.list`; dashboard action verbs: `workboard.dispatch`
+CLI commands: `openclaw workboard`; contracts: `tools`; dashboard data bindings: `workboard.cards.list`, `workboard.stats`, `workboard.boards.list`; dashboard action verbs: `workboard.dispatch`
 
 ## Related docs
 
@@ -140798,7 +140954,7 @@ Join Zoom meetings as a Chrome browser guest.
 
 ## Surface
 
-contracts: `tools`, `transcriptSourceProviders`
+CLI commands: `openclaw zoommeetings`; contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 
@@ -150391,10 +150547,11 @@ openclaw models set ollama-cloud/kimi-k2.6
 ```
 
 Hosted ids in the live catalog include `deepseek-v4-flash`, `glm-5.2`,
-`gpt-oss:20b`, `kimi-k2.6`, and `minimax-m2.7`. When live discovery returns
-nothing, OpenClaw falls back to the bundled rows `minimax-m2.7`, `glm-5.1`,
-and `glm-5.2`. The retiring `kimi-k2.5` model is hidden from model pickers but
-remains selectable by exact reference until Ollama retires it on July 31, 2026.
+`gpt-oss:20b`, `kimi-k3`, and `minimax-m3`. When live discovery returns
+nothing, OpenClaw falls back to the bundled rows `minimax-m2.7`, `minimax-m3`,
+`kimi-k3`, `glm-5.1`, and `glm-5.2`. Retired `kimi-k2.5` remains marked
+deprecated for existing exact references, but is no longer a current hosted
+model.
 
 Model ids are cloud catalog ids, not local pull names. If a model name works in
 a local Ollama host but is absent from the hosted catalog, use the `ollama`
@@ -152818,9 +152975,9 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     credentials on different sides of the trust boundary. Platform auth mints
     an ephemeral client secret and the browser exchanges SDP directly with
     OpenAI. OAuth auth stays in the Gateway: the existing single-use offer
-    broker sends raw `application/sdp` to
-    `/v1/realtime/calls?model=<model>` and returns only the answer SDP. The
-    OAuth token never reaches the browser. A configured Platform credential
+    broker sends multipart `sdp` plus the canonical browser `session` policy
+    to `/v1/realtime/calls` and returns only the answer SDP. The OAuth token
+    never reaches the browser. A configured Platform credential
     that cannot be resolved still fails closed; repair or remove that source
     before OAuth fallback can apply.
 
@@ -162029,7 +162186,7 @@ This checklist is the public shape of the release flow. Private credentials, sig
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
-3. Freeze the product-complete pre-changelog commit as the **Code SHA** and record the trusted **Tooling SHA**. Run the deterministic source preflight, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
+3. Freeze the product-complete pre-changelog commit as the **Code SHA** and record the trusted **Tooling SHA**. Run the deterministic source preflight, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse that exact Tooling SHA for later release validation; never refresh it from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
 4. Classify failures before editing as product, harness/tooling/provenance, infrastructure/credential, or wrapper. Only confirmed product failure creates a new Code SHA. Use one diagnosis, one fix when needed, and one narrow retry, then reassess.
 5. Only after the Code SHA is green, generate the top `CHANGELOG.md` section from merged PRs and direct commits since the last reachable shipped tag. Keep entries user-facing and deduplicated. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`.
 6. Commit only `CHANGELOG.md`. This commit is the **Release SHA**. The complete diff from Code SHA to Release SHA must be exactly `CHANGELOG.md`; any other changed path returns the release to step 2.
@@ -162090,9 +162247,11 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
   Provide `release_package_spec` after publishing a beta to reuse the shipped npm package across release checks, Package Acceptance, and package Telegram E2E without rebuilding the release tarball. Provide `npm_telegram_package_spec` only when Telegram should use a different published package from the rest of release validation. Provide `package_acceptance_package_spec` when Package Acceptance should use a different published package from the release package spec. Provide `evidence_package_spec` when the release evidence report should prove that validation matches a published npm package without forcing Telegram E2E.
 
   ```bash
+  TOOLING_SHA="<recorded-full-main-ancestor-sha>"
   node scripts/full-release-validation-at-sha.mjs \
     --sha <code-sha> \
-    --target-ref release/YYYY.M.PATCH
+    --target-ref release/YYYY.M.PATCH \
+    --workflow-sha "$TOOLING_SHA"
   ```
 
 - Run the manual `Package Acceptance` workflow when you want side-channel proof for a package candidate while release work continues. Use `source=npm` for `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref` to pack a trusted `package_ref` branch/tag/SHA with the current `workflow_ref` harness; `source=url` for a public HTTPS tarball with a required SHA-256 and strict public URL policy; `source=trusted-url` for a named trusted-source policy using required `trusted_source_id` and SHA-256; or `source=artifact` for a tarball uploaded by another GitHub Actions run.
@@ -162163,19 +162322,36 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 `Full Release Validation` is how operators kick off the full product matrix from one entrypoint. Use the helper so every child workflow runs from a temporary branch fixed at one trusted `main` workflow SHA while the requested commit remains the candidate under test:
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 pnpm ci:full-release \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
-The helper fetches current `origin/main`, pushes `release-ci/<workflow-sha>-...` at that trusted Tooling SHA, infers `beta` from alpha/beta package versions and `stable` otherwise, and dispatches `Full Release Validation` with the Validation SHA as `expected_sha`. Target resolution rejects a mismatch before child dispatch. Every child workflow `headSha` must match the Tooling SHA. Pass `-f reuse_evidence=false` to force a fresh run, `-f release_profile=full` for the broad advisory sweep, or `--workflow-sha <trusted-main-sha>` to pin a compatible older commit still reachable from current `origin/main`. The helper rejects pinned tooling that lacks the `expected_sha` dispatch input and never silently selects a newer Tooling SHA. The workflow itself never writes repository refs.
+The helper verifies that the recorded Tooling SHA remains reachable from current
+`origin/main`, pushes `release-ci/<workflow-sha>-...` at that exact commit,
+accepts only the release branch's final package version or a matching beta
+prerelease, infers `beta` for that beta path and `stable` for final versions, and
+dispatches `Full Release Validation` with the Validation SHA as `expected_sha`.
+Target resolution rejects a mismatch before child dispatch. Every child workflow
+`headSha` must match the Tooling SHA. Pass `-f reuse_evidence=false` to force a
+fresh run or `-f release_profile=full` for the broad advisory sweep. Never
+replace the recorded Tooling SHA with a fresh `main` lookup. The helper rejects
+pinned tooling that lacks the current release-isolation contract or the
+`expected_sha` dispatch input and never silently selects newer tooling. The
+workflow itself never writes repository refs. Tideclaw alpha validation remains
+on its matching alpha branch and exact alpha tag rather than a regular
+`release/*` context.
 
 After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper with the Release SHA:
 
 ```bash
+TOOLING_SHA="<same-recorded-tooling-sha>"
 pnpm ci:full-release \
   --sha <release-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 The second parent reuses product evidence only when GitHub proves the Release SHA descends from the Code SHA and the complete changed path set is exactly `CHANGELOG.md`. It records `changelog-only-release-v1` and dispatches no product children. Npm preflight and package/install acceptance still run on the Release SHA because its tarball bytes changed.
@@ -162189,7 +162365,7 @@ skipped.
 
 See [Full release validation](/reference/full-release-validation) for the complete stage matrix, exact workflow job names, stable versus full profile differences, artifacts, and focused rerun handles.
 
-Child workflows are dispatched from the SHA-pinned trusted ref that runs `Full Release Validation`. Every child run must use the exact parent workflow SHA. Do not use raw `--ref main -f ref=<sha>` dispatches for release proof; use `pnpm ci:full-release --sha <target-sha> --target-ref release/YYYY.M.PATCH`.
+Child workflows are dispatched from the SHA-pinned trusted ref that runs `Full Release Validation`. Every child run must use the exact parent workflow SHA. Do not use raw `--ref main -f ref=<sha>` dispatches for release proof; use `pnpm ci:full-release --sha <target-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`.
 
 Use `release_profile` to select live/provider breadth:
 
@@ -162206,20 +162382,25 @@ The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
 Use these variants depending on release stage:
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+
 # Validate the product-complete Code SHA.
 pnpm ci:full-release \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 
 # Validate the changelog-only Release SHA by reusing Code SHA product evidence.
 pnpm ci:full-release \
   --sha <release-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 
 # After publishing a beta, add published-package Telegram E2E.
 pnpm ci:full-release \
   --sha <release-sha> \
   --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA" \
   -f release_package_spec=openclaw@YYYY.M.PATCH-beta.N \
   -f evidence_package_spec=openclaw@YYYY.M.PATCH-beta.N \
   -f run_release_soak=true \
@@ -162242,7 +162423,7 @@ and rerun group and does not cancel prior runs. Parent cancellation leaves
 adopted children running until the operator cancels the exact child. Pass
 `reuse_evidence=false` only when a fresh full run is intentionally required.
 
-For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease` runs only the release-only plugin child, `release-checks` runs every release box, and the narrower release groups are `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`. Focused `npm-telegram` reruns require `release_package_spec` or `npm_telegram_package_spec`; full/all runs use the canonical package Telegram E2E inside Package Acceptance. Focused cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or another OS/suite filter. QA release-check failures block normal release validation, including OpenClaw dynamic tool drift in the core runtime-pair lane. Tideclaw alpha runs may still treat non-package-safety release-check lanes as advisory. With `release_profile=beta`, the `Run repo/live E2E validation` live-provider suites are advisory (warnings, not blockers); stable and full profiles keep them blocking. When `live_suite_filter` explicitly requests a gated QA live lane such as Discord, WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
+For bounded recovery, pass `rerun_group` to the umbrella. Supported controller groups are `ci`, `plugin-prerelease`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`, and `performance`; use `all` only for deliberate full validation. The removed `release-checks` aggregate handle is invalid because it silently selected every release-check lane and its package/Docker setup. `qa` remains available only as a direct `OpenClaw Release Checks` manual aggregate, not as an umbrella/controller retry API. Focused `npm-telegram` reruns require `release_package_spec` or `npm_telegram_package_spec`; full/all runs use the canonical Package Acceptance Telegram E2E. Focused cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or another OS/suite filter. Live, QA-live, and cross-OS filters are valid only with their owning group; mismatches fail before scheduling and never become an unfiltered broad run. QA release-check failures block normal release validation, including OpenClaw dynamic tool drift in the core runtime-pair lane. Tideclaw alpha runs may still treat non-package-safety release-check lanes as advisory. With `release_profile=beta`, the `Run repo/live E2E validation` live-provider suites are advisory (warnings, not blockers); stable and full profiles keep them blocking. When `live_suite_filter` explicitly requests a gated QA live lane such as Discord, WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
 
 ### Vitest
 
@@ -162778,6 +162959,13 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The placement-move table uses this same-version rule for its nullable bare
+`abandon_source INTEGER` column. The feature lazily ensures the column on first
+move use. `NULL` means ordinary reconcile-first movement; `1` records the
+operator's explicit offline-device abandonment decision so restart recovery
+cannot accidentally resume remote reconciliation. Older readers ignore the
+column and can reopen the same database safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release
@@ -163084,15 +163272,23 @@ Freeze the product-complete pre-changelog commit as the **Code SHA** and select
 one trusted workflow commit as the **Tooling SHA**, then run:
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 pnpm ci:full-release \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
+Record the Tooling SHA once for the release and reuse it for later Code-SHA,
+Release-SHA, and focused reruns. Do not refresh it from moving `main`.
+
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
-package versions and `stable` otherwise. Pass alternate workflow inputs with
-`-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
+end-to-end agent turn. Regular `release/*` targets accept only the branch's final
+package version or a matching beta prerelease. Tideclaw alpha validation uses
+its exact alpha tag and matching alpha branch. The helper maps beta releases and
+exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
+only for the broad advisory sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. Pass `-f fail_fast=true` when the shorter
 first-failure cancellation path is preferable.
@@ -163104,12 +163300,12 @@ SHA for product validation or the Release SHA for changelog-only validation; it
 is not a third release identity. The workflow rejects malformed or mismatched
 expected SHAs before child dispatch. Every child must report the same Tooling
 SHA. Pass
-`-f reuse_evidence=false` to force a fresh run or
-`--workflow-sha <trusted-main-sha>` to select a compatible older workflow
-commit still reachable from current `origin/main`. The helper rejects a pinned
-Tooling SHA that does not declare the `expected_sha` dispatch input; it never
-silently substitutes newer tooling. The workflow never creates or updates
-repository refs itself.
+`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
+require `--workflow-sha` with the recorded full SHA, which must remain reachable
+from current `origin/main`. The helper rejects a pinned Tooling SHA that does
+not declare the current release-isolation contract or the `expected_sha`
+dispatch input; it never silently substitutes newer tooling. The workflow never
+creates or updates repository refs itself.
 
 ## Extended-stable exception
 
@@ -163202,17 +163398,17 @@ the `runtime-assets` Docker target with
 other stages and is enforced by the umbrella verifier; lanes no longer wait for
 it before dispatching. A narrower `rerun_group` skips this preflight.
 
-| Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                  |
-| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and records immutable package and image artifact tuples for both package-facing child workflows.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                                                       |
-| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                               |
-| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                |
-| Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                                |
-| Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, and QA Lab parity. QA-live Matrix, Buzz, and Telegram plus gated advisory Discord, WhatsApp, and Slack run for stable/full, beta with `run_release_soak=true`, or explicit `qa`/`qa-live` groups. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
-| Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                                    |
-| Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                       |
-| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                                                                                                                       |
+| Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and records immutable package and image artifact tuples for both package-facing child workflows.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                                                                                                                |
+| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                                                                                        |
+| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                                                                         |
+| Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                                                                                         |
+| Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, and QA Lab parity. QA-live Matrix, Buzz, and Telegram plus gated advisory Discord, WhatsApp, and Slack run for stable/full, beta with `run_release_soak=true`, an explicit `qa-live` controller retry, or the direct child's manual `qa` aggregate. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** classify the failed surface and select one concrete release-check group. |
+| Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                                                                                             |
+| Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                                                                                |
+| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                                                                                                                                                                                |
 
 The umbrella always dispatches product performance in artifact-only mode.
 `OpenClaw Performance` permits report publication only for scheduled runs or a
@@ -163247,20 +163443,20 @@ artifact when package or Docker-facing stages need it.
 
 | Stage                    | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, rerun group, and focused live suite filter.<br />**Rerun:** `rerun_group=release-checks`.                                                                                                                                                                                                                                                                                                                                                  |
+| Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, concrete release-check groups, and focused live suite filter.<br />**Rerun:** select the concrete group for the failed surface.                                                                                                                                                                                                                                                                                                            |
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                |
 | Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install image-provider smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                           |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                                                                                                 |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                     |
 | Package Acceptance       | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, the canonical mock-OpenAI Telegram package E2E, and published-upgrade survivor checks against the same tarball. Blocking release checks use the default latest published baseline; soak checks (`run_release_soak=true`) expand to the last 4 stable npm releases plus 3 pinned historical versions (`2026.4.23`, `2026.5.2`, `2026.4.15`), run against reported-issue upgrade fixtures.<br />**Rerun:** `rerun_group=package`. |
-| Maturity scorecard       | **Job:** `Render maturity scorecard release docs`<br />**Backing workflow:** `maturity-scorecard.yml`<br />**Tests:** renders the advisory maturity scorecard docs against the target ref. Only runs when `run_maturity_scorecard=true` is passed.<br />**Rerun:** `rerun_group=qa` with `run_maturity_scorecard=true`.                                                                                                                                                                                                                                                           |
-| QA parity                | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                         |
-| QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                             |
-| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                     |
-| QA live Matrix           | **Job:** `Run QA Live Matrix catalog`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** catalog-derived YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment, distributed across deterministic shards.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-matrix` for a focused Matrix rerun.                                                                                                                                                                         |
-| QA live Buzz             | **Job:** `Run QA Lab live Buzz lane`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** signed canary and mention-gating round trips through the real Buzz plugin using dedicated Convex-leased identities and a hosted relay room.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-buzz` for a focused Buzz rerun.                                                                                                                                                                                      |
-| QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                                 |
+| Maturity scorecard       | **Job:** `Render maturity scorecard release docs`<br />**Backing workflow:** `maturity-scorecard.yml`<br />**Tests:** renders the advisory maturity scorecard docs against the target ref. Only runs when `run_maturity_scorecard=true` is passed.<br />**Rerun:** direct manual `rerun_group=qa` with `run_maturity_scorecard=true`.                                                                                                                                                                                                                                             |
+| QA parity                | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                                                                                                                                       |
+| QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                           |
+| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                   |
+| QA live Matrix           | **Job:** `Run QA Live Matrix catalog`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** catalog-derived YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment, distributed across deterministic shards.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-matrix`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                  |
+| QA live Buzz             | **Job:** `Run QA Lab live Buzz lane`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** signed canary and mention-gating round trips through the real Buzz plugin using dedicated Convex-leased identities and a hosted relay room.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-buzz`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                             |
+| QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                                                                                                                                               |
 | QA live Discord          | **Job:** `Run QA Lab live Discord lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Discord QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-discord`.                                                                                                                                                                                                                                                                            |
 | QA live WhatsApp         | **Job:** `Run QA Lab live WhatsApp lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live WhatsApp QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-whatsapp`.                                                                                                                                                                                                                                                                        |
 | QA live Slack            | **Job:** `Run QA Lab live Slack lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Slack QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-slack`.                                                                                                                                                                                                                                                                                    |
@@ -163292,9 +163488,10 @@ commands with package artifact and image reuse inputs when available.
 It does not remove normal full CI, Plugin Prerelease, install smoke, package
 acceptance, or QA parity. Stable and full profiles always run exhaustive
 repo/live E2E, Docker release-path, and QA-live soak coverage. The beta profile
-adds those lanes only with `run_release_soak=true` or an explicit `qa` or
-`qa-live` rerun. Package Acceptance supplies the canonical package Telegram
-E2E for every candidate, so the umbrella does not duplicate that live poller.
+adds those lanes only with `run_release_soak=true`, an explicit `qa-live`
+controller retry, or the direct child's manual `qa` aggregate. Package
+Acceptance supplies the canonical package Telegram E2E for every candidate, so
+the umbrella does not duplicate that live poller.
 
 | Profile  | Intended use                      | Included live/provider coverage                                                                                                                                                                            |
 | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -163326,21 +163523,26 @@ Use `rerun_group` to avoid repeating unrelated release boxes:
 
 | Handle              | Scope                                                                                           |
 | ------------------- | ----------------------------------------------------------------------------------------------- |
-| `all`               | Phase-default stages; beta without soak excludes broad live/E2E and QA-live.                    |
+| `all`               | Deliberate full validation; beta without soak excludes broad live/E2E and QA-live.              |
 | `ci`                | Manual full CI child only.                                                                      |
 | `plugin-prerelease` | Plugin Prerelease child only.                                                                   |
-| `release-checks`    | All OpenClaw Release Checks stages.                                                             |
 | `install-smoke`     | Install Smoke through release checks.                                                           |
 | `cross-os`          | Cross-OS release checks.                                                                        |
 | `live-e2e`          | Repo/live E2E and Docker release-path validation.                                               |
 | `package`           | Package Acceptance.                                                                             |
-| `qa`                | QA parity plus QA live lanes.                                                                   |
 | `qa-parity`         | QA parity lanes and report only.                                                                |
 | `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.  |
 | `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |
 | `performance`       | Product performance evidence only.                                                              |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
+The former `release-checks` aggregate retry handle is invalid. It silently
+expanded to every release-check lane, including package and Docker setup. Pick
+one concrete group after classifying the failed surface.
+The umbrella/controller also rejects `qa`; direct `OpenClaw Release Checks`
+dispatches may use it only as a deliberate manual aggregate of `qa-parity` and
+`qa-live`. Live, QA-live, and cross-OS filters must match their owning group.
+Mismatches fail before scheduling and never widen to an unfiltered run.
 Valid filter ids are defined in the reusable live/E2E workflow, including
 `docker-live-models`, `live-gateway-docker`,
 `live-gateway-anthropic-docker`, `live-gateway-google-docker`,
@@ -163374,8 +163576,8 @@ them blocking. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
-Rerun `rerun_group=qa`, `qa-parity`, or `qa-live` when you
-need fresh QA evidence.
+Use controller groups `qa-parity` or `qa-live` for fresh QA evidence. A direct
+manual `OpenClaw Release Checks` dispatch may use `qa` to aggregate both.
 
 ## Evidence to keep
 
@@ -165184,6 +165386,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.nextcloud-talk.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`
 - `channels.nextcloud-talk.accounts.*.apiPassword`
+- `channels.nostr.privateKey`
 - `channels.zalo.botToken`
 - `channels.zalo.webhookSecret`
 - `channels.zalo.accounts.*.botToken`
@@ -165359,7 +165562,7 @@ artifacts before importing.
 Isolated cron runs create their own session entries/transcripts with dedicated retention:
 
 - `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` or a zero duration such as `"0h"` disables.
-- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain their 24-hour cleanup window.
+- Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
 When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.
 
@@ -172868,7 +173071,7 @@ run `openclaw onboard` to change the model provider or its authentication.
 Use `openclaw onboard --classic` for detailed model/auth, channel, skill,
 remote Gateway, or import setup. Adding `--install-daemon` also selects the
 classic flow and installs the background service in one step. Use `openclaw
-openclaw` for conversational non-inference setup and repair. `openclaw
+setup` for conversational non-inference setup and repair. `openclaw
 onboard --modern` is a compatibility alias that uses the same live-inference
 gate.
 
@@ -174481,6 +174684,8 @@ Add `--json` for a machine-readable summary.
 - `--gateway-port` defaults to `18789`; only pass it to override.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
 - `--secret-input-mode ref` stores new credentials as env-backed references (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`); set the provider env var when adding a credential or passing an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+- The gateway token follows the same mode. Setup generates that value itself, so reference mode has no env var to point at unless you supply one: with `OPENCLAW_GATEWAY_TOKEN` exported, `gateway.auth.token` becomes an `env` ref to it; otherwise the token goes into the SQLite secret store as `OPENCLAW_GATEWAY_TOKEN` and config keeps a `store` ref. Either way `openclaw.json` holds no plaintext gateway token. Inspect the entry with `openclaw secrets store list`.
+- In reference mode, explicit `--gateway-password` and `--remote-password` must match `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` must match `OPENCLAW_GATEWAY_TOKEN`. Missing or mismatched environment values fail before setup changes state; matching credentials are stored as env SecretRefs.
 
 ```bash
 openclaw onboard --non-interactive --accept-risk --skip-health \
@@ -174702,6 +174907,10 @@ not install or modify anything on the remote host.
     - With a configured default model, **Keep existing model config** appears
       first and becomes the default, followed by **QuickStart (recommended)**
       and **Manual setup**.
+      An explicit non-`skip` `--auth-choice` or a single provider credential
+      flag still configures that provider without changing the existing default
+      model, unless the provider requires you to select a model. Multiple
+      provider flags require an explicit `--auth-choice`.
     - When a migration provider is available, **Import from another agent**
       appears after those setup choices. Selecting it opens a provider list
       with entries such as **Import from Claude**, **Import from Codex**, and
@@ -179715,7 +179924,7 @@ identically-named `exec`/`wait` tools.
 
 In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
-catalog tool from guest JavaScript with `tools.callValue`. Recognizable shell
+async tool global from guest JavaScript. Recognizable shell
 commands are rejected before the QuickJS worker starts with actionable
 `invalid_input` guidance.
 
@@ -179726,16 +179935,18 @@ commands are rejected before the QuickJS worker starts with actionable
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
-- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
-  standalone model tool and exposed inside the guest program through `ALL_TOOLS`
-  and `tools`.
-- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
-  catalog ids, compact input hints, and compact declared output hints when a
+- Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
+  hidden as a standalone model tool and exposed inside the guest program as an
+  async global function. MCP stays under the `MCP` namespace.
+- The `exec` description carries a bounded quick index of final callable names,
+  compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
-  MCP entries, and overflow entries; guest-side catalog lookup remains the fallback.
-- Guest code searches the hidden catalog, describes a tool's schema, and calls
-  a tool through the same execution path used by normal agent turns (policy,
-  approvals, hooks, telemetry all still apply).
+  MCP entries, and overflow entries; callable `catalog.search(...)` results are
+  the fallback.
+- Guest code calls globals directly or searches the hidden catalog for callable
+  handles. A handle exposes bounded metadata and `describe()`, but never the
+  exact internal catalog id. Calls use the same execution path as normal agent
+  turns (policy, approvals, hooks, telemetry all still apply).
 - MCP tools are grouped under the `MCP` namespace; in code mode this is the
   only supported way to call them.
 - `wait` resumes a suspended code-mode run when nested tool calls are still
@@ -179834,15 +180045,19 @@ For a tool with a declared output such as
 select, call, and transform it:
 
 ```javascript
-const [shipmentTool] = await tools.search("list shipments");
-const shipments = await tools.callValue(shipmentTool.id, {});
+const [shipmentTool] = await catalog.search("list shipments");
+const shipments = await shipmentTool({});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
 
+Declared output fields may feed later calls in that same `exec`; do not spend a
+second `exec` merely inspecting them.
+
 When a quick-index line ends in `-> ?`, the output shape is unknown. The first
-`exec` must return `await tools.callValue(...)` unchanged. A later `exec` can
-transform the observed value. This costs an extra model turn, but prevents the
-model from guessing field names.
+`exec` must return the final async tool call unchanged. Do not feed the unknown
+value into guessed field-dependent logic in the same program. Observe the raw
+value, then use a later `exec` for dependent composition. This costs an extra
+model turn, but prevents the model from guessing field names.
 
 ### Verify the active surface
 
@@ -180097,13 +180312,17 @@ Rules:
 - `code` is the documented model-facing field.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
-  field); when both are present, the values must match.
+  field). Blank caller aliases are treated as absent; a hook or trusted policy
+  that invalidates one populated alias (blank or non-string) invalidates both so
+  execution fails closed. When both aliases are non-empty, their values must match.
 - `language` defaults to `"javascript"`; the schema exposes it as a flat
   string enum (`"javascript" | "typescript"`), not a `oneOf`/`anyOf` union,
   since some providers reject those shapes.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
-- Set `restartSafe: true` only for read-only work where every catalog call is
-  explicitly replay-safe. OpenClaw rejects unmarked catalog tools and namespace
+- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
+  explicitly requests replay after a gateway restart, and never for `write`,
+  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
+  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
   surfaces that are not proven replay-safe, and restart-safe runs do not
   auto-drain pending calls. A generic exec surface is not replay-safe merely
   because one command appears read-only; use audited read, grep, or find tools.
@@ -180153,8 +180372,8 @@ type CodeModeFailedResult = {
 `exec` returns `waiting` when the guest suspends with resumable state that still
 needs a model-visible continuation — an explicit `yield_control(...)`, or a
 bridge tool call that has not resolved within the exec deadline. The result
-includes a `runId` for `wait`. Bridge tool calls — `tools.search`/`describe`/
-`call` and namespace calls, including MCP namespace calls — are auto-drained
+includes a `runId` for `wait`. Bridge requests — `catalog.search`, handle
+`describe()`, callable tool handles, and namespace calls including MCP — are auto-drained
 inside the same `exec`/`wait` call while they resolve within the deadline, so a
 compact code block that awaits several tools runs to completion in one model
 turn instead of forcing one model tool call per await.
@@ -180206,8 +180425,7 @@ scoped to the run and session that created them.
 ## Guest runtime API
 
 ```typescript
-declare const ALL_TOOLS: ToolCatalogEntry[];
-declare const tools: ToolCatalog;
+declare const catalog: ToolCatalog;
 declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
 
@@ -180224,50 +180442,61 @@ declare function yield_control(reason?: string): Promise<void>;
 
 Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 
-`ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not contain
-full schemas by default. The model-visible `exec` description also includes a
-bounded, deterministic subset of exact OpenClaw/plugin ids, compact input
-hints, and trusted declared output hints. Descriptions remain deferred so
-adversarial catalog prose cannot steer the model. When that index omits a tool,
-read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
+Every effective non-MCP tool is also installed as an async global function.
+The model-visible `exec` description includes a bounded, deterministic subset
+of final callable names, compact input hints, and trusted declared output hints.
+Descriptions remain deferred so adversarial catalog prose cannot steer the
+model. When that index omits a tool, call `catalog.search(...)`; its results are
+callable functions.
 
-The arrow in each quick-index line describes the `tools.callValue(...)` value.
+The arrow in each quick-index line describes the callable function's value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
 Unknown outputs stay raw-first: return the value unchanged, observe it, then
-filter or map it in a later `exec` instead of guessing field names. This also
+filter or map it in a later `exec` instead of feeding guessed fields into
+dependent logic in the same program. This also
 applies when a declared-output read feeds a final `-> ?` call: return that
 call's raw value without wrapping it in the requested answer shape.
 
 ```typescript
-type ToolCatalogEntry = {
-  id: string;
-  name: string;
+type ToolCatalogMetadata = {
+  callableName: string;
+  toolName: string;
   label?: string;
   description: string;
-  source: "openclaw" | "mcp" | "client";
-  sourceName?: string;
-  input: string;
+  source: "openclaw" | "client";
+  input?: string;
   output?: string;
 };
+
+type ToolCatalogHandle = ((input?: unknown) => Promise<unknown>) &
+  ToolCatalogMetadata & {
+    describe(): Promise<ToolCatalogDescription>;
+    toJSON(): ToolCatalogMetadata;
+  };
 ```
 
+Returning `await catalog.search(...)` or `catalog.all()` serializes each
+callable handle to this bounded metadata. Serialization does not call
+`describe()` or start another bridge request; inside the same program, the
+handle remains callable.
+
 `input` is a bounded TypeScript-style signature for the common case. Use
-`tools.describe(...)` when the exact full schema is still needed. Remote MCP
-and client entries use `input: "unknown"` so their untrusted schemas stay
-deferred until `describe`. `output` is
+the handle's `describe()` when the exact full schema is still needed. Client
+entries use `input: "unknown"` so their untrusted schemas stay deferred until
+`describe()`. `output` is
 present only for a complete compact hint derived from a trusted OpenClaw core
 or plugin `outputSchema`. MCP and client output-schema claims are not promoted
 into this trusted catalog hint.
 
-Plugin tools use `source: "openclaw"` with `sourceName` set to the owning
-plugin id; there is no separate `"plugin"` source value. `source: "mcp"` is
-used only for MCP entries in `sourceName`/`mcp` metadata (and is filtered out
-of `ALL_TOOLS`/`tools.*`, see below).
+Plugin tools use `source: "openclaw"`; there is no separate `"plugin"` source
+value. MCP entries are excluded from generic catalog discovery and remain
+available only through `MCP`.
 
 Full schema is loaded only on demand:
 
 ```typescript
-type ToolCatalogEntryWithSchema = ToolCatalogEntry & {
+type ToolCatalogDescription = Omit<ToolCatalogMetadata, "toolName"> & {
+  name: string;
   parameters: unknown;
   outputSchema?: unknown;
 };
@@ -180277,11 +180506,8 @@ Catalog helpers:
 
 ```typescript
 type ToolCatalog = {
-  search(query: string, options?: { limit?: number }): Promise<ToolCatalogEntry[]>;
-  describe(id: string): Promise<ToolCatalogEntryWithSchema>;
-  callValue(id: string, input?: unknown): Promise<unknown>;
-  call(id: string, input?: unknown): Promise<unknown>;
-  [safeToolName: string]: unknown;
+  search(query: string, options?: { limit?: number }): Promise<ToolCatalogHandle[]>;
+  all(): readonly ToolCatalogHandle[];
 };
 ```
 
@@ -180302,20 +180528,23 @@ approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
 `exec`: the generic nodes surface reserves `system.run` for the normal shell
 `exec` tool with a node host.
 
-Convenience tool functions are installed only for unambiguous safe names:
+Call quick-index globals directly, or use callable catalog handles when lookup
+is needed:
 
 ```typescript
-const files = await tools.search("read local file");
-const fileRead = await tools.describe(files[0].id);
-const content = await tools.callValue(fileRead.id, { path: "README.md" });
+const content = await read({ path: "README.md" });
 
-// If the hidden catalog has an unambiguous `web_search` entry:
-const hits = await tools.web_search({ query: "OpenClaw code mode" });
+const [tool] = await catalog.search("...");
+const result = await tool({ query: "OpenClaw" });
+
+const [search] = await catalog.search("search the web", { limit: 1 });
+const schema = await search.describe();
+const hits = await search({ query: "OpenClaw code mode" });
 ```
 
-`tools.callValue(...)` returns a normal tool's JSON `details` value directly.
-`tools.call(...)` preserves the raw `{ tool, result }` envelope for callers
-that need content blocks or other result metadata.
+Calling a global or catalog handle returns the normal tool's JSON `details`
+value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
+guest-visible.
 
 ## Declared output contracts
 
@@ -180372,15 +180601,18 @@ schema whose hint exposes stable metadata, text, cache state, and nested spill
 metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
-change state plus diff/patch data; and apply-patch path summaries. When the
-quick index declares the fields, one cell can compose discovery and delivery
-without a separate inspection turn:
+change state plus diff/patch data; and apply-patch path summaries. Missing
+canonical daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
+result even when `optional` is omitted; other missing paths throw unless
+`optional: true` is explicitly supplied. When the quick index declares the
+fields, one cell can compose discovery and delivery without a separate
+inspection turn:
 
 ```javascript
-const listed = await tools.conversations_list({ query: "build bot" });
+const listed = await conversations_list({ query: "build bot" });
 const target = listed.conversations.find((item) => item.label === "Build bot");
 if (!target) throw new Error("conversation not found");
-return await tools.conversations_send({
+return await conversations_send({
   conversationRef: target.conversationRef,
   message: "Build finished.",
 });
@@ -180388,7 +180620,8 @@ return await tools.conversations_send({
 
 The nested calls still use normal tool policy, hooks, and approvals. If a full
 contract is exact but too large for the bounded quick index, it remains
-available through `tools.describe(...)` and the arrow stays `-> ?`.
+available through the callable handle's `describe()` and the arrow stays
+`-> ?`.
 
 The contract rules are strict:
 
@@ -180398,12 +180631,12 @@ The contract rules are strict:
   the tool has no stable structured result.
 - Close object layers with `{ additionalProperties: false }` for a complete
   quick-index hint. Open, oversized, or otherwise partial schemas stay
-  available through `tools.describe(...)` but do not enable one-turn field use.
+  available through handle `describe()` but do not enable one-turn field use.
 - OpenClaw compiles the schema before running the tool, then validates final
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
   value.
-- Compact hints are deterministic and bounded. `tools.describe(...)` exposes
+- Compact hints are deterministic and bounded. Handle `describe()` exposes
   the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client
   metadata remains untrusted and cannot opt into these quick-index hints.
@@ -180411,9 +180644,9 @@ The contract rules are strict:
 See [Tool plugins](/plugins/tool-plugins#output-contracts) for plugin authoring
 details.
 
-MCP catalog entries are not callable through `tools.callValue(...)`,
-`tools.call(...)`, or convenience functions in code mode; they are exposed
-only through the generated `MCP` namespace. TypeScript-style declaration files
+MCP catalog entries are not exposed as bare globals or through generic
+`catalog` discovery; they are available only through the generated `MCP`
+namespace. TypeScript-style declaration files
 are available through the read-only `API` virtual file surface, so agents can
 inspect MCP signatures without adding MCP schemas to the prompt:
 
@@ -180440,11 +180673,15 @@ tool metadata:
 
 ```typescript
 type McpToolResult = {
-  content?: unknown[];
+  content: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
-  [key: string]: unknown;
 };
+
+type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };
+type McpResourcesReadResult = { contents: unknown[] };
+type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };
+type McpPromptsGetResult = { messages: unknown[]; description?: string };
 
 declare namespace MCP.github {
   /** Return this TypeScript-style API header. */
@@ -180464,6 +180701,15 @@ declare namespace MCP.github {
   }): Promise<McpToolResult>;
 }
 ```
+
+MCP tool calls return their original JSON-safe content blocks, including block
+annotations and block-level `_meta`, plus top-level `structuredContent` and
+`isError` when provided. Top-level MCP `_meta` and private app metadata never
+enter the guest. An MCP application failure with `isError: true` still resolves
+as a result, so guest code can inspect and recover from it. Resource and prompt
+operations instead return their native MCP shapes: `resources.list()` returns
+`resources`, `resources.read()` returns `contents`, `prompts.list()` returns
+`prompts`, and `prompts.get()` returns `messages` with an optional `description`.
 
 Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
@@ -180511,23 +180757,18 @@ The hidden catalog includes tools after effective policy filtering, in this
 order: OpenClaw core tools, bundled plugin tools, external plugin tools, MCP
 tools, then client-provided tools for the current run.
 
-Catalog ids are stable within one run and deterministic across equivalent
-tool sets when possible. Actual shape:
+Catalog ids remain opaque host-only routing identities. They are stable within
+one run and deterministic across equivalent tool sets when possible, but they
+are never included in the prompt, guest metadata, handle descriptions, or
+errors. Policy, approvals, telemetry, replay safety, and namespace dispatch
+continue to use them internally.
 
-```text
-<source>:<owner>:<tool-name>
-```
-
-where `<source>` is `openclaw`, `mcp`, or `client` (plugin tools use
-`openclaw` with the plugin id as `<owner>`; core tools use `openclaw:core:*`).
-Examples:
-
-```text
-openclaw:core:message
-openclaw:browser:browser_request
-mcp:github:create_issue
-client:app:select_file
-```
+Before the worker starts, OpenClaw projects one effective winner per exact tool
+name and computes its final guest callable name. This matches direct-mode
+precedence: later client tools win an exact-name shadow, while plugin conflict
+enforcement remains unchanged. The finalized projection is carried through
+bridge calls and snapshot resume; consumers do not reconstruct it from the
+catalog.
 
 The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
 `tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
@@ -180536,10 +180777,9 @@ because their structured results cannot cross the QuickJS bridge.
 
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with
-normal tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
-`tools.describe(...)`, `tools.callValue(...)`, and `tools.call(...)` views omit MCP entries. The
-generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
-exact catalog id and dispatches through the same executor path.
+normal tool execution. Generic guest `catalog.search(...)` and `catalog.all()`
+omit MCP entries. The generated `MCP.<server>.<tool>({ ...input })` namespace
+resolves to its host-only entry and dispatches through the same executor path.
 
 ## Tool Search interaction
 
@@ -180551,10 +180791,10 @@ When Code Mode engages through forced `true` or `"auto"` activation:
 - OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
   or `tool_call` as model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
-- The guest runtime receives compact `ALL_TOOLS` metadata and search/describe/
-  call helpers for non-MCP tools.
+- The guest runtime receives bare async globals plus callable search/describe
+  handles for non-MCP tools.
 - MCP calls use the generated `MCP` namespace and its `$api()` headers instead
-  of `tools.call(...)`.
+  of generic catalog discovery.
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
@@ -180569,14 +180809,19 @@ any other tool.
 
 Inside the guest runtime:
 
-- `tools.call("openclaw:core:exec", input)` can call the shell exec tool if
-  policy allows it.
-- `tools.exec(...)` is installed only if the shell exec catalog entry has an
-  unambiguous safe name.
-- the code-mode `exec` tool is never recursively available through `tools`.
-
-If two tools normalize to the same safe convenience name, OpenClaw omits the
-convenience function and requires `tools.call(id, input)`.
+- An exact JavaScript-safe tool name stays exact: `web_search(...)` and
+  `sessions_spawn(...)`.
+- Invalid identifier characters become `_`; a still-invalid first character
+  gets the `tool_` prefix. For example, `llm-task` becomes `llm_task` when that
+  name is free.
+- JavaScript reserved words, specialized globals, and normalized collisions
+  receive a deterministic short suffix derived from the host-only identity.
+- Exact safe names win their unsuffixed spelling. A raw tool never overwrites
+  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, output/timer helpers,
+  or optional Swarm globals.
+- The normal shell `exec` tool is callable as the `exec(...)` guest global when
+  policy allows it. The code-mode control `exec` is not recursively available
+  inside the guest.
 
 ## Nested tool execution
 
@@ -180657,7 +180902,8 @@ Model code is hostile. The runtime uses defense in depth:
 - converts host errors into plain guest errors, never host realm objects
 - drops snapshots on timeout, abort, session end, or expiry
 - rejects recursive access to `exec`, `wait`, and Tool Search control tools
-- prevents convenience-name collisions from shadowing catalog helpers
+- reserves specialized globals and resolves callable-name collisions before the
+  worker starts
 
 The sandbox is one security layer; operators may still need OS-level
 hardening for high-risk deployments.
@@ -180773,19 +181019,20 @@ Code mode coverage should prove:
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger
   code-mode payload enforcement
-- all catalog-eligible effective non-MCP tools appear in `ALL_TOOLS`
-- direct-only tools stay model-visible and do not appear in `ALL_TOOLS`
-- denied tools do not appear in `ALL_TOOLS`
-- `tools.search`, `tools.describe`, `tools.callValue`, and `tools.call` work for OpenClaw tools
+- every catalog-eligible effective non-MCP name has one callable winner
+- direct-only tools stay model-visible and do not appear in `catalog`
+- denied tools have no global or catalog handle
+- bare globals, callable `catalog.search` results, `catalog.all`, and handle
+  `describe()` work for OpenClaw and client tools without exposing exact ids
 - `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
   MCP declarations without a bridge/tool call
 - MCP namespace `$api()` remains available as an inline fallback for schemas
 - MCP namespace calls work for visible MCP tools with one object input, while
-  direct MCP catalog entries are absent from `tools.*`
+  direct MCP entries are absent from generic `catalog` discovery
 - Tool Search control tools are hidden from both the model surface and the
   hidden catalog
 - nested calls preserve approval and hook behavior
-- shell `exec` is hidden from the model but callable by catalog id when
+- shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code
 - TypeScript input is transformed and evaluated without loading TypeScript on
@@ -180810,15 +181057,15 @@ Run these as integration or end-to-end tests when changing the runtime:
 5. Send an agent turn with OpenClaw, plugin, MCP, and client test tools.
 6. Assert the model-visible tool list is `exec`, `wait`, plus only configured
    direct-only tools.
-7. In `exec`, read `ALL_TOOLS` and assert the catalog-eligible effective test
-   tools are present while direct-only tools are absent.
-8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
-   `tools.describe`, and `tools.callValue` (or raw `tools.call`).
+7. In `exec`, call safe bare globals and assert normalized, reserved, and
+   colliding names match the quick index.
+8. Search `catalog`, inspect handle metadata/`describe()`, and call
+   OpenClaw/plugin/client handles without observing exact ids.
 9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
    assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and
-    assert direct MCP catalog entries are absent from `ALL_TOOLS` and
-    `tools.*`.
+    assert direct MCP entries are absent from `catalog.search()` and
+    `catalog.all()`.
 11. Assert denied tools are absent and cannot be called by guessed id.
 12. Start a nested tool call that resolves after `exec` returns `waiting`.
 13. Call `wait` and assert the restored VM receives the tool result.
@@ -188967,12 +189214,13 @@ Channel plugins can register a contextual presenter behind the same core tool. I
 
 In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinned HTML runs behind the same dedicated-origin, double-iframe sandbox host used by MCP Apps; the browser never resolves a widget data binding inside the untrusted frame.
 
-For browser embedding, the wrapper document injects four small host bridges around the widget code:
+For browser embedding, the wrapper document injects five small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
+- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (48 to 1200 pixels).
 - A host bridge defines the legacy `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. Inline chat prompts retain their private message channel; dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables, on load and again on every theme change.
 - A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export.
+- A chat-host bridge hides embedded scrollbar chrome when the widget runs inline while preserving scrolling behavior.
 
 Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
 
@@ -192946,7 +193194,7 @@ title: "Thinking levels"
 ## Application by agent
 
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
-- **Claude CLI backend**: concrete non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; `adaptive` removes configured effort flags and delegates effective effort to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
+- **Claude CLI backend**: concrete levels are mapped to Claude Code `--effort`; models that allow fixed budgets also receive a matching `MAX_THINKING_TOKENS` launch value. `adaptive` removes both configured effort flags and fixed-budget overrides, delegating effective thinking to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
 
 ## Fast mode (/fast)
 
@@ -198284,7 +198532,7 @@ Session controls:
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
-- `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
+- `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs; `reset`/`inherit`/`clear`/`default` clears the session override)
 - `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
 - `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
