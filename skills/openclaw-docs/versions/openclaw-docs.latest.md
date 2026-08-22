@@ -358,7 +358,6 @@ dispatch.
 | `ios-build`                        | Swift lint, Debug and Release builds, focused simulator lifecycle tests, and the full release screenshot matrix when screenshot-pipeline owners changed                                                                                                                                                  | iOS/capture changes                                    |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                                                                                                             | Android-relevant changes                               |
 | `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; accepts skips only for manifest-disabled downstream lanes                                                                                                                                                                                              | Every non-draft CI run                                 |
-| `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                                                                                                             | Main CI success or manual dispatch                     |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 
 The rare path-triggered `docker-seed-e2e` job selects only the executable
@@ -1028,10 +1027,6 @@ Quality stays separate from security so quality findings can be scheduled, measu
 ### Docs Agent
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another non-skipped Docs Agent run was created in the last hour. When it runs, it reviews the commit range from the previous non-skipped Docs Agent source SHA to current `main`, so one hourly run can cover all main changes accumulated since the last docs pass.
-
-### Test Performance Agent
-
-The `Test Performance Agent` workflow is an event-driven Codex maintenance lane for slow tests. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, but it skips if another workflow-run invocation already ran or is running that UTC day. Manual dispatch bypasses that daily activity gate. The lane builds a full-suite grouped Vitest performance report, lets Codex make only small coverage-preserving test performance fixes instead of broad refactors, then reruns the full-suite report and rejects changes that reduce the passing baseline test count. The grouped report records per-config wall time and max RSS on Linux and macOS, so the before/after comparison surfaces test memory deltas beside duration deltas. If the baseline has failing tests, Codex may fix only obvious failures and the after-agent full-suite report must pass before anything is committed. When `main` advances before the bot push lands, the lane rebases the validated patch, reruns `pnpm check:changed`, and retries the push; conflicting stale patches are skipped. It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo safety posture as the docs agent.
 
 ### Duplicate PRs After Merge
 
@@ -25328,7 +25323,7 @@ Options: `--force`, `--json`.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup; `--json` exposes path outcomes in `removed` and `failed` arrays.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
-- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path.
+- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
 
 ## Routing bindings
@@ -25874,14 +25869,15 @@ valid host-bound evidence; it never means allowed. `unsupported` is reserved
 for a named path with no authoritative Phase 0 integration. A plugin-provided
 sender or structurally copied resolver result cannot upgrade either state.
 
-A terminal approval receipt shows `allowed` or `denied`, its stable reason
-code, enforcement state, authoritative source boundary, policy and grant
-references, context fields used, and remediation. Expired and cancelled
+A terminal approval display shows `allowed` or `denied`, its stable reason
+code, enforcement state, verified producer class, policy and grant counts,
+context fields used, and remediation. Expired and cancelled
 approvals are denied non-actions with distinct reason codes. `no-route` is an
 enforced denial only when the approval owner recorded that terminal state. A
-corrupt approval is `unknown`. The text view labels `operator_approvals` as an
-authoritative owner-native SQLite record retained for 30 days; JSON preserves
-the same source owner and record reference without lossy reformatting.
+corrupt approval is `unknown`. The text view labels a verified
+operator-approval producer as an authoritative owner-native SQLite record
+retained for 30 days. Neither text nor JSON exposes the raw source owner, record
+reference, policy reference, or grant reference.
 `enforced` requires the approval's immutable owner-local binding to match the
 selected context, execution, and run exactly. A missing, malformed, or
 mismatched binding reports `operator_approval_execution_link_missing`,
@@ -25914,8 +25910,9 @@ their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 
-JSON output is the Gateway result without lossy reformatting. An exact result contains one
-bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
+JSON output is the Gateway's safe-only result without lossy reformatting. An
+exact result contains one bounded V1 context (maximum 16 KiB), up to 100
+`decisionDisplays`, coverage and
 missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run
 result instead contains at most 50 execution candidates and an optional
 `nextExecutionCursor`. Sensitive domain,
@@ -26025,18 +26022,25 @@ openclaw gateway call audit.run.inspect \
   --params '{"executionId":"5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf","decisionLimit":50}'
 ```
 
-Its result is `{ "schemaVersion": 1, "run": ..., "identity": ..., "decisions":
-..., "coverage": ..., "nextDecisionCursor"?: ..., "nextExecutionCursor"?: ... }`.
+Its result is `{ "schemaVersion": 1, "run": ..., "identity": ...,
+"decisionDisplays": ..., "coverage": ..., "nextDecisionCursor"?: ...,
+"nextExecutionCursor"?: ... }`. The required `decisionDisplays` array is the
+only receipt presentation field. Raw owner receipts and a `decisions` key never
+cross the Gateway boundary.
 The closed request accepts exactly one of `executionId` or `runId`.
 `decisionLimit` is 1–100 and `decisionCursor` is optional. Run discovery also
 accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
-and no identity context or decisions until the caller selects an execution id.
+and no identity context; its required `decisionDisplays` array is empty until
+the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, merges outbound progress and terminal records,
 and finally reads generic facts for boundaries without a native durable record.
 The merge is deterministic across restart and rejects a cursor whose exact
-owner row has expired.
+owner row has expired. Approval and message selectors use the opaque
+`approval-decision:` and `message-decision:` namespaces minted from the same
+owner-query snapshot; raw receipt, resolution, and event identifiers never
+become selectors.
 Approval and delivery inspection never write generic duplicates. Generic fact
 writes and projections also require the full context, execution, and run tuple
 to match the immutable execution context.
@@ -27922,7 +27926,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
 
   </Accordion>
 </AccordionGroup>
@@ -45629,10 +45633,13 @@ in.
 ### Telegram Desktop recorder
 
 The Telegram Desktop recorder is a standalone operator utility, invoked
-directly through `pnpm qa:telegram-desktop-recorder`. It records native
-Telegram Desktop and nothing else: it never drives OpenClaw or sends Telegram
-messages. Whoever runs it owns the turn — start the SUT, send through a real
-Telegram user, then tell the recorder which message to show — and supplies
+directly through `pnpm qa:telegram-desktop-recorder`. It never drives OpenClaw.
+Its normal recording commands do not send Telegram messages. The optional
+`actions` command drives only the measured Telegram window through bounded
+`click`, `key`, `type`, and `sleep` actions; those actions can send as the
+signed-in Telegram user. Whoever runs it owns the turn and those side effects —
+start the SUT, send through a real Telegram user, then tell the recorder which
+message to show — and supplies
 `--user-driver`, the command the recorder shells out to for the TDLib calls it
 cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
 those two verbs works, including this repo's
@@ -46113,17 +46120,18 @@ Five rules shape everything below:
 
 ## The tier model
 
-| Tier         | Surface                                                 | Written by                                          | Injected                           |
-| ------------ | ------------------------------------------------------- | --------------------------------------------------- | ---------------------------------- |
-| Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start           |
-| Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | Always, at session start, budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand        |
-| Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires          |
-| Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading           |
+| Tier         | Surface                                                 | Written by                                          | Injected                                               |
+| ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
+| Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
+| Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
-**episodic** tier. Curated files are small, always in context, and written
-only through gated consolidation. Episodic files are large, append-friendly,
+**episodic** tier. Curated files are small, normally in context when their
+provenance is eligible, and written only through gated consolidation. Episodic
+files are large, append-friendly,
 and reachable only through explicit search tools or the escalation lane.
 Nothing crosses from episodic to curated without passing the promotion gates
 described below.
@@ -46259,8 +46267,12 @@ that need it.
 
 Three mechanisms run on eligible turns with no model involvement:
 
-- **Bootstrap injection.** `MEMORY.md` and `USER.md` load at session start
-  within budgets, and refresh per turn so long-lived sessions pick up
+- **Bootstrap injection.** When a memory runtime is selected, `MEMORY.md` and
+  `USER.md` load at session start only when that runtime classifies their
+  provenance as eligible. Ineligible, missing, or unsupported classifications
+  are omitted from automatic context but remain available through explicit
+  memory tools. With no selected memory runtime, bootstrap behavior is unchanged.
+  Eligible files refresh per turn within budgets so long-lived sessions pick up
   consolidation results without restarting.
 - **Ranked search.** `memory_search` scores hybrid relevance multiplied by
   an exponential recency decay (30-day half-life) and an importance
@@ -56128,9 +56140,16 @@ facts:
   authorization.
 
 The method requires `operator.read`. Requests are closed and select exactly one
-`executionId` or `runId`. Decision pages contain at most 100 receipts;
+`executionId` or `runId`. The public result always contains a required
+`decisionDisplays` array and never contains the private raw receipt array or a
+`decisions` key. The Gateway builds that result from an explicit safe-field
+allowlist; clients do not classify receipt prose. Decision pages contain at
+most 100 displays;
 ambiguous run-discovery pages contain at most 50 candidate executions. Both use
-bounded cursors.
+bounded cursors. Approval and message-delivery selectors are minted from the
+same owner-query row metadata as their projected receipts, use the
+`approval-decision:` and `message-decision:` namespaces, and never derive from
+receipt, resolution, or event identifiers.
 
 Every client with `operator.read` in the same Gateway operator domain may
 receive this retained identity category. This is intentional: the scope already
@@ -56330,9 +56349,11 @@ correlation alone.
   [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
-  returns the immutable V1 context plus paged admission, approval,
-  owner-native outbound message, and generic decision receipts for an exact
-  match, or a typed ambiguous candidate page when a run has multiple executions.
+  returns the immutable V1 context plus paged safe displays for admission,
+  approval, owner-native outbound message, and generic decision records for an
+  exact match, or a typed ambiguous candidate page with an empty display array
+  when a run has multiple executions. Raw owner receipts remain private to the
+  aggregation and storage owners.
 
 ## Related
 
@@ -56619,7 +56640,7 @@ Behavior:
 
 ## Child process bridging
 
-When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/error. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
+When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
 ## process tool
 
@@ -57708,7 +57729,7 @@ status: active
 doc-schema-version: 1
 ---
 
-Cloud workers move a session's coding work onto a throwaway cloud machine while the session stays visible in the sidebar and its transcript remains owned by the Gateway. The bundled Crabbox provider boots the box, runs profile setup, and starts `openclaw connect --ephemeral`. The enrolled node then receives the Gateway's pinned worker bundle and hosts the same restricted `openclaw worker` children as any paired session-capable device.
+Cloud workers move a session's coding work onto a throwaway cloud machine while the session stays visible in the sidebar and its transcript remains owned by the Gateway. The bundled Crabbox provider boots the box, runs profile setup, and starts `openclaw connect --ephemeral`. In OpenClaw `worker-turn` mode, the enrolled node receives the Gateway's pinned worker bundle and hosts a restricted `openclaw worker` child. Eligible paired devices can instead carry Codex `remote-exec` without launching an OpenClaw worker child.
 
 Enrollment is environment-owned and replay-safe. The Gateway persists one setup identity before provider allocation, binds the first authenticated device identity to that exact environment, and reuses the durable device token when provisioning resumes. Initial enrollment and replay both enable worker hosting only for that node process; they do not change durable worker-host configuration. Reclaim or destroy releases the cloud lease and removes the environment-owned node pairing.
 
@@ -57723,12 +57744,12 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 | Concern                            | OpenClaw `worker-turn` mode                          | Codex `remote-exec` mode                                |
 | ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
 | Agent runtime and turn loop        | Cloud box (`openclaw worker`)                        | Gateway (Codex app-server)                              |
-| Command, filesystem, and HTTP work | Cloud box                                            | SSH-backed provider sandbox                             |
+| Command, filesystem, and HTTP work | Cloud box                                            | Paired device or SSH-backed provider sandbox            |
 | Model inference and provider auth  | Gateway, proxied by `{provider, model}` reference    | Gateway, including ChatGPT subscription or API-key auth |
 | Transcript and live session state  | Gateway, fed by the worker's replayable event stream | Gateway through the normal local harness path           |
 | Workspace file state               | Changed on the box; reconciled by the Gateway        | Changed remotely; reconciled by the Gateway             |
 
-The bundled Crabbox provider supports `worker-turn` through the node transport. Codex `remote-exec` remains available only with a provider that explicitly supports its SSH sandbox carrier; OpenClaw rejects a node-only profile before allocating a lease.
+The bundled Crabbox cloud provider supports `worker-turn` through the node transport. Codex `remote-exec` supports an explicitly authorized paired device through that device's authenticated duplex node channel, or a cloud provider that explicitly advertises an SSH-backed execution carrier. A Crabbox cloud profile still does not advertise Codex `remote-exec`.
 
 After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control and workspace transfer use the authenticated node and worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
 
@@ -57881,13 +57902,59 @@ While a placement is active, OpenClaw automatically samples available space on t
 ### Runtime support
 
 - **OpenClaw** uses `worker-turn` placement. The restricted `openclaw worker` process runs each turn on the leased node and proxies inference through the Gateway.
-- **Codex** uses `remote-exec` placement only when the selected provider advertises an SSH-backed execution carrier. The bundled Crabbox node provider does not, so Codex dispatch to Crabbox fails before allocation.
+- **Codex** uses `remote-exec` placement on an eligible paired device, or with a cloud provider that advertises an SSH-backed execution carrier. The bundled Crabbox cloud profile supports only `worker-turn`, so selecting that profile for Codex still fails before allocation.
 
-The Control UI disables cloud destinations whose advertised mode does not match the selected runtime.
+The Control UI disables cloud destinations whose advertised mode does not match
+the selected runtime, including when moving an existing session. An
+incompatible move is rejected before the active source starts draining or
+changes its durable placement.
 
 Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
 
-The equivalent RPC flow is:
+### Codex on a paired device
+
+Paired-device Codex placement requires the `codex` plugin to be installed and
+enabled in both the Gateway's configuration and the node's own local
+configuration. Include `codex` in `plugins.allow` on either machine when that
+machine uses a plugin allowlist. It also requires a connected session-capable
+node that advertises `codex.exec-server`, and an explicit
+`gateway.nodes.commands.allow` entry for `codex.exec-server.stdio.v1`. Approve
+the node's updated pairing surface if needed. Before each exec-server launch,
+OpenClaw also requires the normal node invocation approval; denying that
+request does not start a process.
+
+Codex launches its exec-server directly, so paired-device placement does not
+consume an OpenClaw worker slot and remains eligible when those slots are full.
+OpenClaw `worker-turn` placement still requires an available worker slot.
+
+Approval permits process execution and filesystem access anywhere the node's
+operating system account allows. The exact placement workspace controls the
+starting directory and reconciled changes, not OS-level confinement. Trust the
+paired device, and use a separate least-privilege OS account when isolation is
+required.
+
+Choose the device in the Control UI **Place** picker or dispatch a
+managed-worktree session with an authorized operator connection:
+
+```bash
+openclaw gateway call sessions.dispatch \
+  --params '{"key":"agent:main:device-work","deviceId":"<paired-device-id>"}'
+```
+
+The Codex app-server, model connection, provider credentials, and transcript
+remain on the Gateway. The paired node runs the managed Codex exec-server in
+the transferred workspace and receives only sanitized process, filesystem,
+capability-discovery, and HTTP operations over the existing node channel. It
+does not launch an OpenClaw worker child. Credential-bearing HTTP requests are
+rejected before they reach the paired device; run authenticated requests on the
+Gateway or use an intentionally credential-free endpoint. Normal Codex turns
+are supported, but `/btw` side questions are not yet placement-bound and fail
+visibly. Completed changes return through the same placement workspace
+reconciliation as worker turns. See
+[Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
+for the exact allowlist configuration and lifecycle.
+
+For cloud-profile placement, the equivalent RPC flow is:
 
 Create a session with a managed worktree, then dispatch it. Profile dispatch requires `operator.admin` and is available only while at least one worker profile is configured:
 
@@ -57912,7 +57979,7 @@ openclaw gateway call sessions.dispatch \
 
 The bundled Crabbox provider advertises whatever machine classes the configured Crabbox binary reports for the selected backend, preserving Crabbox's size order. For example, a catalog containing `tiny`, `small`, `standard`, `fast`, `large`, and `beast` produces those six picker rows in that order; if Crabbox reports `standard` as 32 vCPU · 64 GB, that shape appears beside the class. Older binaries that publish no matching class catalog retain the label-only `standard`, `fast`, `large`, and `beast` fallback. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
 
-`sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease, runs setup, enrolls the node, pushes the Gateway bundle, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; supported SSH-backed providers may still carry Codex remote-exec.
+`sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease, runs setup, enrolls the node, pushes the Gateway bundle when worker hosting requires it, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first cloud dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized paired device or supported SSH-backed provider.
 
 Completed cloud turns reconcile eligible, size-bounded workspace files back into the session's managed worktree before the turn claim is released. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. The resulting file changes remain in the managed worktree for normal review and commit.
 
@@ -57927,10 +57994,15 @@ To continue the same session somewhere else, open the **Runs on Cloud** chip and
 An active paired-device placement stays `active` when its runner disconnects.
 Control UI shows **Device offline** and **Waiting for device to reconnect; retry
 after it returns**. Waiting is the default and keeps the remote owner and
-workspace intact. **Continue on Gateway…** is explicitly destructive: after a
+workspace intact. Any in-flight Codex `remote-exec` attempt fails visibly, its
+node exec-server and child processes are terminated, and reconnecting the same
+paired device allows a fresh attempt only; the disconnected stdio session is
+never resumed. **Continue on Gateway…** is explicitly destructive: after a
 data-loss confirmation, it abandons the exact offline device owner and resumes
 from the last Gateway-synced workspace without replay. Unsynced device files
-and in-flight work may be lost. If the device is already available, use the
+and in-flight work may be lost. This explicit abandonment also fences an active
+local Codex turn claim without waiting for an acknowledgment from the offline
+node. If the device is already available, use the
 ordinary reconcile-first move instead.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
@@ -57991,6 +58063,7 @@ The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.pas
 - **Gateway-owned tool authority.** In worker-turn mode, the Gateway projects current profile, provider, agent, group, sender, sandbox, delegation, inherited, and runtime-cap policy over the worker's fixed coding-tool catalog before every turn. The launch envelope carries only that final closed-vocabulary subset. Explicitly capped scheduled turns reuse their trusted owner-group context without sending that identity to the box or reapplying a fresh sender overlay. Tools outside the worker catalog remain unavailable; an empty result runs with no tools.
 - **Minted credentials, hashed at rest.** Each dispatch mints a worker credential; the Gateway stores only its hash. Credential rotation and owner-epoch fencing guarantee at most one live owner per session — a stale worker that reconnects is fenced, never merged.
 - **Environment-bound enrollment.** One short-lived node-only setup credential is bound to the durable environment before allocation. Its first authenticated Ed25519 device identity is recorded atomically with setup completion; replay cannot substitute an unrelated node.
+- **Explicit Codex device authorization.** Paired-device remote execution requires an explicitly allowed `codex.exec-server.stdio.v1` command, an approved pairing surface, and normal node invocation approval. The managed exec-server starts with a fresh private home and sanitized environment; allow-once never grants a later launch. Its managed workspace is not an OS sandbox: approved execution can access processes and files allowed to the node account, so use a separate least-privilege account when isolation is required.
 - **No standing model, forge, or cloud credentials on the box.** OpenClaw worker turns proxy inference by `{provider, model}` reference. Codex remote-exec keeps the app-server plus ChatGPT subscription or API-key auth on the Gateway and sends only sandbox operations to the box. Remote-exec requires prepared auth and rejects ambient auth fallback. Workspace git commits are authored without forge credentials, and Crabbox AWS lease metadata is checked authoritatively for an instance role before setup. Keep setup commands credential-free too.
 - **Gateway-owned GitHub publication.** Publication credentials stay in the effective managed or native GitHub profile on the Gateway. The broker disables repository hooks, refuses configured Git clean filters, uses a temporary index and `git commit-tree`, pushes only a reconstructed public HTTPS URL with a command-local `gh auth git-credential` helper, and never writes a bearer token to argv, a remote URL, `.git/config`, a worker payload, or a transcript.
 - **Provider-owned egress.** Gateway-proxied inference removes any OpenClaw need for direct model access, but OpenClaw does not rewrite provider firewalls. Restrict outbound traffic in the worker provider when the task requires it.
@@ -101776,7 +101849,7 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
 - **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
-- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
+- **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
 
 For a Cloudflare Access-fronted Gateway:
@@ -102178,11 +102251,15 @@ most two worker processes by default. A third launch waits up to 10 seconds for
 a durable slot; while both slots are occupied, the node remains available for
 status and cancellation but is not selected for a new session turn.
 
-The picker derives every device row from `environments.list`. A device is
-selectable only when current inventory reports status `available`,
-`sessionHost: true`, valid exact worker slots, and at least one available slot.
-Connected non-hosts, saturated hosts, hosts without current capacity,
-update-required or otherwise outdated hosts, and unavailable hosts remain
+The picker derives every device row from `environments.list`. Every selected
+runtime requires an available, connected paired session host. OpenClaw worker
+turns additionally require valid exact worker slots with at least one free
+slot. Codex paired-device execution launches its exec-server directly, so it
+does not consume or require a worker slot; instead, its required command must
+appear in the node's effective `invocableCommands`, not merely its declared
+capabilities. A declared command is usable only when the approved pairing and
+Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
@@ -102202,8 +102279,8 @@ process-current, not a terminal placement state. `sessions.list` and
 until that exact current-v6 node runner reconnects. Gateway restart therefore
 shows an active device placement as offline until reconnect; current inventory
 then changes the projection to `available` and emits a session refresh. Exact
-worker slots gate new placements only and do not affect availability of a
-session the device already owns.
+worker slots gate only new placements whose runtime consumes a worker slot;
+they do not affect Codex remote execution or an existing session's availability.
 
 Control UI shows **Device offline** and waits by default without giving up the
 placement, workspace, or authority. Retry the next turn after the device
@@ -104805,11 +104882,13 @@ The bundled Crabbox provider now boots the box and runs
 directory. The Gateway persists one replay-safe setup identity, atomically
 binds the authenticated device identity to the worker environment, pushes the
 current bundle through the node channel, and removes the node role after
-provider teardown. `destroy` = release lease plus pairing cleanup. Codex
-remote-exec fails before allocation because it still requires an SSH-backed
-provider. The replaced reverse-tunnel/rsync cloud carrier has been deleted.
-Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain until
-the missing node exec-server carrier supplies and proves equivalent behavior.
+provider teardown. `destroy` = release lease plus pairing cleanup. Codex now
+supports paired-device `remote-exec` over the approved duplex node carrier;
+disconnect ends the attempt, and reconnect starts a fresh attempt without
+resume. Crabbox cloud profiles remain `worker-turn` only. The replaced
+reverse-tunnel/rsync cloud carrier has been deleted. Distinct stable SSH,
+OpenShell, Claude, and exec-host contracts remain intact; broader replacement
+and reconnect or resume are later work.
 
 ## What the adversarial reviews killed or reshaped
 
@@ -109470,7 +109549,7 @@ listed here.
 | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
 | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
 | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
-| `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| `prepareDynamicModel`             | Return an asynchronously prepared model, or warm reusable metadata before retrying `resolveDynamicModel`       | Provider needs network metadata before resolving unknown ids                                                                                  |
 | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
 | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
@@ -111330,12 +111409,17 @@ loads the owning plugin runtime.
 
 Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
-`requesterSenderId`.
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
 
 ```typescript
 register(api) {
   api.registerTool(
-    {
+    (toolContext) => ({
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
@@ -111344,13 +111428,16 @@ register(api) {
         { additionalProperties: false },
       ),
       async execute(_id, params) {
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
         return {
           content: [{ type: "text", text: params.pipeline }],
           details: { pipeline: params.pipeline },
         };
       },
-    },
-    { optional: true },
+    }),
+    { name: "workflow_tool", optional: true },
   );
 }
 ```
@@ -113228,6 +113315,28 @@ This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
 rejects that combination.
 
+Paired-device `remote-exec` placement is a separate, placement-owned execution
+path and does not require `appServer.experimental.sandboxExecServer`. The
+Gateway keeps Codex app-server and provider auth local, while the authorized
+paired device runs the managed Codex exec-server over its existing duplex node
+connection. It requires explicit `gateway.nodes.commands.allow` authorization
+for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
+invocation approval. The node receives a fresh private home and sanitized
+environments, never Gateway provider, cloud, or GitHub credentials. A lost
+node connection terminates the attempt and process instead of resuming it.
+Each paired-device attempt uses its own Gateway app-server client because
+Codex can register a remote environment but cannot remove one from a running
+app-server. The device exec-server does not consume an OpenClaw worker slot.
+HTTP requests containing authentication, cookies, API keys, or other
+credential-bearing headers are rejected before reaching the device; use a
+Gateway-owned authenticated request or a credential-free endpoint instead.
+Normal Codex turns are supported, but `/btw` side questions are unavailable
+until they can be bound to the active placement.
+The managed placement workspace is not an OS sandbox: approved processes and
+files have the node account's full access. Use a separate least-privilege node
+account when isolation is required.
+See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+
 ## Auth and environment isolation
 
 In the default per-agent home, managed stdio launches use Codex's ephemeral
@@ -113554,14 +113663,67 @@ the fallback catalog:
 }
 ```
 
+## Restricted turns
+
+The Codex harness evaluates the effective tool policy for every turn. It marks
+the turn policy-restricted when any explicit policy would otherwise leave a
+Codex-native capability outside the OpenClaw policy boundary.
+
+Restriction sources include global, provider, agent, group, sender, sandbox,
+subagent, inherited, scheduled/runtime, and per-run tool policies. A finite
+allowlist always restricts the native surface. A deny list restricts it when an
+expanded entry is unknown or absent from the audited safe-deny set; this includes
+wildcards and tool groups containing any unsafe entry. `disableTools` becomes an
+empty per-run allowlist and therefore also restricts the native surface. Default
+tool-profile narrowing is not an explicit restriction and does not activate this
+mode.
+
+The current audited safe-deny names are:
+
+```text
+automations, canvas, dashboard, gateway, heartbeat_respond, image_generate,
+memory_get, memory_search, message, music_generate, show_widget, skill_workshop,
+tts, video_generate, web_fetch, x_search
+```
+
+A policy containing only those denies stays on the normal Codex native surface;
+the harness applies the named OpenClaw denial directly. Any other deny fails
+closed into the restricted surface. For example, `tools.deny: ["nodes"]`
+restricts the native surface because `nodes` is not in the audited set.
+
+Policy-restricted turns have no Codex environment selection or native Code Mode.
+OpenClaw disables inherited and configured MCP servers, attests that they remain
+disabled, disables native hook relays, and applies the effective policy to its
+dynamic tools. A temporary restriction on an existing session uses a transient
+Codex thread and preserves the unrestricted binding for later resume.
+
+Ring zero is not a configurable policy profile. It is the host-scoped system
+agent path used by OpenClaw setup and repair flows. The host must activate the
+system-agent authority and provide the exact single-tool allowlist
+`["openclaw"]`. Ring zero applies the restricted tool surface plus host-authored
+base instructions and zero project-document budget. It also suppresses
+OpenClaw's `AGENTS.md` developer-instruction carrier, so ambient workspace
+instructions cannot enter the setup/repair turn.
+
+Message-only source replies also use the restricted tool surface. Lightweight
+bootstrap turns and tool-disabled internal turns additionally set the project-
+document budget to zero. These modes are separate inputs even when their final
+thread configuration overlaps.
+
 ## Workspace bootstrap files
 
-Codex handles `AGENTS.md` itself through native project-doc discovery.
+Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex
 fallback filenames for persona files, because Codex fallbacks only apply when
-`AGENTS.md` is missing.
+`AGENTS.md` is missing. Ordinary policy-restricted turns have no native
+filesystem environment, so OpenClaw instead sends the bounded workspace
+`AGENTS.md` snapshot as thread-level developer instructions. Ring-zero,
+lightweight, message-only, and tool-disabled internal turns suppress that
+carrier.
 
-For OpenClaw workspace parity, local tool notes live in the `## Tools` section of `AGENTS.md` and ride Codex's native project-doc discovery. The Codex harness forwards the other bootstrap files as developer instructions:
+For OpenClaw workspace parity, local tool notes live in the `## Tools` section
+of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
+Codex harness forwards the other bootstrap files as developer instructions:
 
 - `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
   collaboration instructions. Native Codex subagents do not inherit them,
@@ -113664,8 +113826,11 @@ it uses Codex-flavored OpenAI auth or transport.
 OpenClaw starts and resumes native Codex threads with Codex's built-in
 personality disabled (`personality: "none"`) so workspace personality files
 and OpenClaw agent identity stay authoritative. Native Codex keeps Codex-owned
-base/model instructions and project-doc loading otherwise. Lightweight
-OpenClaw runs (for example cron) still suppress project-doc loading.
+base/model instructions and project-doc loading otherwise. An ordinary
+policy-restricted turn has no native filesystem environment, so OpenClaw carries
+the bounded workspace `AGENTS.md` snapshot as thread-level developer
+instructions instead. Lightweight, ring-zero, message-only, and tool-disabled
+internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
@@ -113839,23 +114004,38 @@ process. Failed environment registration never falls back to host execution.
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 
+Paired-device `remote-exec` is separate from the experimental local sandbox
+flag: Codex app-server and model auth stay on the Gateway, while an explicitly
+authorized managed exec-server on the node owns process, filesystem, capability,
+and credential-free HTTP operations. The Gateway rejects authentication,
+cookie, API-key, and other sensitive HTTP headers before they reach the node;
+authenticated HTTP must run on the Gateway. The existing duplex node channel
+carries the Codex JSON-RPC stream without starting an OpenClaw worker child or
+consuming a worker slot. Each attempt owns an isolated Gateway app-server
+client so its remote environment registration retires with that attempt.
+Disconnect ends the active attempt and its remote processes; reconnect allows
+only a fresh attempt. Normal Codex turns work, but `/btw` side questions fail
+closed because they are not yet placement-bound. The placement workspace does
+not confine execution: process and filesystem access remain bounded only by the
+node's operating system account.
+
 ## V1 support contract
 
 Supported in Codex runtime v1:
 
-| Surface                                       | Support                                                                          | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenAI model loop through Codex               | Supported                                                                        | Codex app-server owns the OpenAI turn, native thread resume, and native tool continuation.                                                                                                                                                                                                                                                                                                                                                                                          |
-| OpenClaw channel routing and delivery         | Supported                                                                        | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                                                                                                                                                                                                                                                                                                                                                                    |
-| OpenClaw dynamic tools                        | Supported                                                                        | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                                                                                                                                                                                                                                                                                                                                                                |
-| Prompt and context plugins                    | Supported                                                                        | OpenClaw projects OpenClaw-specific prompt/context into the Codex turn while leaving Codex-owned base, model, and configured project-doc prompts in the native Codex lane. OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files remain authoritative. Native Codex developer instructions accept only command guidance explicitly scoped to `codex_app_server`; legacy global command hints remain for non-Codex prompt surfaces. |
-| Context engine lifecycle                      | Supported                                                                        | Assemble, ingest, and after-turn maintenance run around Codex turns. Context engines do not replace native Codex compaction.                                                                                                                                                                                                                                                                                                                                                        |
-| Dynamic tool hooks                            | Supported                                                                        | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                                                                                                                                                                                                                                                                                                          |
-| Lifecycle hooks                               | Supported as adapter observations                                                | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                                                                                                                                                                                                                                                                                                           |
-| Final-answer revision gate                    | Supported through native hook relay                                              | Codex `Stop` is relayed to `before_agent_finalize`; `revise` asks Codex for one more model pass before finalization.                                                                                                                                                                                                                                                                                                                                                                |
-| Native shell, patch, and MCP block or observe | Supported through native hook relay                                              | Codex `PreToolUse` and `PostToolUse` are relayed for committed native tool surfaces, including MCP payloads on the pinned Codex app-server. Blocking is supported; argument rewriting is not.                                                                                                                                                                                                                                                                                       |
-| Native permission policy                      | Supported through Codex app-server approvals and compatibility native hook relay | Codex app-server approval requests route through OpenClaw after Codex review. The `PermissionRequest` native hook relay is opt-in for native approval modes because Codex emits it before guardian review.                                                                                                                                                                                                                                                                          |
-| App-server trajectory capture                 | Supported                                                                        | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                                                                                                                                                                                                                                                                                                                                                                    |
+| Surface                                       | Support                                                                          | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI model loop through Codex               | Supported                                                                        | Codex app-server owns the OpenAI turn, native thread resume, and native tool continuation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| OpenClaw channel routing and delivery         | Supported                                                                        | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| OpenClaw dynamic tools                        | Supported                                                                        | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Prompt and context plugins                    | Supported                                                                        | OpenClaw projects OpenClaw-specific prompt/context into the Codex turn while normally leaving Codex-owned base, model, and configured project-doc prompts in the native Codex lane. For ordinary policy-restricted turns without a native filesystem environment, OpenClaw carries the bounded workspace `AGENTS.md` snapshot as thread-level developer instructions. Ring-zero and other context-restricted internal modes suppress both paths. OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files remain authoritative. Native Codex developer instructions accept only command guidance explicitly scoped to `codex_app_server`; legacy global command hints remain for non-Codex prompt surfaces. |
+| Context engine lifecycle                      | Supported                                                                        | Assemble, ingest, and after-turn maintenance run around Codex turns. Context engines do not replace native Codex compaction.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Dynamic tool hooks                            | Supported                                                                        | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Lifecycle hooks                               | Supported as adapter observations                                                | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Final-answer revision gate                    | Supported through native hook relay                                              | Codex `Stop` is relayed to `before_agent_finalize`; `revise` asks Codex for one more model pass before finalization.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Native shell, patch, and MCP block or observe | Supported through native hook relay                                              | Codex `PreToolUse` and `PostToolUse` are relayed for committed native tool surfaces, including MCP payloads on the pinned Codex app-server. Blocking is supported; argument rewriting is not.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Native permission policy                      | Supported through Codex app-server approvals and compatibility native hook relay | Codex app-server approval requests route through OpenClaw after Codex review. The `PermissionRequest` native hook relay is opt-in for native approval modes because Codex emits it before guardian review.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| App-server trajectory capture                 | Supported                                                                        | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Not supported in Codex runtime v1:
 
@@ -114081,8 +114261,10 @@ When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so
 native workspace/code capabilities remain available alongside OpenClaw
 dynamic tools routed through the app-server `item/tool/call` bridge. An
-active OpenClaw sandbox or restricted tool policy disables native code mode
-entirely unless you opt into the experimental sandbox exec-server path.
+ordinary OpenClaw sandbox or restricted tool policy disables native code mode
+unless you opt into the experimental sandbox exec-server path. Paired-device
+`remote-exec` instead uses its placement-owned environment without that
+experimental flag.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -114187,6 +114369,90 @@ If your config uses `plugins.allow`, add `codex` there too:
 Restart the gateway after changing plugin config. If a chat already has a
 session, run `/new` or `/reset` first so the next turn resolves the harness
 from current config.
+
+## Run Codex on a paired device
+
+Codex sessions can place native command, filesystem, capability-discovery, and
+HTTP execution on an eligible paired device while the Codex app-server, model
+inference, provider authentication, and session transcript stay on the Gateway.
+This is session-wide `remote-exec` placement, not `node_exec` or
+`tools.exec.host: "node"`.
+
+Install and enable the Codex plugin in both the Gateway's configuration and the
+paired node's own local configuration. If either machine uses `plugins.allow`,
+include `codex` in that machine's allowlist. On the Gateway, explicitly allow
+the high-risk node command:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      commands: {
+        allow: ["codex.exec-server.stdio.v1"],
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+The paired node must enable session hosting and advertise the `codex.exec-server`
+capability and `codex.exec-server.stdio.v1` command. If enabling the plugin
+changes an existing node's command surface, reconnect the node, inspect
+`openclaw nodes pending`, and approve the updated pairing with
+`openclaw nodes approve <requestId>`. The persistent command allowlist does not
+replace the normal node invocation approval: deny starts no Codex process, and
+allow-once authorizes exactly one exec-server launch.
+
+Codex launches its node exec-server directly rather than starting an OpenClaw
+worker, so a paired host remains eligible when all worker slots are occupied.
+The command must still be effectively invocable: declaring it without the
+approved pairing surface and Gateway allowlist is insufficient.
+
+Approval grants access to any process or file available to the node's operating
+system account. The verified placement workspace sets the working directory
+and reconciliation scope; it does not sandbox or confine that access. Pair only
+trusted devices, and run the node under a separate least-privilege OS account
+when isolation is required.
+
+Choose the paired device in the Control UI **Place** picker, or dispatch an
+existing managed-worktree session explicitly:
+
+```bash
+openclaw gateway call sessions.dispatch \
+  --params '{"key":"agent:main:device-work","deviceId":"<paired-device-id>"}'
+```
+
+The node starts the same managed, pinned Codex binary with
+`codex exec-server --listen stdio` in the placement workspace. The Gateway
+relays complete Codex JSON-RPC messages through the existing authenticated,
+approval-gated duplex node channel, with a 64 MiB limit per message. It does not
+start an OpenClaw worker child, open a reverse tunnel, or copy provider, cloud,
+or GitHub credentials to the device. Authenticated remote HTTP is unavailable:
+the Gateway rejects requests containing bearer/OAuth authorization, cookies,
+API keys, or other sensitive authentication headers before sending them to the
+node. Run authenticated HTTP on the Gateway, or use an intentionally
+credential-free endpoint. The node process uses a fresh private
+`HOME` and `CODEX_HOME` that are removed after the attempt, and both its launch
+environment and requested child-process environments are sanitized. Completed
+filesystem changes reconcile back into the Gateway-owned managed worktree.
+
+Disconnecting the node, closing the app-server connection, cancelling the turn,
+or retiring the plugin ends that Codex attempt visibly and terminates its remote
+exec-server process. Each paired-device attempt owns an isolated Gateway
+app-server client, preventing remote environment registrations from
+accumulating across attempts. Reconnecting the same paired device permits a
+fresh attempt; it never resumes the disconnected stdio connection or its
+processes. Normal Codex turns are supported, but `/btw` side questions are not
+yet bound to paired-device placement and fail with an actionable explanation.
+See [Cloud workers and paired-device placement](/gateway/cloud-workers) and
+[Node command policy](/nodes#command-policy).
 
 ## Share threads with Codex Desktop and CLI
 
@@ -114307,13 +114573,63 @@ Changing auth order does not make a custom, Completions, HTTP, or
 request-overridden route Codex-compatible. Valid model-scoped Fast-mode and
 cutoff controls are runtime controls, not request overrides.
 
+### Restricted turns and ring zero
+
+OpenClaw applies Codex restrictions per turn, not as a permanent session mode.
+An existing session can therefore run one restricted turn and return to its
+normal Codex thread on the next unrestricted turn. When a restriction is
+temporary, OpenClaw preserves the normal thread binding and uses a temporary
+restricted thread where necessary.
+
+An ordinary **policy-restricted turn** occurs when an explicit OpenClaw tool
+policy cannot be mapped safely onto Codex's native tool surface. Common
+triggers include:
+
+- a finite `tools.allow` list or an internal per-run allowlist
+- `disableTools` or a sender/group policy that denies all tools
+- a `tools.deny` entry with a wildcard, tool group, unknown name, or name that
+  is not in the Codex harness's audited safe-deny set
+- an applicable agent, provider, group, sender, sandbox, subagent, inherited,
+  scheduled, or runtime tool policy with one of those restrictions
+
+Default tool-profile narrowing alone does not trigger this mode. A deny list
+containing only audited OpenClaw-owned tools can also stay on the normal native
+surface; the harness enforces those denies without disabling unrelated Codex
+capabilities. See [Native tool-policy enforcement](/plugins/sdk-agent-harness#native-tool-policy-enforcement)
+for the generic harness contract and [Codex harness reference](/plugins/codex-harness-reference#restricted-turns)
+for the current Codex rules.
+
+For an ordinary policy-restricted turn, OpenClaw disables Codex native Code
+Mode, removes environment selections, disables and verifies inherited and
+configured MCP servers, disables native hook relays, and filters OpenClaw
+dynamic tools through the effective policy. The bounded workspace `AGENTS.md`
+snapshot still reaches the model as thread-level developer instructions because
+project instructions are context, not tool authority.
+
+**Ring zero** is stronger and separate. It is the host-owned OpenClaw system
+agent used for setup and repair operations. The host activates it with the
+single `openclaw` tool; normal agent config cannot opt a chat into ring zero.
+Ring-zero turns keep only that host-scoped tool, replace ambient Codex
+instructions with host-authored setup instructions, disable native tools and
+MCP servers, and suppress workspace project documents, including the
+`AGENTS.md` developer-instruction carrier.
+
+Other narrow internal modes also suppress project documents: lightweight
+bootstrap turns, message-only source replies, and tool-disabled internal turns.
+They share some isolation settings with policy-restricted turns but are not
+synonyms for ring zero.
+
 ### Project instructions
 
 Codex loads `AGENTS.md` files through native project-document discovery. For
 normal app-server threads, OpenClaw raises Codex's aggregate root-to-working-
 directory budget from the upstream 32 KiB default to a bounded 128 KiB so later
-scoped instructions are not silently clipped. Lightweight and restricted turns
-set the native project-document budget to zero instead.
+scoped instructions are not silently clipped. Ordinary conversation tool-policy
+restrictions preserve that budget because project instructions are context, not
+tool authority. Their isolated native environment cannot read workspace files,
+so OpenClaw supplies the bounded workspace `AGENTS.md` snapshot as thread-level
+developer instructions. Lightweight, ring-zero, message-only, and tool-disabled
+internal turns set the native project-document budget to zero instead.
 
 This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and
@@ -121360,7 +121676,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
 }
 ```
 
-Each list is optional:
+Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list the canonical provider ID first, followed by any aliases scoped to that capability:
 
 | Field                            | Type       | What it means                                                                                                                        |
 | -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -126884,11 +127200,41 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+### Conversation route ownership
+
+Implement `messaging.resolveConversationRouteOwner(...)` when generic route
+matching cannot reproduce the channel's configured and runtime binding rules.
+The resolver receives the current config, account, and recorded conversation
+identity, including a delivery `target` when it differs from the routing peer.
+It must reuse the same precedence and provider identity grammar as inbound
+routing.
+
+Ownership inspection is synchronous and read-only. Do not refresh binding
+liveness, perform network requests, or infer missing provider facts. Return:
+
+- `{ kind: "agent", agentId }` for an agent-owned route.
+- `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
+  binding. `fallbackAgentId` is the route used when that plugin has no active
+  inbound claim handler.
+- `{ kind: "unavailable" }` when authoritative owner state is temporarily
+  unavailable and the caller should retry.
+- `null` when the supplied identity is invalid or cannot be authorized.
+- `undefined` to delegate to core's generic owner resolution.
+
+Keep temporary unavailability distinct from `null`: an adapter restart is not
+proof that a previously bound conversation is unowned.
+Use `inspectConversationBinding(...)` from
+`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
+available/unavailable distinction.
+
 ### Account-scoped conversation binding support
 
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
-sets this static capability to `true` by default.
+sets this static capability to `true` by default. Channels whose monitor owns a custom binding
+adapter must also set `bindingStore: "adapter"`; core then fails closed while
+that adapter is unavailable instead of reading or writing generic binding rows.
+Older `createManager`-only plugins retain the same adapter-owned behavior.
 
 If support differs by configured account, also implement
 `conversationBindings.isCurrentConversationBindingSupported({ accountId })`.
@@ -128401,15 +128747,17 @@ review date; removal still requires the reader condition in the final column.
 ### Published channel setup compatibility
 
 Slack, Discord, Signal, and Microsoft Teams packages published through
-`2026.7.1` imported channel-specific config schemas from
+`2026.7.1` import channel-specific config schemas from
 `openclaw/plugin-sdk/bundled-channel-config-schema`. The published Slack and
-Discord packages also imported `createLegacyCompatChannelDmPolicy` and
+Discord packages also import `createLegacyCompatChannelDmPolicy` and
 `promptLegacyChannelAllowFromForAccount` from
 `openclaw/plugin-sdk/setup-runtime`.
 
-Those compatibility exports were removed in August 2026. Channel plugins must
-own their config schemas and setup policy locally, using generic primitives
-from `channel-config-schema` and `setup-runtime`.
+Those exports remain available as deprecated runtime compatibility adapters.
+New and republished plugins should own their config schemas and setup policy
+locally, using generic primitives from `channel-config-schema` and
+`setup-runtime`. The compatibility exports can be removed only after the
+minimum supported published package versions no longer import them.
 
 ### Channel setup input field compatibility
 
@@ -130686,8 +131034,10 @@ catalog, API-key auth, and dynamic model resolution.
     });
     ```
 
-    If resolving requires a network call, use `prepareDynamicModel` for async
-    warm-up - `resolveDynamicModel` runs again after it completes.
+    If resolving requires a network call, return the requested model directly
+    from `prepareDynamicModel`. OpenClaw applies the same configured overrides
+    and normalization as synchronous dynamic resolution. Existing hooks that
+    return nothing still retry `resolveDynamicModel` after preparation.
 
   </Step>
 
@@ -130884,7 +131234,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
       | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
       | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | `prepareDynamicModel` | Return an asynchronously discovered model, or warm reusable metadata before sync resolution |
       | `normalizeResolvedModel` | Transport rewrites before the runner |
       | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
       | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
@@ -131891,6 +132241,101 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     in-flight requests and release local resources. Existing calls that omit the
     signal retain their previous behavior.
 
+    Gateway-loaded plugins can open a connection-scoped binary channel to a
+    registered node-host command with `nodes.openDuplex(...)`:
+
+    ```typescript
+    const controller = new AbortController();
+    const channel = await api.runtime.nodes.openDuplex({
+      nodeId: "paired-node",
+      command: "my-plugin.image-bridge",
+      params: { format: "png" },
+      timeoutMs: 30000,
+      maxMessageBytes: 4 * 1024 * 1024,
+      signal: controller.signal,
+    });
+
+    const unsubscribe = channel.onMessage((message: Uint8Array) => {
+      console.log("Received one complete binary message:", message.byteLength);
+    });
+
+    try {
+      await channel.send(Uint8Array.of(1, 2, 3));
+      const result = await channel.closed;
+    } finally {
+      unsubscribe();
+      channel.close();
+    }
+    ```
+
+    `openDuplex` accepts the same node, command, parameters, timeout,
+    idempotency key, session key, caller signal, and requested scopes as
+    `nodes.invoke`, plus optional `maxMessageBytes` and
+    `maxOutstandingDeliveryBytes` limits. The per-message limit defaults to
+    100 MiB and can be reduced, but never increased beyond 100 MiB.
+    `maxOutstandingDeliveryBytes` bounds the combined size of complete messages
+    whose asynchronous listener callbacks have not settled; it defaults to
+    `maxMessageBytes`, cannot be smaller than that limit, and cannot exceed
+    100 MiB. A protocol that can follow a maximum-sized response with a bounded
+    asynchronous notification may request a larger outstanding-delivery budget
+    without raising its per-message ceiling. OpenClaw splits each binary message
+    into ordered 8 KiB payload fragments that fit the existing 16 KiB
+    transport-frame limit; callers always send and receive complete
+    `Uint8Array` messages. Concurrent sends preserve message boundaries.
+
+    Register the channel's single message listener immediately after
+    `openDuplex` resolves. Before a listener is registered, OpenClaw buffers at
+    most eight complete messages and 1 MiB total; exceeding either limit closes
+    the invocation. The unsubscribe callback removes that listener. Listeners
+    may return `Promise<void>`; a thrown error or rejected promise, caller
+    abort, `close()`, node disconnect, pairing change, plugin reload or
+    retirement, or Gateway shutdown closes the channel and cancels outstanding
+    node work. Successful node command completion and `channel.closed` wait
+    for asynchronous message listeners already in progress. `close()` is
+    idempotent, and retained channel methods reject after closure.
+    `channel.closed` resolves with the successful command result or rejects
+    with the node, authorization, transport, or cancellation error. Channels
+    cannot reconnect or survive a node disconnection.
+
+    The node plugin declares `duplex: true` and registers a message listener
+    through the optional framed command I/O capability:
+
+    ```typescript
+    api.registerNodeHostCommand({
+      command: "my-plugin.image-bridge",
+      duplex: true,
+      async handle(_paramsJSON, io) {
+        if (!io?.frames) {
+          throw new Error("Framed node command I/O is unavailable.");
+        }
+
+        const frames = io.frames;
+        return await new Promise<string>((resolve, reject) => {
+          frames.onMessage((message) => {
+            void frames.send(message).then(() => resolve('{"ok":true}'), reject);
+          });
+          io.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Node command was canceled.")),
+            { once: true },
+          );
+        });
+      },
+    });
+    ```
+
+    Register `frames.onMessage(...)` before sending: the node announces framed
+    readiness only after the listener exists, and `openDuplex` resolves only
+    after both command dispatch and framed readiness. This prevents input from
+    arriving before the plugin can consume it. The existing raw `emitChunk`
+    and `onInput` helpers remain available to terminal-style commands.
+
+    `openDuplex` is available only to a current, trusted in-process Gateway
+    plugin runtime. Plugin CLI runtimes reject it with an actionable error;
+    there is no remote polling or local fallback. Every invocation uses the
+    same pairing, declared-command allowlist, plugin policy, approval,
+    authorization, and connection-ownership checks as `nodes.invoke`.
+
     `nodes.list(...)` includes each connected node's advertised
     `nodePluginTools` descriptors when that node exposes plugin or MCP-backed
     tools to the agent. Those descriptors are live connection state: the Gateway
@@ -131902,7 +132347,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
     <Warning>
-    The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. Use it only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
+    The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
     </Warning>
 
   </Accordion>
@@ -134131,6 +134576,12 @@ tool({
   },
 });
 ```
+
+Factories can use `toolContext.delivery?.send({ text, mediaUrl })` for outbound
+messages in the active conversation. The host chooses the destination,
+account, thread, and local-media policy; plugins cannot retarget this helper,
+and retained copies stop working after the turn closes. The helper is unavailable
+for channels whose delivery is owned by a Gateway transport.
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
@@ -162186,7 +162637,7 @@ This checklist is the public shape of the release flow. Private credentials, sig
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
-3. Freeze the product-complete pre-changelog commit as the **Code SHA** and record the trusted **Tooling SHA**. Run the deterministic source preflight, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse that exact Tooling SHA for later release validation; never refresh it from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
+3. Freeze the product-complete pre-changelog commit and target context as the **Code SHA/ref**, and record the trusted **Tooling SHA/ref**. Run the deterministic source preflight, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse those exact identities for later release validation; never refresh the tooling from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
 4. Classify failures before editing as product, harness/tooling/provenance, infrastructure/credential, or wrapper. Only confirmed product failure creates a new Code SHA. Use one diagnosis, one fix when needed, and one narrow retry, then reassess.
 5. Only after the Code SHA is green, generate the top `CHANGELOG.md` section from merged PRs and direct commits since the last reachable shipped tag. Keep entries user-facing and deduplicated. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`.
 6. Commit only `CHANGELOG.md`. This commit is the **Release SHA**. The complete diff from Code SHA to Release SHA must be exactly `CHANGELOG.md`; any other changed path returns the release to step 2.
@@ -162208,7 +162659,7 @@ This checklist is the public shape of the release flow. Private credentials, sig
 
    `pnpm release:candidate` validates the current frozen branch tip by default (or the explicit `--target-sha`), and rejects a tag that already exists. It records evidence before the final signed tag is pushed.
 
-   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. It keeps the GitHub release as a draft while it verifies registry readback, calls `Docker Release` with the immutable tag and Release SHA, and only then finalizes the GitHub release. The release checkout remains the product/data root, while planning and final verification execute from the exact trusted workflow-source checkout so an older release commit cannot silently use obsolete release tooling. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete matching `CHANGELOG.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG.md`; partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front and promotes Windows and Android assets concurrently with the OpenClaw npm publish, waits for ClawHub whenever OpenClaw npm is being published, then runs the trusted-main beta verifier and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, selected ClawHub packages, child workflow run IDs, and optional NPM Telegram run ID. The ClawHub bootstrap verifier requires the exact trusted-main workflow path and SHA, producer and terminal run attempts, release SHA, requested package set, immutable package artifact tuple, and terminal registry readback artifact; a successful legacy release-ref run is not accepted.
+   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. It keeps the GitHub release as a draft while it verifies registry readback, calls `Docker Release` with the immutable tag and Release SHA, and only then finalizes the GitHub release. The release checkout remains the product/data root, while planning and final verification execute from the exact trusted workflow-source checkout so an older release commit cannot silently use obsolete release tooling. Once publication binds the frozen Tooling SHA to an exact protected lightweight `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping remains authoritative when `main` advances; the suffix records tag-creation provenance, not the current parent run id. Core and plugin npm publishers re-read that exact tag and revalidate the exact parent run tuple immediately before each npm publish or dist-tag mutation, failing closed on a missing, moved, annotated, or wrong-SHA tag, parent mismatch, or disallowed parent state. Other privileged writers require their dependent enforcement changes before the protected-tag publication route is globally complete. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete matching `CHANGELOG.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG.md`; partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front and promotes Windows and Android assets concurrently with the OpenClaw npm publish, waits for ClawHub whenever OpenClaw npm is being published, then runs the trusted-main beta verifier and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, selected ClawHub packages, child workflow run IDs, and optional NPM Telegram run ID. The ClawHub bootstrap verifier requires the exact trusted-main workflow path and SHA, producer and terminal run attempts, release SHA, requested package set, immutable package artifact tuple, and terminal registry readback artifact; a successful legacy release-ref run is not accepted.
 
    Then run the post-publish package acceptance against the published `openclaw@YYYY.M.PATCH-beta.N` or `openclaw@beta` package. If a pushed or published prerelease needs a fix, cut the next matching prerelease number; never delete or rewrite the old one.
 
@@ -162344,6 +162795,14 @@ workflow itself never writes repository refs. Tideclaw alpha validation remains
 on its matching alpha branch and exact alpha tag rather than a regular
 `release/*` context.
 
+That current-`main` lineage check authorizes the initial validation tooling
+selection only. It is not permission to choose newer tooling after the
+candidate SHA/ref and Tooling SHA/ref are frozen. Once publication binds the
+Tooling SHA to the protected lightweight `release-publish/*` tag, the exact live
+tag-to-SHA mapping and exact parent run tuple authorize the npm mutations
+enforced by this foundation even if `main` has advanced. Other privileged
+writers remain blocked until their dependent enforcement changes land.
+
 After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper with the Release SHA:
 
 ```bash
@@ -162357,6 +162816,17 @@ pnpm ci:full-release \
 The second parent reuses product evidence only when GitHub proves the Release SHA descends from the Code SHA and the complete changed path set is exactly `CHANGELOG.md`. It records `changelog-only-release-v1` and dispatches no product children. Npm preflight and package/install acceptance still run on the Release SHA because its tarball bytes changed.
 
 For a fresh Code SHA, the workflow resolves the target, dispatches manual `CI`, then dispatches `OpenClaw Release Checks`. Beta-publish maps to `release_profile=beta` and `run_release_soak=false`; its `all` run excludes broad live/E2E and QA-live lanes. Postpublish-confidence uses the exact published package with soak or explicit focused groups. Stable-publish maps to `release_profile=stable`. The final verifier summary includes slowest-job tables for each child run.
+
+Each dispatcher records the exact child run ID and attempt, then exits. Release
+Decision reports a decisive blocker without waiting for unrelated diagnostic
+tails; with `fail_fast=false`, Diagnostic Drain keeps the selected children
+running to terminal. Diagnose `blocked_diagnostics_running` immediately, but do
+not retry until the drain is terminal. Recover `orchestration_error` against
+the same exact children and never redispatch tests merely to repair collection.
+An immutable run-bound execution plan preserves the original attempt, titles,
+coverage, gates, and child tuples across collector retries. The final verifier
+consumes that plan and the exact attempt-bound Decision and Drain artifacts
+instead of polling or reclassifying child results.
 
 The product-performance child is artifact-only in this release path. The
 umbrella dispatches it with `publish_reports=false`, and validation is rejected
@@ -162966,6 +163436,12 @@ operator's explicit offline-device abandonment decision so restart recovery
 cannot accidentally resume remote reconciliation. Older readers ignore the
 column and can reopen the same database safely.
 
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release
@@ -163268,8 +163744,9 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
-Freeze the product-complete pre-changelog commit as the **Code SHA** and select
-one trusted workflow commit as the **Tooling SHA**, then run:
+Freeze the product-complete pre-changelog commit and its target context as the
+**Code SHA/ref**, and select one trusted workflow commit and context as the
+**Tooling SHA/ref**, then run:
 
 ```bash
 TOOLING_SHA="<recorded-full-main-ancestor-sha>"
@@ -163279,8 +163756,10 @@ pnpm ci:full-release \
   --workflow-sha "$TOOLING_SHA"
 ```
 
-Record the Tooling SHA once for the release and reuse it for later Code-SHA,
-Release-SHA, and focused reruns. Do not refresh it from moving `main`.
+Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
+them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
+authorizes the initial Tooling SHA selection; it does not authorize refreshing
+the tooling from moving `main`.
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
 end-to-end agent turn. Regular `release/*` targets accept only the branch's final
@@ -163290,12 +163769,38 @@ exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
 only for the broad advisory sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
-independent failures together. Pass `-f fail_fast=true` when the shorter
-first-failure cancellation path is preferable.
+independent failures together. In that mode, the parent makes no child
+cancellation calls. Pass `-f fail_fast=true` only when the shorter
+first-failure path is preferable; Release Decision then cancels only the exact
+still-active child that owns the blocking failure.
+
+After dispatch, the parent writes one immutable
+`full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
+an exact run-ID Actions cache. It records selected and
+required coverage, gate results, reuse identity, the original parent attempt,
+and every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
+Decision, Drain, manifest generation, evidence verification, and the final
+verifier consume the artifact for their current attempt. Collector retries
+restore the immutable cached copy, validate it, and upload the artifact again
+for the retry; they never rebuild the plan or redispatch tests. A missing or
+evicted cache fails closed, so start a new validation instead of retrying that
+stale parent.
+Release Decision also repeats canonical reuse-chain validation before a reused
+run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
+selected run, root run, source manifest, trusted tooling identity, and child
+tuple must all still match.
+
+On a parent retry, final verification selects the newest available Release
+Decision and Diagnostic Drain artifacts independently. Both must bind the same
+immutable plan and exact child tuple; their source attempts remain recorded in
+the artifacts and may differ when only one collector needed a retry.
 
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
-deletes the temporary ref after validation. The Validation SHA equals the Code
+deletes the temporary ref after successful validation and strict evidence
+verification. If Release Decision reports a blocker while Diagnostic Drain is
+still collecting failures, the helper exits nonzero immediately and keeps both
+temporary refs for reruns and diagnosis. The Validation SHA equals the Code
 SHA for product validation or the Release SHA for changelog-only validation; it
 is not a third release identity. The workflow rejects malformed or mismatched
 expected SHAs before child dispatch. Every child must report the same Tooling
@@ -163306,6 +163811,17 @@ from current `origin/main`. The helper rejects a pinned Tooling SHA that does
 not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
+
+The main-lineage requirement above applies to the initial validation tooling
+selection. Once release publication binds that Tooling SHA to an exact protected
+lightweight `release-publish/<12sha>-<provenance-run>` tag, the live tag-to-SHA
+mapping remains authoritative even when `main` advances. The suffix records
+tag-creation provenance, not the current parent run id. Publication must re-read
+that exact tag and revalidate the exact parent run tuple immediately before each
+core or plugin npm publish or dist-tag mutation. A missing, moved, annotated, or
+wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
+privileged writers require their dependent enforcement changes before the
+protected-tag publication route is globally complete.
 
 ## Extended-stable exception
 
@@ -163408,7 +163924,26 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, and QA Lab parity. QA-live Matrix, Buzz, and Telegram plus gated advisory Discord, WhatsApp, and Slack run for stable/full, beta with `run_release_soak=true`, an explicit `qa-live` controller retry, or the direct child's manual `qa` aggregate. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** classify the failed surface and select one concrete release-check group. |
 | Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                                                                                             |
 | Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                                                                                |
-| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                                                                                                                                                                                |
+| Release decision        | **Job:** `Release Decision`<br />**Child workflow:** none<br />**Proves:** polls the exact recorded child run IDs and attempts, enforces release policy, and publishes an attempt-bound decision artifact. A decisive failure becomes `blocked_diagnostics_running` while unrelated child diagnostics continue.<br />**Rerun:** fix or rerun only the blocking surface.                                                                                                                                                                                                                                                    |
+| Diagnostic drain        | **Job:** `Diagnostic Drain`<br />**Child workflow:** none<br />**Proves:** with `fail_fast=false`, follows every selected exact child to terminal without cancellation and writes timing, failed-job, run-attempt, and Tooling-SHA evidence. Collector cancellation instead writes an immediate `cancelled_with_children` handoff containing active child identities.<br />**Rerun:** recover collection only for `orchestration_error`; product failures do not invalidate the drain.                                                                                                                                     |
+| Execution plan          | **Job:** `Seal release execution plan`<br />**Child workflow:** none<br />**Proves:** persists the original parent attempt, exact child identities and titles, required coverage, gates, and reuse identity in a stable run-bound artifact. Attempt-two collector recovery restores this artifact instead of redispatching.<br />**Rerun:** restore the existing plan only; a missing plan is an orchestration error.                                                                                                                                                                                                      |
+| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** downloads the immutable execution plan plus the exact attempt-bound Release Decision and Diagnostic Drain artifacts, verifies their common digest and parent tuple, and accepts only a strict green decision plus terminal drain.<br />**Rerun:** recover the existing collectors or rerun only the failed product surface; the verifier never reclassifies or redispatches children.                                                                                                                                                     |
+
+The five child-dispatch jobs own dispatch and exact identity capture only. They
+emit the child run ID, run attempt, and URL, then finish. Release Decision owns
+the blocking answer; Diagnostic Drain owns complete terminal evidence. The
+immutable execution plan owns child identity across collector attempts. The
+decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
+`blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
+Persistent GitHub API failures are orchestration errors. A child whose workflow
+path, display title, ref, Tooling SHA, run ID, or attempt changes is a distinct
+provenance mismatch.
+
+`blocked_diagnostics_running` is safe for immediate diagnosis but not for a
+retry until Diagnostic Drain is terminal. `orchestration_error` authorizes
+collector recovery against the same exact child identities, never test
+redispatch. `blocked_complete` means diagnostics are complete; it does not
+claim a drain is still running.
 
 The umbrella always dispatches product performance in artifact-only mode.
 `OpenClaw Performance` permits report publication only for scheduled runs or a
@@ -163430,9 +163965,13 @@ as a transition, it accepts the stable name only for an attempt-1 manifest v2
 producer. It rejects that legacy name for later attempts and manifest v3.
 
 Concurrency is keyed by Validation SHA, Tooling SHA, and rerun group and does
-not cancel an older run. Parent cancellation or timeout leaves an adopted
-identity-checked child running. Cancel that exact child explicitly when it is
-no longer useful.
+not cancel an older run. Parent cancellation or timeout leaves adopted
+identity-checked children running and records `cancelled_with_children` when
+the state collector can complete its cancellation handoff. Cancel an exact
+child explicitly when it is no longer useful. Do not run a second foreground
+watcher when the SHA-pinned helper already owns the parent; use
+`release-ci-summary --watch` only after the helper has returned or when the
+parent was dispatched separately.
 
 ## Release checks stages
 
@@ -165968,7 +166507,7 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`); `pnpm test:perf:profile:runner` writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
-- `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. The Test Performance Agent uses this as its baseline before attempting slow-test fixes. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
+- `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 
 ## Benchmarks
@@ -189328,12 +189867,16 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 
 ## Dashboard capabilities
 
-Pinned widgets can use one ticket-bound host API after the operator reviews the declaration shown on the pending card:
+Pinned widgets expose one ticket-bound host API. Calls that require declared capabilities work only after the operator reviews the declaration shown on the pending card:
 
+- `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation; validation, focus checks, and rate limits still apply.
 - `openclaw.state.emit(payload)` adds a session notice. Payloads are capped at 8 KiB, and identical client emissions within five seconds are coalesced.
 - `openclaw.data.read(bindingId, params?)` resolves only at the Gateway. Grantable bindings are `sessions.list`, `usage.status`, `usage.cost`, `cron.list`, `cron.status`, `agents.list`, and `health`.
+- `openclaw.action.run(actionId, params?)` invokes an operator-granted plugin dashboard action verb through its write-scoped Gateway method.
 - `openclaw.cron.trigger(jobId)` runs an existing job now only when the exact `cron.trigger:<jobId>` capability was granted.
+
+Links are ordinary user navigation, not a granted host capability. Rendered widgets can open user-clicked links in a new tab; use `target="_blank"` with `rel="noopener noreferrer"` so the dashboard stays open and the destination cannot retain an opener reference.
 
 Network access is separate from host tools. Put exact HTTPS origins in `capabilities.netOrigins`; after approval, only those origins enter the widget's `connect-src`. Wildcards, credentials, paths, query strings, and undeclared origins remain blocked. A literal port is allowed only when it is part of the declared origin.
 
@@ -196731,7 +197274,7 @@ If the browser retries pairing with changed auth details (role/scopes/public key
 
 Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
 
-When the connected Control UI reports limited access, click **Request admin** in the access banner. You can collapse the banner into a persistent **Limited access** chip and click the chip whenever you need the full explanation or request action again. The browser files the same pending device scope-upgrade request over its existing connection; approve it with `openclaw devices` on the Gateway host or from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
+When the connected Control UI reports limited access, select the shield-question status beside Search, then click **Request admin** in the access details. On mobile, those details open as a bottom sheet; narrow session chat keeps the same status inside its overflow menu. The browser files the pending device scope-upgrade request over its existing connection; approve it with `openclaw devices` on the Gateway host or from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation, revocation, and the Paperclip / `openclaw_gateway` first-run approval flow.
 
@@ -196996,7 +197539,7 @@ select it to open the owning Approvals page.
 
   </Accordion>
   <Accordion title="Debug, logs, update">
-    - Debug: status/health/models snapshots, event log, and manual RPC calls (`status`, `health`, `models.list`).
+    - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, and event-loop delay graphs (`status`, `health`, `models.list`).
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
@@ -197074,11 +197617,17 @@ The Activity tab lives in **Settings › System**, next to Logs and Debug. It ha
 
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
 - **Live activity** is the existing ephemeral browser-local observer for tool activity. It is derived from the same Gateway `session.tool` and tool event stream that powers Chat tool cards. It does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.
-- **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` projection. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
+- **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
 
 Live activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, Gateway switch, or **Clear**.
 
-The Run inspector shows the retained trust domain, ingress, invoker, represented subject, sponsor, agent definition and principal, runtime instance, applicable grants, assurance evidence, lineage, and a bounded decision-receipt page summary. Every fact has a text evidence state. **Absent** means the owning boundary explicitly recorded no value; **unattributed** means a supported path had no usable invoker; **unknown** means expected evidence is missing or unreadable; and **unsupported** means the path has no Phase 0 evidence contract. Color is supplemental only.
+The Run inspector shows the retained trust domain, ingress, invoker, represented subject, sponsor, agent definition and principal, runtime instance, applicable grants, assurance evidence, lineage, and a bounded decision-receipt list. Every fact has a text evidence state. **Absent** means the owning boundary explicitly recorded no value; **unattributed** means a supported path had no usable invoker; **unknown** means expected evidence is missing or unreadable; and **unsupported** means the path has no Phase 0 evidence contract. Color is supplemental only.
+
+Select a receipt to see the Gateway's bounded safe-display projection: structural action and outcome fields, evidence limits, and verified display provenance. Fixed core summaries and next steps appear only when the Gateway knows the producer contract from the owning call path. Generic or otherwise unverified receipts show a structural `unknown` classification and omit their summary, remediation, and self-asserted owner metadata. Activity consumes the safe result directly: it performs no UI-side inference, post-receive stripping, or raw-receipt fallback. **Enforced** means the recorded owner changed the outcome after validating the exact context, execution, and run tuple. **Attribution only** records what happened without claiming authorization. **Unsupported** means that observation has no Phase 0 enforcement contract. The inspector displays these states as text badges as well as color and never infers a reason from another field.
+
+Receipt requests are limited to 50 records. **Load more receipts** follows the Gateway's opaque cursor and keeps earlier pages visible. A later-page error does not discard receipts already shown. Each receipt link adds `receipt=<opaque-display-selector>` and, for a later page, `decision=<opaque-cursor>` to the selected run or execution URL. The Gateway-owned selector chooses the projected display row without exposing the stored receipt identifier in the URL or as page text. Reloading that link requests the same bounded page and selects the same projected row. An expired or invalid page cursor is an explicit inspection error; choose **Restart inspection** to keep the selected run or execution and restart from the first page.
+
+Approval and message-delivery links use the `approval-decision:` and `message-decision:` selector namespaces. The owner query mints each selector from its row metadata in the same snapshot as the displayed receipt; private receipt, resolution, and event identifiers never become URL parameters.
 
 Run inspection requires `operator.read` and a Gateway that advertises `audit.run.inspect`. Execution identity collection is off by default; enable `logging.audit.executionIdentity`, restart the Gateway, and record a new run when you need this evidence. Retained contexts are limited to 30 days and 100,000 rows. A known run can therefore report unavailable or expired identity evidence, and a run reference can be ambiguous when it correlates more than one execution. The UI does not guess between executions: choose a returned candidate to navigate to `/activity?view=run&execution=<percent-encoded-execution-id>` and query that exact execution.
 
@@ -197662,6 +198211,7 @@ Shared infrastructure underneath (this is where the simplification lands):
   - `openclaw.state.emit` — tier 1 session notices (coalesced, size-capped)
   - `openclaw.data.read` — parameterized read-only bindings (existing
     allowlisted read RPC set), resolved gateway-side
+  - `openclaw.action.run` — tier 3 plugin-owned automation
   - `openclaw.cron.trigger` — tier 3 automation
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
@@ -197672,12 +198222,14 @@ Shared infrastructure underneath (this is where the simplification lands):
   `pending` on the board: a placeholder card lists them human-readably with
   one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
   they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank.
+  declaration shrank. User-clicked links are ordinary navigation rather than a
+  grant capability and open in a new tab for every rendered widget.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
-  `window.openclaw.state`, `window.openclaw.data`, and `window.openclaw.cron`
-  as the stable author API. Dashboard calls share one view-ticket-bound
-  request channel; size reporting and theme tokens remain separate host
-  notifications.
+  `window.openclaw.state`, `window.openclaw.data`, `window.openclaw.action`,
+  `window.openclaw.cron`, and the host-provided
+  `window.openclaw.host.controlUiBaseUrl` as the stable author API. Dashboard
+  calls share one view-ticket-bound request channel; size reporting and theme
+  tokens remain separate host notifications.
 
 ### Plugin capability declarations
 
