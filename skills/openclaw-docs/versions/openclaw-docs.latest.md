@@ -1942,6 +1942,15 @@ masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
 
+Model-visible tool-result text uses narrower assignment matching so source code
+remains intact. Registered secrets and explicit credential forms, including
+structured fields, authorization headers, URL credentials, and known token
+formats, remain masked. Direct reads of `.env` files apply
+broader assignment masking before their content becomes a tool result. Other
+config and source reads preserve opaque values; register actual secrets instead
+of relying on key-name matching. Bare source assignments such as
+`token = timeObserverToken` remain unchanged.
+
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential
 when they appear as JSON fields, URL parameters, CLI flags, or assignments.
@@ -25910,6 +25919,28 @@ their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 
+Plugin, node, and worker receipts use the same coverage vocabulary:
+
+- A registered plugin `before_tool_call` hook allow/block, node pairing or
+  capability decision, and exact worker credential/build/owner-epoch admission
+  are `enforced` gates.
+- A successful node result or completed plugin-owned run is
+  `attribution-only`; success never upgrades the earlier gate into proof of
+  authorization.
+- A plugin node policy that returns without its supplied node callback is
+  `unknown` with `node.action_callback` missing.
+- An action performed wholly inside an ACP or other external native runtime
+  without an OpenClaw pre-action callback produces an ACP-owner `unsupported`
+  receipt after admitted prompt submission, with `native.action_callback`
+  missing. It does not claim a side effect. Add an authoritative native-action
+  callback to the adapter to provide stronger evidence; transcript or task text
+  cannot repair this evidence gap.
+
+These generic receipts retain no plugin id, node id, worker environment or
+session id, credential or build hash, token, command, parameters, or raw error
+text. Owner-native approval, pairing, placement, and worker-operation rows are
+not duplicated.
+
 JSON output is the Gateway's safe-only result without lossy reformatting. An
 exact result contains one bounded V1 context (maximum 16 KiB), up to 100
 `decisionDisplays`, coverage and
@@ -38935,6 +38966,7 @@ openclaw skills install @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --force
 openclaw skills update @owner/<slug> --force-install
 openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --acknowledge-install-policy-warning
@@ -39012,31 +39044,32 @@ nor the acknowledgement overrides `block` or a policy failure.
 
 Notes:
 
-| Flag/behavior                    | Description                                                                                                                                                                                                                                                                      |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search [query...]`              | Optional query; omit it to browse the default ClawHub search feed.                                                                                                                                                                                                               |
-| `search --limit <n>`             | Caps returned results.                                                                                                                                                                                                                                                           |
-| `install git:owner/repo[@ref]`   | Installs a Git skill. Branch refs may contain slashes, such as `git:owner/repo@feature/foo`.                                                                                                                                                                                     |
-| `install ./path/to/skill`        | Installs a local directory whose root contains `SKILL.md`.                                                                                                                                                                                                                       |
-| `install --as <slug>`            | Overrides the inferred slug for Git and local directory installs.                                                                                                                                                                                                                |
-| `install --version <version>`    | Applies to native ClawHub skill refs, not `skills-sh:` refs; the mirrored reference already identifies the exact synchronized commit.                                                                                                                                            |
-| `install --force`                | Overwrites an existing workspace skill folder for the same slug.                                                                                                                                                                                                                 |
-| `install/update --force-install` | Installs a pending GitHub-backed ClawHub skill before ClawHub's scan completes.                                                                                                                                                                                                  |
-| `--global`                       | Targets the shared managed skills directory; cannot combine with `--agent <id>`.                                                                                                                                                                                                 |
-| `--agent <id>`                   | Targets one configured agent workspace; overrides current working directory inference.                                                                                                                                                                                           |
-| `update @owner/<slug>`           | Updates a single tracked skill. Add `--global` to target the shared managed skills directory instead of the workspace.                                                                                                                                                           |
-| `update --all`                   | Updates tracked ClawHub installs in the selected workspace, or the shared managed skills directory with `--global`.                                                                                                                                                              |
-| `verify @owner/<slug>`           | Prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by default. `--json` is accepted as the explicit machine-output spelling. Bare slugs are accepted for compatibility when the skill is already installed or unambiguous; owner-qualified refs avoid publisher ambiguity. |
-| `verify` provenance              | When ClawHub returns server-resolved source provenance, verify JSON also includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or self-declared source URLs stay only in the raw provenance envelope and are not promoted.                                          |
-| `verify` version selector        | `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it verifies the installed version against the registry it came from. `--version` and `--tag` override the version selector but keep that installed registry when origin metadata exists.                   |
-| `verify --card`                  | Prints the generated Skill Card Markdown instead of JSON. Exits non-zero when ClawHub returns `ok: false` or `decision: "fail"`; unsigned signatures are informational unless ClawHub policy changes.                                                                            |
-| Skill Card fingerprint           | Installed ClawHub bundles can include a generated `skill-card.md`. OpenClaw treats verification as a ClawHub server decision and does not reject an installed skill just because that generated card changes the bundle fingerprint.                                             |
-| `check --agent <id>`             | Checks the selected agent's workspace and reports which ready skills are actually visible to that agent's prompt or command surface.                                                                                                                                             |
-| `workshop --agent <id>`          | Accepted before or after a Workshop leaf command, for example `workshop --agent <id> list` or `workshop list --agent <id>`. If both are provided, the leaf value wins.                                                                                                           |
-| `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                 |
-| `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                   |
-| `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                               |
-| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Daily collection review does not use this state.                                                                                                                                                             |
+| Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search [query...]`              | Optional query; omit it to browse the default ClawHub search feed.                                                                                                                                                                                                                                                                |
+| `search --limit <n>`             | Caps returned results.                                                                                                                                                                                                                                                                                                            |
+| `install git:owner/repo[@ref]`   | Installs a Git skill. Branch refs may contain slashes, such as `git:owner/repo@feature/foo`.                                                                                                                                                                                                                                      |
+| `install ./path/to/skill`        | Installs a local directory whose root contains `SKILL.md`.                                                                                                                                                                                                                                                                        |
+| `install --as <slug>`            | Overrides the inferred slug for Git and local directory installs.                                                                                                                                                                                                                                                                 |
+| `install --version <version>`    | Applies to native ClawHub skill refs, not `skills-sh:` refs; the mirrored reference already identifies the exact synchronized commit.                                                                                                                                                                                             |
+| `install --force`                | Overwrites an existing workspace skill folder for the same slug.                                                                                                                                                                                                                                                                  |
+| `update --force`                 | Replaces a tracked skill even when its installed files no longer match recorded install digests. Without it, updates preserve local changes. Pre-digest installs require one forced update before later updates can be verified. Force those skills individually; `--all --force` also replaces skills with detected local edits. |
+| `install/update --force-install` | Installs a pending GitHub-backed ClawHub skill before ClawHub's scan completes.                                                                                                                                                                                                                                                   |
+| `--global`                       | Targets the shared managed skills directory; cannot combine with `--agent <id>`.                                                                                                                                                                                                                                                  |
+| `--agent <id>`                   | Targets one configured agent workspace; overrides current working directory inference.                                                                                                                                                                                                                                            |
+| `update @owner/<slug>`           | Updates a single tracked skill. Add `--global` to target the shared managed skills directory instead of the workspace.                                                                                                                                                                                                            |
+| `update --all`                   | Updates tracked ClawHub installs in the selected workspace, or the shared managed skills directory with `--global`.                                                                                                                                                                                                               |
+| `verify @owner/<slug>`           | Prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by default. `--json` is accepted as the explicit machine-output spelling. Bare slugs are accepted for compatibility when the skill is already installed or unambiguous; owner-qualified refs avoid publisher ambiguity.                                                  |
+| `verify` provenance              | When ClawHub returns server-resolved source provenance, verify JSON also includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or self-declared source URLs stay only in the raw provenance envelope and are not promoted.                                                                                           |
+| `verify` version selector        | `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it verifies the installed version against the registry it came from. `--version` and `--tag` override the version selector but keep that installed registry when origin metadata exists.                                                                    |
+| `verify --card`                  | Prints the generated Skill Card Markdown instead of JSON. Exits non-zero when ClawHub returns `ok: false` or `decision: "fail"`; unsigned signatures are informational unless ClawHub policy changes.                                                                                                                             |
+| Skill Card fingerprint           | Installed ClawHub bundles can include a generated `skill-card.md`. OpenClaw treats verification as a ClawHub server decision and does not reject an installed skill just because that generated card changes the bundle fingerprint.                                                                                              |
+| `check --agent <id>`             | Checks the selected agent's workspace and reports which ready skills are actually visible to that agent's prompt or command surface.                                                                                                                                                                                              |
+| `workshop --agent <id>`          | Accepted before or after a Workshop leaf command, for example `workshop --agent <id> list` or `workshop list --agent <id>`. If both are provided, the leaf value wins.                                                                                                                                                            |
+| `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
+| `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
+| `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
+| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Daily collection review does not use this state.                                                                                                                                                                                                              |
 
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.
@@ -42427,9 +42460,11 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 }
 ```
 
-Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
-compatibility, but new config should keep the provider/model canonical and
-put the execution backend in provider/model runtime policy.
+Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
+input, but new config should keep the provider/model canonical and put the
+execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
+to rewrite persisted legacy model selections, model-map keys, and explicit
+`modelPolicy.allow` entries to that canonical shape.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex
@@ -45649,10 +45684,14 @@ The `Mantis Telegram Desktop Proof` workflow invokes the recorder with its
 local Docker provider. Its OpenClaw SUT remains isolated in the lane-attested
 container boundary while Telegram Desktop runs in the prebaked local image.
 
-Start a fresh authorized desktop and begin recording:
+Start recording. `--session` names the run-scoped session handle: when it
+already points at a healthy authorized desktop, `start` reuses it and only
+begins a fresh capture in the new output directory; otherwise it provisions
+and QR-authorizes a desktop first.
 
 ```bash
 pnpm qa:telegram-desktop-recorder start \
+  --session .artifacts/qa-e2e/desktop-recorder.json \
   --output-dir .artifacts/qa-e2e/telegram-desktop \
   --chat -1001234567890 \
   --user-driver "python3 /path/to/telegram-user-driver.py" \
@@ -45662,9 +45701,11 @@ pnpm qa:telegram-desktop-recorder start \
 Use `view --session <recorder.json> --message-id <id>` to open a recorded
 group post. Use `screenshot --session <recorder.json>` for a still image. Run
 `stop --session <recorder.json> --crop telegram-window` to copy the recording
-and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
-release the Crabbox lease. Add `--keep-box` only when the lease must remain
-available for WebVNC inspection.
+and logs and build motion GIFs; the authorized desktop stays alive for the next
+`start`, so repeated captures skip provisioning and QR login. When the run is
+finished, run `teardown --session <recorder.json>` to terminate the Telegram
+Desktop authorization and release the Crabbox lease; the box stays inspectable
+over WebVNC until then.
 
 The recorder defaults to Crabbox's local Docker desktop path. Build the pinned
 image once, then run `start` without coordinator access:
@@ -45788,15 +45829,15 @@ Comments post through the Mantis GitHub App (`MANTIS_GITHUB_APP_ID` /
 `MANTIS_GITHUB_APP_PRIVATE_KEY`), not `github-actions[bot]`, using a hidden
 marker comment as the upsert key.
 
-| Workflow                          | Trigger                                                                                         | What it does                                                                                                                                                                                                                                                                                                     |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Mantis Discord Smoke`            | manual dispatch                                                                                 | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                       |
-| `Mantis Discord Status Reactions` | manual dispatch                                                                                 | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
-| `Mantis Scenario`                 | manual dispatch                                                                                 | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
-| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                                 | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                      |
-| `Mantis Telegram Live`            | manual dispatch                                                                                 | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
-| `Mantis Telegram Desktop Proof`   | ClawSweeper label (`mantis: telegram-visible-proof`), maintainer PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs each container-isolated SUT against a local Docker desktop recorder and posts a 2-column PR evidence table.                                                          |
-| `Mantis Web UI Chat Proof`        | manual dispatch                                                                                 | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
+| Workflow                          | Trigger                                                                                         | What it does                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Mantis Discord Smoke`            | manual dispatch                                                                                 | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                                               |
+| `Mantis Discord Status Reactions` | manual dispatch                                                                                 | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                                         |
+| `Mantis Scenario`                 | manual dispatch                                                                                 | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow.                         |
+| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                                 | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                                              |
+| `Mantis Telegram Live`            | manual dispatch                                                                                 | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                                                       |
+| `Mantis Telegram Desktop Proof`   | ClawSweeper label (`mantis: telegram-visible-proof`), maintainer PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs each container-isolated SUT against a local Docker desktop recorder and posts a 2-column PR evidence table. Candidate is the PR merged onto current main; baseline is that merge's main tip. |
+| `Mantis Web UI Chat Proof`        | manual dispatch                                                                                 | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                                                   |
 
 `Mantis Discord Status Reactions` and `Mantis Telegram Live` both accept
 `baseline_ref`/`candidate_ref` and validate that the resolved SHA is either an
@@ -52655,7 +52696,8 @@ not a local-mode command.
 ## Scope and guarantees
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
-- Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.
 - Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
@@ -56018,7 +56060,30 @@ If the private parent token was unavailable, the child remains inspectable but
 the missing parent context, execution, and run evidence is explicit. ACP spawn
 itself is observable. Actions performed wholly inside an external ACP runtime
 without a callback are reported as unsupported evidence, never inferred from
-task or transcript text.
+task or transcript text. After admission, the ACP lifecycle owner records that
+receipt when the prompt is submitted, using the exact admitted execution token.
+It does not claim that a native side effect occurred; adapter authors must add
+an authoritative native-action callback to provide stronger evidence.
+
+Registered plugin runtime calls add bounded facts only after exact run
+admission. A `before_tool_call` hook records its own allow or block as an
+enforced plugin gate; fail-closed hook errors are denials, while a configured
+fail-open error remains unknown. Separate owner-native approval rows remain the
+authority when a hook requests approval.
+
+Plugin-owned node actions distinguish the Gateway gate from the action result.
+Pairing, live connection, command capability, plugin policy, and active
+authority checks are enforced. A node-reported success is attribution-only. If
+the plugin policy returns without calling the supplied node callback, the
+action is unknown with `node.action_callback` missing; OpenClaw does not infer a
+send from the plugin result.
+
+An attached worker records its current credential, bundle/version/features,
+owner epoch, and turn-claim admission as one enforced gate. The existing
+placement and worker-operation rows stay authoritative; their hashes,
+credentials, tokens, environment ids, and session ids are not copied into the
+generic receipt. Admission success proves only that the worker may connect, not
+that a later worker action succeeded.
 
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
@@ -58825,7 +58890,7 @@ Periodic heartbeat runs.
     defaults: {
       heartbeat: {
         agentId: "ops", // ambient owner when no per-agent heartbeat is configured
-        every: "30m", // 0m disables
+        every: "30m", // 0m disables recurring cadence
         activeHours: { start: "08:00", end: "24:00" },
         model: "openai/gpt-5.4-mini",
         session: "main",
@@ -58843,7 +58908,7 @@ Periodic heartbeat runs.
 }
 ```
 
-- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable recurring cadence. Targeted event-driven wakes, including background exec completion follow-ups, can still run one agent turn.
 - `agentId`: explicit owner for ambient heartbeat runs when no `agents.entries.*.heartbeat` block exists. A shared heartbeat block without `agentId` keeps the existing all-agent enrollment behavior.
 - Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
 - The heartbeat object is strict. Its supported fields are `agentId`, `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.
@@ -63094,6 +63159,7 @@ Gateway or node host and check `openclaw nodes pending` again.
     controlUi: {
       enabled: true,
       basePath: "/openclaw",
+      // environment: { label: "edge", color: "amber" },
       // root: "dist/control-ui",
       // github: { token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" } },
       // toolTitles: false, // opt-in AI purpose titles for tool calls (spends utility-model tokens)
@@ -63204,6 +63270,7 @@ Gateway or node host and check `openclaw nodes pending` again.
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
+- `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.github.token`: optional SecretRef-backed service credential for Control UI GitHub previews and project discovery. Prefer this explicit setting when the Gateway should own GitHub service access independently of its shared process environment. When omitted, the shipped `GH_TOKEN` then `GITHUB_TOKEN` process-environment fallback remains active. An explicitly configured but unavailable credential fails closed instead of using that fallback. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
 - `controlUi.automaticallyFetchFavicons`: link favicons in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. The Gateway requests only `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Set `false` to prevent the browser from requesting favicon routes and the Gateway from contacting link destinations.
@@ -64549,7 +64616,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
+    - `every`: duration string (`30m`, `2h`). Set `0m` to disable recurring cadence; targeted event-driven wakes can still run one agent turn. Default: `30m`.
     - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
@@ -66514,6 +66581,8 @@ Under the hood, heartbeat cadence is owned by the Automations scheduler: the gat
 
 Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats; manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
 
+Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as the completion follow-up requested by a background exec task. It does not create or re-enable a recurring schedule. Use tool policy and sandboxing, rather than heartbeat cadence, to control whether those agent turns may execute commands.
+
 Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
@@ -66560,12 +66629,12 @@ Example config:
 
 ## Defaults
 
-- Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable.
+- Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable recurring cadence.
 - Delivery target: `owner`. OpenClaw uses the first concrete `commands.ownerAllowFrom` entry, then channel `allowFrom`, and never sends this route to a group. Without a resolvable owner DM, ambient polls skip with `reason=no-route`. Set `target: "last"` to follow the most recent conversation, including groups, or `target: "none"` for internal-only runs.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
-- When heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
+- When recurring heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
@@ -67920,6 +67989,15 @@ Tune console verbosity independently:
 ## Redaction
 
 OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks, so matching secret values are masked before JSONL lines or messages are written to disk.
+
+Model-visible tool-result text preserves ambiguous source assignments such as
+`token = timeObserverToken`. Registered secrets and explicit credential forms,
+including structured fields, authorization headers, URL credentials, and known
+token formats, remain masked. Direct reads of `.env`
+files apply broader assignment masking before their content becomes a tool
+result. Other config and source reads preserve opaque values; register actual
+secrets instead of relying on key-name matching. Other transcript fields and
+diagnostic sinks retain broad assignment matching.
 
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
@@ -71365,6 +71443,13 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
 
+For an identity-audited attached run, the live turn capability can record the
+credential, build, owner-epoch, and placement checks as one enforced admission
+receipt. The receipt contains none of the credential, build hashes, tokens,
+environment id, or session id. Worker operation rows and placement state remain
+their authoritative owners; successful connection is not an action-success
+receipt.
+
 Transcript commits use owner-epoch fencing, a gateway-owned session binding,
 base-leaf compare-and-swap, and durable sequence replay; the gateway generates
 transcript entry and parent IDs through the normal session writer. Ownership and
@@ -71722,7 +71807,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, or Control UI short ID. Ambiguous short IDs return a bounded candidate list as a successful RPC result.
-    - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
+    - `sessions.create` creates a new session entry. Optional `model`, `contextWindow`, and `thinkingLevel` values persist the initial model, advertised context-window choice, and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
     - `sessions.dispatch` moves an authorized local OpenClaw session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. Explicit targets take precedence over project-profile lookup. Device dispatch requires `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active` worker ownership. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.reclaim` (`operator.write`) safely stops a session placement by key. It waits for an in-flight dispatch, drains admitted work, reconciles active workspace changes, and retries pending failed-environment teardown through the placement owner. Callers never need raw environment-destroy authority.
     - `sessions.move` moves an authorized active session to the Gateway, a paired device, or a configured profile. Gateway and device targets require `operator.write`; profile targets require `operator.admin`; malformed targets use the write scope before schema validation. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits. Ordinary moves always reconcile the source. Only a Gateway target may add `abandonSource: true`, and only when the exact source is a currently offline paired-device placement. That durable decision force-fences and destroys the remote owner, skips remote workspace reconciliation, and continues from the last Gateway-synced state without replay; unsynced files and in-flight work may be lost. Available, unknown, profile, and other-worker sources reject explicit abandonment.
@@ -71730,7 +71815,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is a deprecated alias for `chat.send` with `queueMode: "interrupt"`; removal follows the protocol deprecation policy.
     - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
-    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Session organization fields and the per-session `model` override require `operator.write`; thinking, fast, verbose, trace, reasoning, and other privileged overrides require `operator.admin`. Only an admin model selection can persist as the configured agent default. Archive and restore patches require the caller-observed `sessionId` from `sessions.list` or `sessions.describe` as `expectedSessionId`; missing or changed targets fail without materializing or mutating a replacement. With `archived: true`, the Gateway protects agent main sessions (including `global` when global scope is configured) and the `unknown` sentinel; for every other real session it first fences new admission, cancels exact-session active, pending, queued, reply, embedded, and worker work, and waits for admission and runtime terminal-persistence drains before committing `archivedAt`. A cancellation, drain, or persistence failure returns retryable `UNAVAILABLE` and leaves the session unarchived. `sessions.patchMany` carries `expectedSessionId` per target, prepares archive targets in input order inside the same batch lifecycle fence, and returns ordered per-target outcomes. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. `contextWindow` accepts only an id advertised by the selected model's `contextWindows` array; `null` restores `contextWindowDefault`. Session organization fields and the per-session `model` override require `operator.write`; thinking, fast, verbose, trace, reasoning, and other privileged overrides require `operator.admin`. Only an admin model selection can persist as the configured agent default. Archive and restore patches require the caller-observed `sessionId` from `sessions.list` or `sessions.describe` as `expectedSessionId`; missing or changed targets fail without materializing or mutating a replacement. With `archived: true`, the Gateway protects agent main sessions (including `global` when global scope is configured) and the `unknown` sentinel; for every other real session it first fences new admission, cancels exact-session active, pending, queued, reply, embedded, and worker work, and waits for admission and runtime terminal-persistence drains before committing `archivedAt`. A cancellation, drain, or persistence failure returns retryable `UNAVAILABLE` and leaves the session unarchived. `sessions.patchMany` carries `expectedSessionId` per target, prepares archive targets in input order inside the same batch lifecycle fence, and returns ordered per-target outcomes. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.assignOwner` (`operator.write`) reassigns the session's mutable owner to a person or configured agent (`{ key, owner: { type, id } }`). It requires an identified caller (authenticated profile or trusted agent identity), authorizes by session visibility, and records `assignedBy`/`assignedAt` on the row's `owner` field. The write-once `createdActor` and creator-anchored sharing authority are unchanged; see [Multi-user mode](/concepts/multi-user#assigning-an-owner).
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
@@ -72116,7 +72201,11 @@ context.
     `security.installPolicy` for operator-owned install decisions.
 - `skills.update` (`operator.admin`) has two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
-    the default agent workspace.
+    the default agent workspace. Updates that would replace a skill directory
+    whose installed files no longer match the recorded install digests are
+    refused; the per-skill failure in `details.results` carries
+    `code: "force_required"`. Retry with the optional `force: true` parameter
+    to replace such a skill anyway.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
 
@@ -81598,14 +81687,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
       agents: {
         defaults: {
           heartbeat: {
-            every: "2h", // or "0m" to disable
+            every: "2h", // or "0m" to disable recurring cadence
           },
         },
       },
     }
     ```
 
-    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do.
+    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do. `0m` does not block targeted event-driven wakes, such as a background exec completion follow-up; those can still run one agent turn without enabling recurring cadence.
 
     Per-agent overrides use `agents.entries.*.heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
 
@@ -121998,28 +122087,30 @@ Provider fields:
 
 Model fields:
 
-| Field              | Type                                                           | What it means                                                                        |
-| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
-| `name`             | `string`                                                       | Optional display name.                                                               |
-| `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
-| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
-| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
-| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
-| `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
-| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
-| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                                    |
-| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
-| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
-| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
-| `upstreamModel`    | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
-| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                            |
-| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
-| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                                     |
-| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
-| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
-| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
+| Field                  | Type                                                           | What it means                                                                        |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `id`                   | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
+| `name`                 | `string`                                                       | Optional display name.                                                               |
+| `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
+| `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
+| `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
+| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
+| `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
+| `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
+| `contextWindowDefault` | `string`                                                       | Default selectable-window id; must name an entry in `contextWindows`.                |
+| `contextTokens`        | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
+| `maxTokens`            | `number`                                                       | Maximum output tokens when known.                                                    |
+| `thinkingLevelMap`     | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
+| `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
+| `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
+| `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `mediaInput`           | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
+| `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
+| `replaces`             | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
+| `replacedBy`           | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
+| `tags`                 | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
 
 Suppression fields:
 
@@ -125644,6 +125735,12 @@ Native agent servers often have ambient built-in tools even when OpenClaw sends
 an empty tool list. Disable and attest those native capabilities for the fresh
 turn, use a separate transport that can serialize a true zero-tool request, or
 leave the capability unsupported.
+
+Audit evidence follows the same boundary. OpenClaw can record registered plugin
+ownership and run admission, but it cannot claim an external native side effect
+from an ACP update or transcript. A side effect wholly inside that runtime is
+`unsupported` unless an adapter invokes an OpenClaw-owned callback before the
+action. Do not reconstruct the callback from native tool status events.
 
 ### Delegated execution
 
@@ -132343,6 +132440,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `node.pluginTools.update` after local plugin/MCP inventory changes.
 
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
+
+    When execution identity auditing is enabled for an admitted run, those
+    Gateway gates appear as enforced decision receipts. A successful node
+    result is attribution-only. A policy that returns without calling its
+    supplied `invokeNode` callback leaves the action unknown; returning a
+    successful plugin result does not prove that the node action occurred.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
@@ -174190,7 +174293,7 @@ Giving an agent a channel puts it in a position to run commands on your machine 
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Heartbeats default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
+- Heartbeats default to every 30 minutes. Set `agents.defaults.heartbeat.every: "0m"` to disable recurring polling while you evaluate the setup. Targeted event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
 
 ## Prerequisites
 
@@ -174344,7 +174447,7 @@ Example:
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
 `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
+Set `agents.defaults.heartbeat.every: "0m"` to disable recurring cadence. Targeted event-driven wakes, such as background exec completion follow-ups, remain available and do not create a recurring schedule. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If no scratch exists, the heartbeat still runs and the model decides what to do.
@@ -197231,6 +197334,22 @@ Highlighting text in a chat message offers **More details**, which asks the comp
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
 Session observation is enabled by default. Safe preamble headlines do not require a utility model; the utility model only owns richer assessments and terminal summaries. In **Settings > Appearance > Sidebar**, you can turn observation off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
+
+## Environment identity
+
+When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      environment: { label: "edge", color: "amber" },
+    },
+  },
+}
+```
+
+The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
 ## Quick open (local)
 
