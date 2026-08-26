@@ -440,7 +440,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - The full Node matrix admits the consistently slow serial tooling, auto-reply command shards, and broad core-fast cache writer first. This keeps the 28-job concurrency cap while preventing critical-path work and the next run's transform seed from slipping into a later wave.
 - The three serial Control UI browser shards greedily pack discovered test files by source byte size. This zero-state duration proxy avoids Vitest's equal-file-count hash clustering, automatically accounts for new and changed files, and preserves the same complete test inventory without adding runners.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
-- Linux Node shard jobs persist Vitest's experimental filesystem module cache through the upstream Actions cache API, which Blacksmith transparently accelerates on its runners. Blacksmith CI shards are restore-only and unpack the protected seed into isolated runner-local roots. While the GitHub-hosted outage backend is active, every `checks-node-*` test shard, `check-sqlite-session-lifecycle`, `checks-ui`, the ordinary sharded `checks-ui-e2e` job, both fast contract matrices, and the Vitest-running `checks-fast-core` tasks restore that same immutable transform seed. The composite action's single default-off `restore-test-caches` input keeps the expansion easy to disable without changing cache keys or writer policy; mixed fast-core rows enable it only for tasks that invoke Vitest. The small real-Gateway UI job stays cold because its two targeted files do not justify the archive restore, while native and Control UI i18n lanes do not invoke Vitest. The hybrid planner profile restores the same seeds: attempt-1 Blacksmith rows read the archives through Blacksmith's Actions-cache proxy and hosted retries read them directly. The planner still elects exactly one Node shard to restore and save the shared transform archive so hosted runs can recover a cold cache without waiting for the daily warmer; every other job remains restore-only. The non-cancelling warmer runs daily, accepts manual or repository dispatch, and follows `OPENCLAW_CI_RUNNER_BACKEND`, so maintainers can rebuild both the Vitest transform cache and test-scope Node compile cache on hosted runners. The warmer launches each selected shard/config envelope in a fresh child process with concurrency one, preserving its include patterns and environment while reusing the same serial cache leaf. This prevents config-global state from leaking, avoids expanding filtered shards into whole configs, and retains transforms produced by the previous child. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations. Each writer scans and prunes its restored cache to 75% after it exceeds 2 GiB. Vitest hashes module id, source content, environment, and resolved transform config, so ordinary partial source changes keep unchanged entries warm while changed modules miss safely. Coarse restore prefixes bridge workflow runs; normal Actions cache LRU and inactivity eviction bound old immutable archives.
+- Linux Node shard jobs persist Vitest's experimental filesystem module cache through the upstream Actions cache API, which Blacksmith transparently accelerates on its runners. Blacksmith CI shards are restore-only and unpack the protected seed into isolated runner-local roots. While the GitHub-hosted outage backend is active, every `checks-node-*` test shard, `check-sqlite-session-lifecycle`, `checks-ui`, the ordinary sharded `checks-ui-e2e` job, both fast contract matrices, and the Vitest-running `checks-fast-core` tasks restore that same immutable transform seed. The composite action's single default-off `restore-test-caches` input keeps the expansion easy to disable without changing cache keys or writer policy; mixed fast-core rows enable it only for tasks that invoke Vitest. The small real-Gateway UI job stays cold because its two targeted files do not justify the archive restore, while native and Control UI i18n lanes do not invoke Vitest. The hybrid planner profile restores the same seeds: attempt-1 Blacksmith rows read the archives through Blacksmith's Actions-cache proxy and hosted retries read them directly. The planner still elects exactly one Node shard to restore and save the shared transform archive so hosted runs can recover a cold cache without waiting for the daily warmer; every other job remains restore-only. The non-cancelling warmer runs daily, accepts manual or repository dispatch, follows `OPENCLAW_CI_RUNNER_BACKEND`, and serializes per ref, so maintainers can rebuild both the Vitest transform cache and test-scope Node compile cache on hosted runners without canceling a main writer. The warmer launches each selected shard/config envelope in a fresh child process with concurrency one, preserving its include patterns and environment while reusing the same serial cache leaf. It finishes every selected envelope and saves the content-keyed transform and compile caches even when a test fails, then reports the test failure after the cache saves; ordinary CI shard execution remains fail-fast. This prevents config-global state from leaking, avoids expanding filtered shards into whole configs, and retains transforms produced by the previous child. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations. Each writer scans and prunes its restored cache to 75% after it exceeds 2 GiB. Vitest hashes module id, source content, environment, and resolved transform config, so ordinary partial source changes keep unchanged entries warm while changed modules miss safely. Coarse restore prefixes bridge workflow runs; normal Actions cache LRU and inactivity eviction bound old immutable archives.
 - Trusted Blacksmith Linux Node jobs restore root `node_modules`, retained workspace importer links, and the workspace-local pnpm store from one immutable upstream Actions cache, which Blacksmith transparently serves from its colocated backend. Pnpm imports with hard links where the filesystem permits, and keeping the complete installed tree and store in one archive preserves those links; plugin importer trees that postinstall intentionally removes remain absent. The key includes an explicit archive format, runner OS and architecture, the exact Node patch, and the semantic install-input fingerprint; there are no stale-prefix fallbacks. Manifests are canonicalized before hashing. The repository-owned `openclaw` metadata block and non-install scripts are excluded because pnpm and the audited direct root hooks do not read them, so runtime schema, publication metadata, formatting, and ordinary test/build script edits keep the dependency tree warm; unaudited lifecycle-hook drift fails closed until its source inputs join the fingerprint contract. Dependency, package-manager, hook-source, and lockfile changes always select a new immutable archive. Every exact restore runs frozen offline pnpm reconciliation, so an unchanged archive validates without registry access or importer relinking. If reconciliation fails, setup first clears every importer tree and rebuilds it offline from the restored store, then clears both modules and store and retries from the network rather than serving a partial tree. Setup then disables pnpm's redundant pre-run dependency check because postinstall intentionally prunes plugin-local `node_modules`, which pnpm otherwise treats as stale and can repair through unsafe concurrent installs during shard fanout. Preflight is the sole writer and saves immediately after a successful deterministic install: canonical `main` publishes the default-branch seed, while same-repo pull requests publish only into their merge-ref scope before their dependent jobs fan out. Consumers are restore-only; an exact miss automatically falls back to the coarser pnpm store cache. Manual dispatches, fork pull requests, and hosted retries use only that store cache, and the separate store-warmer is skipped when preflight already owns either exact-cache write. Cache restore/save failures are optimization misses rather than correctness failures, and normal branch scoping, LRU, and inactivity eviction bound obsolete archives. The former mutable dependency StickyDisk path was retired after repeated successful writers acknowledged commits that later runs still restored as empty filesystems.
 - Node shard and build-artifact jobs also restore Node's portable on-disk compile cache through immutable Actions caches. In GitHub-hosted outage mode, the hosted Vitest lane set above restores the same test-scope archive alongside the transform seed. Independent `test` and `build` namespaces prevent their writers from replacing each other's archives: the scheduled test warmer owns the protected test seed, while `build-artifacts` may publish at most one protected build archive per UTC day from trusted `main` pushes. PR and ordinary test jobs only read protected snapshots, so feature-branch bytecode never enters the shared seed and PR traffic creates no cache archives. This reuses V8 bytecode for Node-loaded orchestration, build tooling, and external dependencies across different checkout paths, including when only part of the source graph changes. A maximum-size 2 GiB transform archive costs roughly 15–20 seconds to restore at about 125 MB/s; measured fast-contract transforms are roughly 21 seconds against an approximately 8-second restore, and broader cold imports reach roughly 100–143 seconds. The optimization should be reverted if measured savings fall below restore cost. Vitest child processes disable an inherited compile cache because coverage can be enabled inside dynamic configs and V8 coverage can lose source-position precision when scripts are deserialized from bytecode.
 - Hosted `check-lint` restores and saves the same content-keyed extension package-boundary archive as the dedicated boundary lane before rebuilding any missing declarations; Blacksmith keeps its read-only sticky-disk fast path. The Control UI and UI E2E jobs share a Linux Playwright Chromium archive keyed by the exact pinned Playwright version. `macos-node` saves the pnpm store after an exact miss, allowing both hosted and Blacksmith macOS runners to seed the cache they already restore.
@@ -906,7 +906,7 @@ The `Install Smoke` workflow no longer runs on pull requests or `main` pushes. I
 - The root Dockerfile smoke image is built once per target SHA, bound to the workflow revision and producer attempt in an immutable artifact, then loaded by the CLI smoke, agents delete shared-workspace CLI smoke, container gateway-network E2E, and bundled `matrix` plugin build-arg smoke. The plugin smoke verifies runtime dependency install mirroring and that the plugin loads without entry-escape diagnostics.
 - QR package install and the installer/update Docker smokes (including Rocky Linux installer lanes and an update lane against a configurable `update_baseline_version` npm baseline) run as separate jobs so installer work does not wait behind the root image smokes.
 
-The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
+The slow Bun global install and runtime smoke is separately gated by `run_bun_global_install_smoke`. It installs the candidate with trusted lifecycle scripts, then verifies representative CLI, local-agent, and Gateway paths under Bun 1.4 or newer. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
 ## Local Docker E2E
 
@@ -2850,7 +2850,7 @@ Agent-turn jobs default to the creating conversation when the create request car
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
@@ -4350,20 +4350,29 @@ OpenClaw creates a mirrored one-task flow automatically when a detached ACP or s
 
 ## Flow statuses
 
-| Status      | Meaning                                                                    |
-| ----------- | -------------------------------------------------------------------------- |
-| `queued`    | Created, not yet progressing                                               |
-| `running`   | Flow is actively progressing                                               |
-| `waiting`   | Managed flow is parked on wait metadata (timer, external event)            |
-| `blocked`   | A step finished without a usable result; `blockedTaskId`/summary say which |
-| `succeeded` | Completed successfully                                                     |
-| `failed`    | Completed with an error                                                    |
-| `cancelled` | Cancel requested and all child tasks settled                               |
-| `lost`      | Flow lost its authoritative backing state                                  |
+| Status      | Meaning                                                           |
+| ----------- | ----------------------------------------------------------------- |
+| `queued`    | Created, not yet progressing                                      |
+| `running`   | Flow is actively progressing                                      |
+| `waiting`   | Managed flow is parked on wait metadata (timer, external event)   |
+| `blocked`   | Waiting on a blocking condition, or ended without a usable result |
+| `succeeded` | Completed successfully                                            |
+| `failed`    | Completed with an error                                           |
+| `cancelled` | Cancel requested and all child tasks settled                      |
+| `lost`      | Flow lost its authoritative backing state                         |
+
+`blocked` is the only status whose terminal meaning depends on the record. A
+managed flow with no `endedAt` remains resumable. A `blocked` flow with
+`endedAt` is finished, including mirrored flows whose backing task completed
+with a blocked outcome.
 
 ## Durable state and revision tracking
 
 Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The legacy `flows/registry.sqlite` sidecar from older installs is imported by `openclaw doctor`.
+
+Gateway maintenance retains finished flows for 7 days, then prunes them. This
+includes `blocked` flows with `endedAt`; resumable managed `blocked` flows are
+retained regardless of age.
 
 ## Cancel behavior
 
@@ -4525,6 +4534,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     # Filter by runtime or status
     openclaw tasks list --runtime acp
     openclaw tasks list --status running
+    openclaw tasks list --status blocked
     ```
 
   </Tab>
@@ -4633,6 +4643,10 @@ Execution and result delivery are separate. A subagent task can remain
 terminal outcome is `succeeded` after delivery and `blocked` when the work
 finished but the result could not be handed back. This preserves the completed
 result instead of misreporting the child execution as failed.
+
+Use `openclaw tasks list --status blocked` to find these tasks. They also remain
+in `--status succeeded` results because the underlying execution succeeded, and
+JSON output preserves the stored status plus the `blocked` terminal outcome.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
@@ -4840,7 +4854,7 @@ Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles four things:
+A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles five things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -4854,6 +4868,9 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
+  </Step>
+  <Step title="Task Flow retention">
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 
@@ -6199,6 +6216,9 @@ query or Gateway polling.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
+Each room can override `groupPolicy`, `groupAllowFrom`, or both. An omitted room
+setting inherits the account-wide value; an explicitly empty room allowlist
+denies every sender when its effective policy is `"allowlist"`.
 Set `requireMention: true` only when the Buzz client used by those members can
 address the bot identity.
 
@@ -6238,6 +6258,24 @@ For a narrower sender policy:
     buzz: {
       groupPolicy: "allowlist",
       groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+    },
+  },
+}
+```
+
+To restrict one room while keeping other configured rooms open:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groupPolicy: "open",
+      groups: {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+        },
+      },
     },
   },
 }
@@ -9680,6 +9718,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
+| `channels.feishu.accounts.<id>.replyToMode`              | Per-account reply-reference mode                                                     | inherited                            |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
@@ -9692,6 +9731,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
@@ -12022,7 +12062,10 @@ IRC does not provide a replayable delivery ID or resend messages missed by a dis
 | `realname`                    | `OpenClaw`                    | Realname/GECOS field                                        |
 | `password` / `passwordFile`   | none                          | Server password; file must be a regular file                |
 | `channels`                    | none                          | Channels to join (`["#openclaw"]`)                          |
+| `replyToMode`                 | `all`                         | Reply-reference mode: `off`, `first`, `all`, or `batched`   |
 | `accounts` / `defaultAccount` | none                          | Multi-account setup; env vars fill only the default account |
+
+Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
 
 ## Security defaults
 
@@ -15877,6 +15920,7 @@ Provider options:
 - `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
 - `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.replyToMode`: reply-reference mode (`off | first | all | batched`; default: `all`). Named accounts can override it with `channels.nextcloud-talk.accounts.<id>.replyToMode`.
 - `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
 - `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).
@@ -21521,7 +21565,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
   --poll-duration-seconds 300 --poll-public
 ```
 
-    Telegram-only poll flags: `--poll-duration-seconds` (5-600), `--poll-anonymous`, `--poll-public`, `--thread-id` (or a `:topic:` target). `--poll-option` repeats 2-12 times (Telegram's option cap).
+    Telegram-only poll flags: `--poll-duration-seconds` (5-604800; up to seven days), `--poll-anonymous`, `--poll-public`, `--thread-id` (or a `:topic:` target). `--poll-option` repeats 2-12 times (Telegram's option cap).
 
     Telegram send also supports `--presentation` with `buttons` blocks for inline keyboards (when `channels.telegram.capabilities.inlineButtons` allows it), `--pin` or `--delivery '{"pin":true}'` to request pinned delivery when the bot can pin in that chat, and `--force-document` to send outbound images, GIFs, and videos as documents instead of compressed/animated/video uploads.
 
@@ -25488,6 +25532,10 @@ openclaw approvals resolve <id> allow-always
 openclaw approvals resolve <id> deny --reason "Not expected during maintenance"
 ```
 
+For exec requests, `allow-always` means **always allow here**: the generated
+grant is tied to the command's exact arguments and current working directory.
+The same command from another directory requires a separate approval.
+
 The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.
 
 `--reason` adds a local note to the CLI confirmation. The current Gateway approval record has no free-text resolution-reason field, so this note is not persisted or sent to other approval surfaces.
@@ -25581,6 +25629,7 @@ No target flag means the local approvals row in the shared state database.
 ## Notes
 
 - The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
+- After upgrading from an argv-only generated-grant version, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
 - Approvals are stored per host in
   `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is
@@ -26090,10 +26139,10 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 
 ## Notes
 
-- The archive embeds a `manifest.json` with the resolved source paths and archive layout.
+- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported.
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, absolute or archive-escaping symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, unsafe symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 
 ## Restore a full archive
@@ -26105,12 +26154,13 @@ live state directory:
 openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-The target must not exist or must be an empty directory. Restore verifies the
-archive and its SQLite databases before creating or writing the target, refuses
-a non-empty target, and removes an incomplete extraction if anything fails. It
-never restores in place and has no `--force` mode. The extracted layout retains
-the archive root, manifest, and `payload/` paths exactly as recorded in the
-archive.
+The target must not exist or must be an empty directory, and it cannot be inside
+the live state directory or any configured live agent directory. Restore
+verifies the archive and its SQLite databases before creating or writing the
+target, refuses a non-empty target, and removes an incomplete extraction if
+anything fails. It never restores in place and has no `--force` mode. The
+extracted layout retains the archive root, manifest, and `payload/` paths
+exactly as recorded in the archive.
 
 <Warning>
   Restoring an archive is time travel. Messaging-channel credentials with
@@ -26126,7 +26176,9 @@ archive.
 Activation is a separate offline operator step. Stop the Gateway, move the
 restored state asset into place or point `OPENCLAW_STATE_DIR` at that asset,
 then run `openclaw doctor` before restarting. Use `manifest.json` as the source
-of truth for the state, config, credentials, and workspace asset paths. See
+of truth for the state, config, credentials, workspace, and configured agent
+paths. Restore custom agent roots to the locations configured by `agentDir`, or
+update those settings to their new locations before restarting. See
 [Restore a full archive](/install/backups#restore-a-full-archive) for the full
 disaster-recovery sequence.
 
@@ -26134,7 +26186,9 @@ disaster-recovery sequence.
 
 Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.
 
-Snapshot creation accepts exactly one named source:
+Snapshot creation accepts exactly one named source. Agent sources always use
+the current configuration's resolved `<agentDir>/openclaw-agent.sqlite`, even
+when `agentDir` is outside the state directory:
 
 | Command                                                         | Database               |
 | --------------------------------------------------------------- | ---------------------- |
@@ -26182,7 +26236,8 @@ agents/<agentId>/schema.sql
 agents/<agentId>/tables/<table>.jsonl
 ```
 
-Initialize the repository, then create a snapshot of all registered databases:
+Initialize the repository, then create a snapshot of the shared database and
+all configured agent databases:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
@@ -26201,7 +26256,7 @@ scope. With `--all`, it validates every existing entry under `agents/` before
 removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
 before anything is deleted.
 
-You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
 
 Git staging is restricted to the backup-owned `global` and `agents` paths;
 unrelated files elsewhere in an adopted repository are never staged.
@@ -26285,35 +26340,78 @@ Every real archive, SQLite snapshot, and Git create attempt records a compact ou
 - The state directory (usually `~/.openclaw`)
 - The active config file path
 - The resolved `credentials/` directory when it exists outside the state directory
+- Every configured agent directory, including custom `agentDir` roots outside the state directory
 - Workspace directories discovered from the current config, unless you pass `--no-include-workspace`
+- Durable resources declared by effectively activated, loadable plugin manifests
 
-Auth profiles and other per-agent runtime state live in SQLite under the state directory (`agents/<agentId>/agent/openclaw-agent.sqlite`), so they are covered by the state backup entry automatically.
+Auth profiles and other per-agent runtime state live in
+`<agentDir>/openclaw-agent.sqlite`. The default agent root is
+`<stateDir>/agents/<agentId>/agent`, but a custom root remains authoritative
+whether it is outside the state directory, inside a workspace, or nested under
+an otherwise regenerable managed state root. `--no-include-workspace` omits
+ordinary workspace sources, not configured agent directories.
 
-`--only-config` skips state, credentials-directory, and workspace discovery and archives only the active config file path.
+`--only-config` skips state, agent, credentials-directory, workspace, and
+plugin-resource discovery and archives only the active config file path.
 
-OpenClaw canonicalizes paths before building the archive: if config, the credentials directory, or a workspace already live inside the state directory, they are not duplicated as separate top-level backup sources. Missing paths are skipped.
+OpenClaw builds one immutable, configuration-derived ownership inventory before
+planning sources, SQLite snapshots, exclusions, results, and the embedded
+manifest. Paths are canonicalized: config, credentials, workspaces, and agents
+already covered by another included root are not duplicated as top-level
+sources. A custom agent root becomes a distinct `agent` asset only when no
+existing asset covers it; the manifest still records its agent id and root when
+another asset contains it. Missing paths are reported as skipped.
 
 During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
 
-| State-relative scope                         | Skipped file suffixes         |
-| -------------------------------------------- | ----------------------------- |
-| `sessions/**`                                | `.jsonl`, `.log`              |
-| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`              |
-| `cron/runs/**`                               | `.jsonl`, `.log`              |
-| `logs/**`                                    | `.jsonl`, `.log`              |
-| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp` |
-| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp` |
-| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`       |
+| State-relative scope                         | Skipped entries                                       |
+| -------------------------------------------- | ----------------------------------------------------- |
+| `sessions/**`                                | `.jsonl`, `.log`                                      |
+| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`                                      |
+| `cron/runs/**`                               | `.jsonl`, `.log`                                      |
+| `logs/**`                                    | `.jsonl`, `.log`                                      |
+| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp`                         |
+| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp`                         |
+| `browser/<profile>/user-data/`               | `SingletonCookie`, `SingletonLock`, `SingletonSocket` |
+| `sandbox/skills-workspaces/**`               | All entries                                           |
+| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
 
-These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted.
+These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
 
-SQLite databases under the state directory are captured with SQLite's online backup API and compacted offline with `VACUUM` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a direct file copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
+Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
+
+SQLite databases owned by the state directory or any configured agent directory
+are captured with SQLite's online backup API and compacted offline with
+`VACUUM`, including custom agent roots covered by a workspace or managed state
+asset. Committed WAL changes are included, deleted-page remnants and transient
+leases are removed, sidecars are omitted, and canonical OpenClaw databases must
+match their expected role and agent owner. Unsafe aliasing or an owner mismatch
+fails closed. A plugin-owned database that requires unavailable owner-defined
+SQLite capabilities also fails closed rather than falling back to a direct file
+copy. Other workspace SQLite files outside configured agent roots remain raw
+workspace files and do not receive the SQLite snapshot or compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
-The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata. Other relative symbolic links are retained when their targets stay inside the archive root; verification rejects absolute or archive-escaping targets.
+The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata.
 
-Installer-managed and rebuildable runtime roots under the state directory are also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and `tools/`. These contain managed checkouts, package trees, compiler caches, temporary files, and downloaded runtimes rather than authoritative user state; reinstall or update the corresponding runtime or plugin after restore. An explicitly configured config file, credentials directory, or workspace inside one of these roots remains included.
+Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
+
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+
+Installer-managed and rebuildable runtime roots under the state directory are
+also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
+`tools/`. These contain managed checkouts, package trees, compiler caches,
+temporary files, and downloaded runtimes rather than authoritative user state;
+reinstall or update the corresponding runtime or plugin after restore.
+Effectively activated, loadable plugins can declare additional durable or
+regenerable state- or agent-relative roots through
+[`backupResources`](/plugins/manifest#backupresources-reference). Disabled or
+unloadable plugins cannot exclude data. Explicit config, credentials, workspace,
+agent, and plugin-included paths override exclusions, and any excluded parent
+remains traversable to reach those protected descendants. Names such as `tmp`
+and `.tmp` are not blanket exclusions in custom agent directories; only an
+applicable owner declaration can omit their durable-looking siblings.
 
 Local edits inside a managed `dev/` checkout are developer source, not OpenClaw product state, and are not included. Commit and push those edits or copy the checkout separately before relying on a state backup.
 
@@ -26321,7 +26419,12 @@ Local edits inside a managed `dev/` checkout are developer source, not OpenClaw 
 
 `openclaw backup` bypasses the normal config preflight so it can still help during recovery. Workspace discovery depends on a valid config, so `openclaw backup create` fails fast when the config file exists but is invalid and workspace backup is still enabled.
 
-For a partial backup in that situation, rerun with `--no-include-workspace`: it keeps state, config, and the external credentials directory in scope while skipping workspace discovery entirely.
+For a partial backup in that situation, rerun with
+`--no-include-workspace`: it keeps state, config, and the external credentials
+directory in scope without workspace discovery. Because malformed configuration
+also prevents resolving custom agent ownership and effectively activated plugin
+resources, the result records those unresolved scopes as skipped diagnostics;
+do not treat that recovery archive as a complete backup.
 
 `--only-config` also works when the config is malformed, since it does not parse the config for workspace discovery.
 
@@ -29299,6 +29402,13 @@ Doctor has five postures:
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
 
+After an exec-approval format upgrade, Doctor reports older generated approvals
+that are no longer active because they were not tied to a working directory.
+`openclaw doctor --fix` removes those inactive generated entries and leaves
+manual allowlist rules unchanged. Rerun affected workflows and choose
+**Always allow here** to renew trust for the intended directory. The normal
+`openclaw update` finalization runs this safe repair automatically.
+
 ## Examples
 
 ```bash
@@ -29681,7 +29791,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
-- On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
+- On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to rewrite the managed base unit. If a systemd drop-in overrides `ExecStart=` or `WorkingDirectory=`, inspect it with `systemctl --user cat <unit>.service` and update or remove that drop-in yourself; reinstalling the base does not replace it. `Environment=` drop-ins remain supported.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` to replace the launcher.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
@@ -30500,6 +30610,7 @@ openclaw gateway status --require-rpc
     - Use `--require-rpc` in scripts/automation when a listening service is not enough and you need read-scope RPC to be healthy too.
     - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
+    - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
     - Human output includes `Gateway heap:` with the applied limit and its adaptive derivation. JSON output exposes the same report as `service.gatewayHeap`.
 
@@ -30724,6 +30835,7 @@ openclaw gateway restart
     - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
     - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
+    - On Linux, `gateway start` and `gateway restart` also refuse ineffective repairs when an operator-owned systemd drop-in overrides the command or working directory. Inspect the effective unit with `systemctl --user cat <unit>.service`, then update or remove that drop-in. `gateway install --force` rewrites only the managed base unit and warns if the override remains; `Environment=` drop-ins remain supported.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.
@@ -30870,6 +30982,13 @@ Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
 `openclaw hooks list`. The command discovers hooks from workspace, managed,
 extra, and bundled directories.
 
+Hook reports (`hooks`, `list`, `info`, and `check`) first request the selected
+Gateway's inventory. Configured remote Gateways and explicit
+`OPENCLAW_GATEWAY_URL` targets are authoritative: missing URLs, connection or
+authentication failures, and unsupported methods fail instead of showing
+client-local hooks. An implicitly selected local Gateway may fall back to local
+discovery when it is offline or does not support the current hook-report method.
+
 - `--eligible`: only hooks whose requirements are met.
 - `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
@@ -30973,7 +31092,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 - Failed hook reports use the standard [CLI JSON failure envelope](/cli#json-failures); missing hook info also includes the requested `hook` name.
-- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when an implicit local Gateway requires older-version or offline read-only discovery.
 
 ## Related
 
@@ -31010,7 +31129,7 @@ Setup commands by intent:
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                 |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
-| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                                                     |
+| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
 | Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
@@ -31111,6 +31230,7 @@ openclaw [--dev] [--profile <name>] <command>
     validate
   completion
   doctor
+  triage
   dashboard
   backup
     create
@@ -32777,7 +32897,7 @@ Notes:
 
 ## MCP Apps
 
-OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server and can request app-visible tools or resources from that same server.
+OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server. A view with current App-interaction authority can request app-visible tools and resources from that same server.
 
 Enable the host bridge:
 
@@ -32825,8 +32945,9 @@ Behavior and security boundaries:
 - Only `ui://` resources with the exact `text/html;profile=mcp-app` MIME type render.
 - UI resources are capped at 2 MiB, placed behind a double-iframe proxy on a dedicated outer origin, loaded into an opaque inner App origin, and constrained by CSP derived from the resource metadata.
 - App-only tools (`_meta.ui.visibility: ["app"]`) stay out of model tool lists. Apps can call only app-visible tools on their owning server that also pass the effective OpenClaw tool policy for the run that created the view.
+- Same-server resource listing and reads require that same current App-interaction authority. OpenClaw rechecks after upstream resource work, so a grant revoked in flight cannot return resource data to the App.
 - Origin-bound App permissions such as camera, microphone, and geolocation are not granted while inner App documents use opaque origins for cross-App isolation.
-- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` resource; reconstructed views are read-only until a fresh run establishes current tool permissions.
+- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` document for display; reconstructed views cannot call tools or use the resource bridge until a fresh run establishes current App-interaction authority.
 - In channel conversations, the latest successful App view in a turn adds one **Open App**-style action to the final assistant reply. Telegram DMs use a native Mini App button; Slack and Discord render the same portable action as a link. Other channels keep the original reply text and append an understandable HTTPS link.
 - Channel launch links are available only when Gateway Tailscale exposure has prepared a published HTTPS origin. `gateway.tailscale.mode: "serve"` is reachable only from the tailnet; password-authenticated `"funnel"` is reachable from the public internet. Externally managed Funnel routes targeting the ordinary Gateway listener must migrate to managed `"funnel"` mode before OpenClaw can publish an internet-reachable origin. See [Tailscale](/gateway/tailscale).
 - Launch tickets are opaque, minted only while materializing the final channel reply, and expire after at most two minutes or when the underlying view lease expires, whichever comes first. The URL does not contain Gateway bearer credentials, session keys, view metadata, App HTML, tool input, or tool results.
@@ -33228,6 +33349,11 @@ true}`. `--pin` is shorthand for pinned delivery when the channel supports
 - `--silent` (Telegram, Discord): send without a notification.
 - `--gif-playback` (WhatsApp only): treat video media as GIF playback.
 
+When a send is suppressed by a message hook, fails, or only partially succeeds,
+the command explains the outcome and exits nonzero. Partial delivery keeps any
+confirmed message ID. JSON failures include `ok: false`, `deliveryStatus`, and
+`error`; successful JSON responses retain their existing shape.
+
 ```bash
 openclaw message send --channel discord \
   --target channel:123 --message "Choose:" \
@@ -33287,7 +33413,7 @@ openclaw message poll --channel discord \
 - `--poll-option <choice>`: repeat 2-12 times.
 - `--poll-multi`: allow multiple selections.
 - Discord: `--poll-duration-hours`, `--silent`, `--message`.
-- Telegram: `--poll-duration-seconds <n>` (5-600), `--silent`,
+- Telegram: `--poll-duration-seconds <n>` (5-604800; up to seven days), `--silent`,
   `--poll-anonymous` / `--poll-public`, `--thread-id`.
 
 ```bash
@@ -33663,7 +33789,7 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `scan`, `aliases`, and `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`/`set-image` reject `--agent` outright. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
@@ -34616,8 +34742,11 @@ Output: `--suppress-gateway-token-output` disables the automatic Control UI hand
 
 <Note>
 `--json` does not imply non-interactive mode in guided or classic onboarding.
+Without an interactive terminal, both onboarding modes return a structured
+JSON error; add `--non-interactive --accept-risk` for automation.
 With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
-single result. Use `--non-interactive` for other scripts.
+single result. Use `--non-interactive` for other scripts. Invalid existing
+configuration also returns one JSON failure; repair guidance remains on stderr.
 </Note>
 
 ## Provider prefiltering
@@ -38964,10 +39093,19 @@ and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
 ./path` copies a local skill directory. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
-still inspect the local skills visible to the current workspace and config.
-Workspace-backed commands resolve the target workspace from `--agent <id>`,
-then the current working directory when it is inside a configured agent
-workspace, then the default agent.
+and bare `openclaw skills` request the selected Gateway's authoritative skill
+inventory. A configured remote Gateway or an explicit `OPENCLAW_GATEWAY_URL`
+never falls back to client-local skills: missing URLs, connection failures, and
+authentication errors remain visible. Only an implicitly selected local Gateway
+can fall back to local inventory when it is unavailable. Workspace-backed
+commands resolve the target workspace from `--agent <id>`, then the current
+working directory when it is inside a configured agent workspace, then the
+default agent.
+
+Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
+the same target boundary. They never read or mutate client-local state after an
+explicitly selected Gateway fails; intentional offline behavior remains
+available only for an implicitly selected local Gateway.
 
 Git and local directory installs expect `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is valid, then
@@ -39020,7 +39158,7 @@ Notes:
 | `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
-| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Daily collection review does not use this state.                                                                                                                                                                                                              |
+| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Weekly collection review does not use this state.                                                                                                                                                                                                             |
 
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.
@@ -39332,6 +39470,7 @@ openclaw tasks
 openclaw tasks list
 openclaw tasks list --runtime acp
 openclaw tasks list --status running
+openclaw tasks list --status blocked
 openclaw tasks show <lookup>
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
@@ -39347,11 +39486,11 @@ openclaw tasks flow cancel <lookup>
 
 ## Root Options
 
-| Flag               | Description                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `--json`           | Output JSON.                                                                                       |
-| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                               |
-| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, or `lost`. |
+| Flag               | Description                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--json`           | Output JSON.                                                                                                  |
+| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                                          |
+| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, `lost`, or `blocked`. |
 
 ## Subcommands
 
@@ -39362,6 +39501,11 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 ```
 
 Lists tracked background tasks newest first.
+
+Use `--status blocked` to find completed tasks whose result delivery is blocked.
+These tasks retain their stored `succeeded` status and also remain included in
+`--status succeeded` results; JSON task records keep the same stored status and
+`terminalOutcome` fields.
 
 ### `show`
 
@@ -39654,6 +39798,66 @@ The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
 `zoom-meetings`, respectively. Meeting providers attach to an already-active
 meeting bot session; normal meeting joins do not need an `autoStart` entry.
+
+
+
+# Section: cli/triage.md
+
+---
+summary: "CLI reference for `openclaw triage` (sanitized diagnostics and agent handoff)"
+read_when:
+  - OpenClaw is misbehaving and you want an agent-ready debugging prompt
+  - You need a sanitized diagnostics bundle without applying repairs
+title: "Triage"
+---
+
+# `openclaw triage`
+
+Run read-only Doctor checks, collect the existing sanitized diagnostics archive, and write a bounded Markdown prompt for an agent debugging this OpenClaw installation.
+
+```bash
+openclaw triage
+```
+
+The prompt includes the OpenClaw version, platform, Node.js version, prioritized Doctor findings with repair hints, and the diagnostics archive path. The archive contains sanitized config, Gateway status and health snapshots, operational log summaries, and available stability diagnostics. If the Gateway is unreachable, triage still writes the prompt and explains why the archive is unavailable.
+
+Secrets, tokens, raw chat payloads, and raw logs are excluded. Paths inside the prompt are shown relative to `~` or `$OPENCLAW_STATE_DIR`; the saved prompt path, archive path, and printed handoff commands retain the real absolute paths needed by your shell. Doctor checks remain advisory and do not apply repairs.
+
+## Agent handoff
+
+In an interactive terminal, triage detects the agent handoff routes available on the current machine and asks which one to use. A configured OpenClaw embedded agent appears first, followed by Claude Code when `claude` is on `PATH`, Codex CLI when `codex` is on `PATH`, and an option to just print the commands.
+
+Choosing Claude Code or Codex starts its interactive session directly with the generated prompt. Choosing the embedded agent first verifies the configured model with a live inference check, then runs one OpenClaw agent turn. `--run` requests that same verified embedded route explicitly.
+
+On Windows, agents installed only as `.cmd` or `.bat` command shims appear in the manual handoff commands instead of the direct-launch picker.
+
+Non-interactive sessions and the print-only choice provide these manual handoff commands instead:
+
+```bash
+claude "$(cat '<prompt-path>')"
+codex exec - < '<prompt-path>'
+openclaw triage --run
+```
+
+JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. JSON output and non-interactive sessions never start an agent.
+
+## Output and exit codes
+
+The prompt is written to `logs/support/` inside the state directory with owner-only permissions, alongside the diagnostics archive when one was produced. Both paths are printed, and `--json` returns them plus finding counts by severity.
+
+A launched agent inherits the current environment, so it inspects the same installation the prompt describes, including a custom `OPENCLAW_STATE_DIR`. Triage exits with the launched agent's exit code. If the agent cannot be started, triage prints its manual command and exits non-zero. Selecting the embedded agent when no model is configured reports the missing model and exits non-zero without starting a turn.
+
+## Options
+
+| Option        | Effect                                                                           |
+| ------------- | -------------------------------------------------------------------------------- |
+| `--json`      | Emit prompt and archive paths, finding counts, detected agents, and commands.    |
+| `--no-export` | Skip the diagnostics archive and only generate the debugging prompt.             |
+| `--run`       | Run one embedded agent turn after checking the model in an interactive terminal. |
+
+`--json` cannot be combined with `--run`.
+
+Related: [Doctor](/cli/doctor), [Gateway](/cli/gateway), and [Troubleshooting](/help/troubleshooting).
 
 
 
@@ -41043,23 +41247,23 @@ title: "Worker"
 
 # `openclaw worker`
 
-`openclaw worker` is the restricted runtime entry point for a cloud worker
-orchestrator to launch inside a prepared worker environment. It is not a
-general-purpose command for manual worker registration.
+`openclaw worker` is the restricted runtime entry point for a Gateway-owned
+launcher to start inside a prepared cloud or paired-node worker environment.
+It is not a general-purpose command for manual worker registration.
 
-The gateway installs the matching OpenClaw bundle and opens the host-key-pinned
-reverse SSH tunnel. The worker launcher starts this command with a prepared
-assignment. The command connects through the tunnel-forwarded local socket and
-admits as the dedicated `worker` role.
+The Gateway installs the matching OpenClaw bundle through the enrolled node's
+authenticated connection. The worker launcher starts this command with a
+prepared assignment, and the worker connects back to the Gateway over its own
+authenticated outbound WebSocket as the dedicated `worker` role.
 
 ## Launch contract
 
 The command reads exactly one bounded JSON launch envelope from standard input.
-The envelope carries the local socket location, minted worker credential, bundle
-and protocol identity, owner epoch, the single assigned session and turn, and the
-exact worker-local tool names authorized for that turn. The Gateway resolves this
-final tool set from current policy before handoff; raw config and scheduled-owner
-identity never enter the worker envelope.
+The envelope carries the Gateway worker endpoint, minted worker credential,
+bundle and protocol identity, owner epoch, the single assigned session and turn,
+and the exact worker-local tool names authorized for that turn. The Gateway
+resolves this final tool set from current policy before handoff; raw config and
+scheduled-owner identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
@@ -41092,8 +41296,8 @@ managed-worktree session through the Gateway, while a worker process cannot
 dispatch itself or another worker.
 
 The prepared assignment carries the transcript context, accepted base leaf,
-commit sequence, and live-event cursor. On a tunnel reconnect, the process
-re-admits with the same credential and owner epoch, retains the accepted
+commit sequence, and live-event cursor. On a worker WebSocket reconnect, the
+process re-admits with the same credential and owner epoch, retains the accepted
 transcript base, replays its unacknowledged live-event tail, and reattaches an
 in-flight inference turn with the same identity. The terminal inference message
 is authoritative if streamed deltas were missed. A superseding owner epoch
@@ -41105,11 +41309,11 @@ duplicate commit is produced; any still-uncommitted in-memory tail from that
 run is lost. Relaunch belongs to the milestone-3 placement owner, which must
 create a fresh assignment from the gateway's authoritative transcript and
 commit ledger. Likewise, a gateway process restart terminates a pending
-inference turn with a provider error; only a tunnel or worker WebSocket
-reconnect can reattach to an active same-process inference stream.
+inference turn with a provider error; only a worker WebSocket reconnect can
+reattach to an active same-process inference stream.
 
 See [Gateway protocol](/gateway/protocol#worker-role-and-closed-protocol) for the
-closed worker RPC surface and [Cloud workers plan](/plan/cloud-workers) for the
+closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the
 architecture and security model.
 
 
@@ -45128,7 +45332,9 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless an explicit force delete discards snapshot safety.
+
+Nested Git repositories and linked worktrees are separate ownership boundaries. Automatic cleanup preserves the outer worktree even when a nested linked worktree shares its Git common directory. A nested OpenClaw-managed worktree is cleaned only through its own managed-worktree record.
 
 OpenClaw applies these cleanup rules:
 
@@ -46172,11 +46378,15 @@ classified from the sender, while a memory flush records the least-trusted
 class for the whole file; trusted lines in a downgraded file intentionally lose
 promotion eligibility so untrusted content cannot ride a trusted file hash.
 
-The current runtime does not propagate content origin within an owner turn.
-Assistant text derived from tool or web output therefore inherits the turn's
-sender class. A follow-up should carry content-origin metadata through tool-result
-assembly into assistant output and flush writes; that cross-cutting taint model
-is not part of this memory integration.
+Content origin also propagates within a turn. When a tool result declares
+network-sourced content (web fetches, browser reads, search results), the rest
+of that turn is marked tainted: every assistant message produced after that
+result carries the taint, and memory classification treats it as `untrusted`
+even inside an owner turn. The taint clears on the next user message. The
+remaining gap is declaration coverage: only tools that declare their results
+as network-sourced participate, so output from tools that do not — local file
+reads, for example — does not taint the turn, and assistant text derived from
+it keeps its normal turn-derived provenance (`agent` in an owner turn).
 
 ## The write path
 
@@ -47024,8 +47234,9 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
 
 ### MMR (diversity)
 
@@ -48155,7 +48366,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - overloaded/provider-busy errors
     - timeout-shaped failover errors
     - billing disables
-    - `LiveSessionModelSwitchError`, which is normalized into a failover path so a stale persisted model does not create an outer retry loop
+    - `LiveSessionModelSwitchError` for a stale current or earlier candidate; later configured targets redirect directly, while targets outside the chain return to the bounded session-model retry owner
     - other unrecognized errors when there are still remaining candidates
 
   </Tab>
@@ -48198,6 +48409,7 @@ Live model switching follows these rules:
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
+- If a live switch selects a model outside the active fallback chain, OpenClaw returns the original switch to the agent, reply, or isolated-cron retry owner so the selected model can complete the same turn.
 
 The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
 
@@ -49287,9 +49499,9 @@ Each agent has its own:
 
 - **Workspace**: files, `AGENTS.md`/`SOUL.md`/`USER.md`, local notes, persona rules.
 - **State directory** (`agentDir`): auth profiles, model registry, per-agent config.
-- **Session store**: chat history and routing state in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+- **Session store**: chat history and routing state in `<agentDir>/openclaw-agent.sqlite`.
 
-Auth profiles are per-agent, read from:
+Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With the default layout, that resolves to:
 
 ```text
 ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
@@ -49323,7 +49535,7 @@ when personas must not share compiled wiki knowledge.
 | Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
 | Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
-| Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
+| Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
 ### Single-agent mode (default)
@@ -49377,7 +49589,7 @@ the configured roster, its children appear at the root of the tree.
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store. By default, those agent files live under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -52236,9 +52448,11 @@ provider names.
 ## Transport adapters
 
 `qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
-the synthetic default. `crabline` starts local provider-shaped servers and
-runs OpenClaw's normal channel plugins against them. `live` is reserved for
-real provider credentials and external channels.
+the synthetic default. `crabline` starts separate local provider servers and
+runs OpenClaw's normal channel plugins against their provider-shaped REST and
+streaming boundaries; it does not use Crabline's fixture-level local mock
+providers. `live` is reserved for real provider credentials and external
+channels.
 
 At the architecture level, the split is:
 
@@ -54360,7 +54574,7 @@ the same policy under `streaming.progress`:
 ---
 summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
-  - Editing system prompt text, tools list, or time/heartbeat sections
+  - Editing system prompt text, tools list, or temporal sections
   - Changing workspace bootstrap or skills injection behavior
 title: "System prompt"
 ---
@@ -54403,11 +54617,10 @@ The prompt is compact, with fixed sections:
 - **Temporal Context**: local date and time zone below the cache boundary; exact time comes from `session_status` when available.
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
-- **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Heartbeats**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
 
 Tooling also carries long-running-work guidance:
 
@@ -54431,7 +54644,7 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
@@ -54461,7 +54674,7 @@ Agent identity, instructions, and memory are resolved from the configured agent 
 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. `SOUL.md`, `IDENTITY.md`, and `USER.md` remain turn-scoped collaboration developer instructions and intentionally do not flow to native sub-agents. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
 
-Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to heartbeat turns; normal turns do not receive it. The default agent's system prompt automatically includes heartbeat guidance while its cadence is enabled, with no independent heartbeat setting to hide that section.
+Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to the scheduled heartbeat user message; normal turns do not receive it, and the system prompt contains no heartbeat-specific section.
 
 On non-Codex harnesses, the remaining bootstrap files compose into the OpenClaw prompt per their existing gates. Keep injected files concise, especially non-Codex `MEMORY.md`: it should stay a curated long-term summary, with detailed daily notes in `memory/*.md` retrievable on demand via `memory_search` / `memory_get`. Oversized non-Codex `MEMORY.md` files increase prompt usage and can be partially injected under the bootstrap file limits below.
 
@@ -56465,9 +56678,9 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic model selection through the local `claude-cli` backend and store the matching OpenClaw auth profile.
+This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-At run time OpenClaw treats a reused Claude CLI login as Claude's own credential: it verifies the host's current `claude` login matches the selected profile's account and then lets the `claude` subprocess authenticate natively, so Claude keeps refreshing its own login during runs. OpenClaw never forwards a copied token for this path. If the host login is missing or belongs to a different account, the run fails before spawn with the exact re-authentication commands. OpenClaw-managed credentials (Anthropic OAuth login profiles, setup tokens, API keys) are still delivered to the subprocess directly and refreshed by OpenClaw where applicable.
+OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
 
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
@@ -57222,10 +57435,11 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled Anthropic plugin runs the installed Claude Code executable through
 Anthropic's official Agent SDK. Claude Code owns its existing local login and
-subscription; OpenClaw does not extract that login or send synthesized
-Anthropic API requests. Compatible agent turns share one warm SDK query and
-Claude Code subprocess. A changed model, system prompt, authenticated identity,
-or tool policy starts a new query; persisted Claude session IDs still provide
+subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
+refreshes, or forwards native tokens, or sends synthesized Anthropic API
+requests. Compatible agent turns share one warm SDK query and
+Claude Code subprocess. A changed model, system prompt, or tool policy starts a
+new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
 Keep Claude Code updated, especially if the SDK reports an incompatible
@@ -57240,11 +57454,14 @@ claude update
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 The Agent SDK always runs with Claude Code's default permission mode.
-OpenClaw's existing effective exec policy remains authoritative through SDK
-permission callbacks and a `PreToolUse` hook, including when user settings
-would otherwise preapprove a tool. Per-agent and session restrictions still
-override broader global policy. OpenClaw-owned MCP tools remain authorized by
-the Gateway rather than receiving a second Claude-native approval.
+OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
+host control, including when user or enterprise settings would otherwise
+preapprove a call. Native requests pass through canonical `before_tool_call`
+policy before exec policy and approval, with native tool names and file
+arguments projected into their OpenClaw equivalents. Per-agent and session
+restrictions still override broader global policy. OpenClaw-owned MCP tools
+remain authorized by the Gateway rather than receiving duplicate native
+approval; other MCP tools stay host-permission controlled.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's
@@ -57451,12 +57668,12 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
-For `claude-cli`, an imported native OAuth profile reuses the matching,
-identity-verified Claude Code login without forwarding an extracted access
-token. Explicit non-native API-key and token profiles continue to use the
-protected, per-invocation credential-forwarding CLI path, keeping selected
-per-agent profiles authoritative without placing credential values in command
-arguments.
+For `claude-cli`, the installed Claude Code process uses its current native
+login. OpenClaw uses a non-secret route marker and never reads, persists,
+refreshes, selects, or forwards the native tokens.
+Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+Explicit OpenClaw-managed API-key and token profiles continue to use the
+protected, per-invocation credential-forwarding CLI path.
 
 ## Reseed history cap
 
@@ -57587,8 +57804,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
+`usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`usage-refreshing` allows a cold `usage.status` request to return immediately
+with `refreshing: true` and an empty provider list. A client advertising it must
+keep that payload cache-cold and refetch on a short bounded schedule. Other
+clients retain the blocking cold read.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only
@@ -57778,7 +58001,7 @@ status: active
 doc-schema-version: 1
 ---
 
-Cloud workers move a session's coding work onto a throwaway cloud machine while the session stays visible in the sidebar and its transcript remains owned by the Gateway. The bundled Crabbox provider boots the box, runs profile setup, and starts `openclaw connect --ephemeral`. In OpenClaw `worker-turn` mode, the enrolled node receives the Gateway's pinned worker bundle and hosts a restricted `openclaw worker` child. Eligible paired devices can instead carry Codex `remote-exec` without launching an OpenClaw worker child.
+Cloud workers move a session's coding work onto a throwaway cloud machine while the session stays visible in the sidebar and its transcript remains owned by the Gateway. The bundled Crabbox provider boots the box, runs profile setup, and starts `openclaw connect --ephemeral`. One configured Crabbox profile supports both OpenClaw `worker-turn` and Codex `remote-exec` over the same enrolled outbound-node transport. OpenClaw launches a restricted `openclaw worker` child; Codex runs its managed exec-server on the node while keeping app-server and model authentication on the Gateway.
 
 Enrollment is environment-owned and replay-safe. The Gateway persists one setup identity before provider allocation, binds the first authenticated device identity to that exact environment, and reuses the durable device token when provisioning resumes. Initial enrollment and replay both enable worker hosting only for that node process; they do not change durable worker-host configuration. Reclaim or destroy releases the cloud lease and removes the environment-owned node pairing.
 
@@ -57793,14 +58016,14 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 | Concern                            | OpenClaw `worker-turn` mode                          | Codex `remote-exec` mode                                |
 | ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
 | Agent runtime and turn loop        | Cloud box (`openclaw worker`)                        | Gateway (Codex app-server)                              |
-| Command, filesystem, and HTTP work | Cloud box                                            | Paired device or SSH-backed provider sandbox            |
+| Command, filesystem, and HTTP work | Cloud box                                            | Cloud node, paired device, or SSH-backed provider       |
 | Model inference and provider auth  | Gateway, proxied by `{provider, model}` reference    | Gateway, including ChatGPT subscription or API-key auth |
 | Transcript and live session state  | Gateway, fed by the worker's replayable event stream | Gateway through the normal local harness path           |
 | Workspace file state               | Changed on the box; reconciled by the Gateway        | Changed remotely; reconciled by the Gateway             |
 
-The bundled Crabbox cloud provider supports `worker-turn` through the node transport. Codex `remote-exec` supports an explicitly authorized paired device through that device's authenticated duplex node channel, or a cloud provider that explicitly advertises an SSH-backed execution carrier. A Crabbox cloud profile still does not advertise Codex `remote-exec`.
+The bundled Crabbox cloud provider advertises both `worker-turn` and `remote-exec` through its enrolled node transport, so the same cloud profile is available to both harnesses. Codex can also use an explicitly authorized paired device or a provider that retains an SSH-backed remote-execution carrier. A profile that advertises only one mode remains unavailable to the other runtime.
 
-After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control and workspace transfer use the authenticated node and worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
+After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control, Codex remote execution, and workspace transfer use authenticated node or worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
 
 For a loopback Gateway behind public HTTPS ingress, set `gateway.publicOrigin` to the proxy's bare origin. Node enrollment uses it as the default external pairing endpoint; `plugins.entries.device-pair.config.publicUrl` remains the pairing-specific override. If either URL is behind a reverse proxy, including cloudflared, nginx, or externally managed Tailscale Serve, `gateway.trustedProxies` must include the proxy's source address (typically loopback for a same-host proxy). Otherwise, forwarded client headers cause node enrollment to fail with `proxy_attribution_required`.
 
@@ -57899,7 +58122,7 @@ Use `cloudWorkers.projectProfiles` to select a default profile from a managed se
 }
 ```
 
-An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. If a configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
+An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. Deleting a profile from the Cloud workers settings also removes project defaults that reference it. If a manually configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
 
 The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Provision replay first adopts the fixed Crabbox lease, then either resumes that node state or reuses the still-pending setup credential. It never mints a second environment identity for the same operation.
 
@@ -57909,9 +58132,22 @@ OpenClaw derives one canonical `cbx_...` lease ID from the durable provision ope
 
 `settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent — guard installs with a `command -v`/`test -x` check as in the example. At minimum, the resulting machine needs Node.js and `npx`. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
 
+The example profile above prepares OpenClaw worker turns only. To make the same profile Codex-ready, run the following on the Gateway host. It preserves the existing setup, captures the Gateway version, installs that exact OpenClaw release on each cloud node, and installs the matching Codex plugin through the trusted official npm path:
+
+```bash
+gateway_version="$(openclaw --version | awk '{print $2}')"
+existing_setup="$(openclaw config get cloudWorkers.profiles.aws.settings.setup)"
+openclaw config set cloudWorkers.profiles.aws.settings.setup \
+  "${existing_setup}; sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
+```
+
+`--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. Unreleased source builds require exact locally packed packages instead of registry versions.
+
 ### Bundle installation
 
 The setup bootstrap first reuses an installed `openclaw` binary when its version exactly matches the Gateway, then tries the exact `openclaw@<version>` registry package. For an unreleased source build, install a locally packed candidate with the same version in `settings.setup`; the provider will select it before touching the registry. After the node connects and publishes its session-host inventory, the Gateway pushes one content-addressed worker bundle through the paired channel. The node verifies and publishes those exact bytes without installing the normal OpenClaw package dependency tree. A stale Gateway build retires the environment and reprovisions against the current bundle rather than downgrading the execution-context protocol.
+
+Codex remote execution additionally requires `settings.setup` or the cloud image to install the exact official npm `@openclaw/codex` plugin matching the Gateway version, including its pinned platform-native `@openai/codex` dependency. An exact-version bundled plugin is also accepted. Enrollment preserves the plugin's official npm or bundled provenance in the node's isolated per-lease state; it does not install plugins from npm or accept an untrusted local plugin path. A missing, mismatched, or untrusted plugin fails before the node starts.
 
 ### Verify the profile
 
@@ -57923,6 +58159,8 @@ openclaw plugins inspect crabbox --runtime --json
 ```
 
 Changes under `cloudWorkers.profiles` require a Gateway restart. The default `gateway.reload.mode: "hybrid"` watches the config and performs that restart automatically; with reload watching disabled, run `openclaw gateway restart`.
+
+To use the same profile with Codex, enable the Codex plugin on the Gateway, prepare its exact trusted installation in the cloud profile or image, and explicitly add `codex.exec-server.stdio.v1` to `gateway.nodes.commands.allow`. Crabbox activates that prepared plugin inside the cloud node's isolated state only when a Codex session selects the profile. Persistent command enablement does not replace the separate critical allow-once approval required for each exec-server attempt.
 
 After the Gateway is back, prove the profile is advertised and compare it with Crabbox's read-only lease inventory:
 
@@ -57951,12 +58189,9 @@ While a placement is active, OpenClaw automatically samples available space on t
 ### Runtime support
 
 - **OpenClaw** uses `worker-turn` placement. The restricted `openclaw worker` process runs each turn on the leased node and proxies inference through the Gateway.
-- **Codex** uses `remote-exec` placement on an eligible paired device, or with a cloud provider that advertises an SSH-backed execution carrier. The bundled Crabbox cloud profile supports only `worker-turn`, so selecting that profile for Codex still fails before allocation.
+- **Codex** uses `remote-exec` placement on the same bundled Crabbox cloud profile, an eligible paired device, or a provider that advertises an SSH-backed execution carrier. The Gateway keeps the Codex app-server and authentication local; an enrolled cloud node runs only the explicitly authorized Codex exec-server and does not start an OpenClaw worker child.
 
-The Control UI disables cloud destinations whose advertised mode does not match
-the selected runtime, including when moving an existing session. An
-incompatible move is rejected before the active source starts draining or
-changes its durable placement.
+The Control UI checks each cloud destination's advertised execution modes in both New Session and Move Session. One Crabbox **Cloud · profile** row is selectable for OpenClaw and Codex, while a genuinely single-mode provider stays disabled for the other runtime. An incompatible move is rejected before the active source starts draining or changes its durable placement.
 
 Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
 
@@ -57972,9 +58207,7 @@ the node's updated pairing surface if needed. Before each exec-server launch,
 OpenClaw also requires the normal node invocation approval; denying that
 request does not start a process.
 
-Codex launches its exec-server directly, so paired-device placement does not
-consume an OpenClaw worker slot and remains eligible when those slots are full.
-OpenClaw `worker-turn` placement still requires an available worker slot.
+Codex launches its exec-server directly, so paired-device and cloud-node placement do not consume an OpenClaw worker slot and remain eligible when those slots are full. OpenClaw `worker-turn` placement still requires an available worker slot.
 
 Approval permits process execution and filesystem access anywhere the node's
 operating system account allows. The exact placement workspace controls the
@@ -58003,6 +58236,10 @@ reconciliation as worker turns. See
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
 for the exact allowlist configuration and lifecycle.
 
+### Codex or OpenClaw on a cloud profile
+
+The same configured Crabbox profile can host either harness. Select its **Cloud · profile** row after choosing an OpenClaw or Codex model; the selected runtime determines whether provisioning prepares a worker child or the managed Codex exec-server. Codex cloud-node execution requires the same explicit Gateway command allowlist and per-attempt allow-once approval as paired-device execution. It never falls back to Gateway-local or SSH execution if the node command is missing, denied, or disconnected.
+
 For cloud-profile placement, the equivalent RPC flow is:
 
 Create a session with a managed worktree, then dispatch it. Profile dispatch requires `operator.admin` and is available only while at least one worker profile is configured:
@@ -58028,7 +58265,7 @@ openclaw gateway call sessions.dispatch \
 
 The bundled Crabbox provider advertises whatever machine classes the configured Crabbox binary reports for the selected backend, preserving Crabbox's size order. For example, a catalog containing `tiny`, `small`, `standard`, `fast`, `large`, and `beast` produces those six picker rows in that order; if Crabbox reports `standard` as 32 vCPU · 64 GB, that shape appears beside the class. Older binaries that publish no matching class catalog retain the label-only `standard`, `fast`, `large`, and `beast` fallback. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
 
-`sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease, runs setup, enrolls the node, pushes the Gateway bundle when worker hosting requires it, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first cloud dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized paired device or supported SSH-backed provider.
+`sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease for the selected execution mode, runs setup, enrolls the node, pushes the required pinned Gateway bundle, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first cloud dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
 
 Completed cloud turns reconcile eligible, size-bounded workspace files back into the session's managed worktree before the turn claim is released. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. The resulting file changes remain in the managed worktree for normal review and commit.
 
@@ -58054,7 +58291,7 @@ local Codex turn claim without waiting for an acknowledgment from the offline
 node. If the device is already available, use the
 ordinary reconcile-first move instead.
 
-When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
+When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
 Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
 
@@ -58112,7 +58349,7 @@ The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.pas
 - **Gateway-owned tool authority.** In worker-turn mode, the Gateway projects current profile, provider, agent, group, sender, sandbox, delegation, inherited, and runtime-cap policy over the worker's fixed coding-tool catalog before every turn. The launch envelope carries only that final closed-vocabulary subset. Explicitly capped scheduled turns reuse their trusted owner-group context without sending that identity to the box or reapplying a fresh sender overlay. Tools outside the worker catalog remain unavailable; an empty result runs with no tools.
 - **Minted credentials, hashed at rest.** Each dispatch mints a worker credential; the Gateway stores only its hash. Credential rotation and owner-epoch fencing guarantee at most one live owner per session — a stale worker that reconnects is fenced, never merged.
 - **Environment-bound enrollment.** One short-lived node-only setup credential is bound to the durable environment before allocation. Its first authenticated Ed25519 device identity is recorded atomically with setup completion; replay cannot substitute an unrelated node.
-- **Explicit Codex device authorization.** Paired-device remote execution requires an explicitly allowed `codex.exec-server.stdio.v1` command, an approved pairing surface, and normal node invocation approval. The managed exec-server starts with a fresh private home and sanitized environment; allow-once never grants a later launch. Its managed workspace is not an OS sandbox: approved execution can access processes and files allowed to the node account, so use a separate least-privilege account when isolation is required.
+- **Explicit Codex node authorization.** Cloud-node and paired-device remote execution require an explicitly allowed `codex.exec-server.stdio.v1` command, an approved pairing surface, and critical node invocation approval for each attempt. The managed exec-server starts with a fresh private home and sanitized environment; allow-once never grants a later launch. Its managed workspace is not an OS sandbox: approved execution can access processes and files allowed to the node account, so use a separate least-privilege account when isolation is required.
 - **No standing model, forge, or cloud credentials on the box.** OpenClaw worker turns proxy inference by `{provider, model}` reference. Codex remote-exec keeps the app-server plus ChatGPT subscription or API-key auth on the Gateway and sends only sandbox operations to the box. Remote-exec requires prepared auth and rejects ambient auth fallback. Workspace git commits are authored without forge credentials, and Crabbox AWS lease metadata is checked authoritatively for an instance role before setup. Keep setup commands credential-free too.
 - **Gateway-owned GitHub publication.** Publication credentials stay in the effective managed or native GitHub profile on the Gateway. The broker disables repository hooks, refuses configured Git clean filters, uses a temporary index and `git commit-tree`, pushes only a reconstructed public HTTPS URL with a command-local `gh auth git-credential` helper, and never writes a bearer token to argv, a remote URL, `.git/config`, a worker payload, or a transcript.
 - **Provider-owned egress.** Gateway-proxied inference removes any OpenClaw need for direct model access, but OpenClaw does not rewrite provider firewalls. Restrict outbound traffic in the worker provider when the task requires it.
@@ -58123,6 +58360,7 @@ The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.pas
 - **No cloud profile is advertised** — run the `operator.read`-scoped `openclaw gateway call environments.list --params '{}'`. If the response has no `profiles`, ask an administrator to validate `cloudWorkers.profiles`, inspect the provider plugin, and restart the Gateway. This is a configuration or provider-activation problem, not an authorization result.
 - **Cloud destinations are hidden or an RPC is denied** — cloud profile dispatch and profile-target moves require `operator.admin`. `operator.write` can dispatch or move to an eligible paired device, move to the Gateway, and reclaim a placement; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
 - **The selected runtime lacks cloud placement support** — choose a model whose advertised runtime supports cloud placement. The bundled OpenClaw and Codex runtimes are supported; undeclared runtimes remain local-only.
+- **Codex cannot use a cloud profile** — verify that the profile advertises `remote-exec`, its setup installs the exact official `npm:@openclaw/codex@<gateway-version>` plugin, the Gateway enables the Codex plugin, and `gateway.nodes.commands.allow` includes `codex.exec-server.stdio.v1` without a matching deny rule. Approve the exact node invocation when prompted. Codex does not require an available OpenClaw worker slot; a missing plugin or denied command must be corrected rather than bypassed with Gateway or SSH execution.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.
 - **Dispatch or workspace recovery fails** — inspect `environments.list` and `sessions.describe`. A failed environment exposes its bounded environment error. A failed placement exposes `recoveryError` plus its durable per-session `terminalReason`; the selected Control UI chat shows that terminal reason above the composer. When deeper diagnosis is necessary, an operator on the Gateway host can inspect the durable worker state read-only. Do not edit the state database to bypass lifecycle fencing.
@@ -59165,7 +59403,7 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 - `docker`: local Docker runtime (default)
 - `ssh`: generic SSH-backed remote runtime
-- `openshell`: OpenShell runtime
+- `openshell`: OpenShell-managed local or remote runtime
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
 `plugins.entries.openshell.config`.
@@ -59222,8 +59460,10 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
           remoteAgentWorkspaceDir: "/agent",
           gateway: "lab", // optional
           gatewayEndpoint: "https://lab.example", // optional
-          policy: "strict", // optional OpenShell policy id
+          workspace: "research", // optional existing OpenShell workspace
+          policy: "/etc/openclaw/openshell-policy.yaml", // optional host-side YAML file
           providers: ["openai"], // optional
+          gpu: false,
           autoProviders: true,
           timeoutSeconds: 120,
         },
@@ -59240,6 +59480,7 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
+`workspace` selects an existing OpenShell control-plane workspace for the whole plugin; it is separate from the agent's filesystem workspace. `policy` must point to a YAML file readable by the OpenClaw Gateway, not a named policy ID. See [OpenShell](/gateway/openshell) for setup, prerequisites, and troubleshooting.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
@@ -62958,10 +63199,6 @@ See [Plugins](/tools/plugin).
 {
   ui: {
     seamColor: "#FF4500",
-    assistant: {
-      name: "OpenClaw",
-      avatar: "CB", // emoji, short text, image URL, or data URI
-    },
     prefs: {
       theme: "claw", // claw | knot | dash | custom
       themeMode: "system", // light | dark | system
@@ -62976,11 +63213,12 @@ See [Plugins](/tools/plugin).
 }
 ```
 
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.list`; see [Agent configuration](/gateway/config-agents#agentslist-per-agent-overrides).
+
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
   `talk.config` payloads and the macOS app's config snapshot. If neither is set,
   the theme default applies.
-- `assistant`: Control UI identity override. Falls back to active agent identity.
 - `prefs`: cross-device operator preferences. This is the canonical home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An
@@ -63309,7 +63547,7 @@ Gateway or node host and check `openclaw nodes pending` again.
 - `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Scope upgrades additionally require the connection itself to prove local-grade credentials (auth mode `none`, or the shared token/password); Tailscale, trusted-proxy, and device-token connects keep their paired scopes as a durable cap. Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
-- `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the one-time persistent enable for classified commands such as `camera.snap`, `camera.clip`, `desktop.stream`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
+- `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the persistent enable for classified commands such as `camera.snap`, `camera.clip`, `codex.exec-server.stdio.v1`, `desktop.stream`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Codex remote execution on a paired device or enrolled cloud node additionally requires a separate critical allow-once approval for every exec-server attempt; persistent allowlisting never grants that approval. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
   owner/admin callers. This does not upgrade identity-bearing `operator.write`
@@ -63396,14 +63634,22 @@ Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, O
 
 SSH-backed `remote-exec` providers must return a trusted `hostKey` as exactly `algorithm base64`, without a hostname or comment. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback. These providers also carry workspace traffic over separate pinned SSH connections so rsync cannot block control traffic.
 
-Node-backed `worker-turn` providers instead return an authenticated node device id. The Gateway installs the current worker bundle and transfers the workspace through the node transport; they do not return or resolve OpenClaw SSH endpoint credentials.
+Node-backed providers return an authenticated node device id for either `worker-turn` or `remote-exec`. The Gateway installs the current pinned bundle and transfers the workspace through the node transport; these leases do not return or resolve OpenClaw SSH endpoint credentials. `worker-turn` requires a node lease and launches a restricted OpenClaw worker child. `remote-exec` can use either an enrolled node or an existing SSH-backed provider and keeps the harness plus model authentication on the Gateway.
 
 ### Crabbox profile
 
-The bundled `crabbox` provider provisions a disposable machine through the local Crabbox CLI, enrolls it as an ephemeral node, and returns a node lease for `worker-turn`. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
+The bundled `crabbox` provider provisions a disposable machine through the local Crabbox CLI, enrolls it as an ephemeral outbound node, and returns the same node transport for OpenClaw `worker-turn` or Codex `remote-exec`. One configured profile can therefore be selected by both harnesses; the selected session runtime determines its execution semantics. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
 
 ```json5
 {
+  gateway: {
+    nodes: {
+      commands: {
+        // Required only when this profile also runs Codex remote-exec sessions.
+        allow: ["codex.exec-server.stdio.v1"],
+      },
+    },
+  },
   cloudWorkers: {
     profiles: {
       production: {
@@ -63431,7 +63677,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 
 For coordinator-backed AWS, Crabbox's own `aws.sshCIDRs` should include the Gateway host's outbound IPv4 as a `/32`. Verify it with `crabbox config show --json` and `crabbox doctor --provider aws --json` before provisioning; do not place this provider-ingress setting in OpenClaw `settings`. See [Coordinator-backed Crabbox](/gateway/cloud-workers#coordinator-backed-crabbox).
 
-Crabbox setup uses an environment-owned one-use pairing credential and the configured public Gateway URL. The provider returns the exact authenticated node id; the Gateway then installs its current bundle and transfers the workspace through authenticated node routes. OpenClaw does not persist Crabbox SSH endpoint, key, host-key, or fallback-port output.
+Crabbox setup uses an environment-owned one-use pairing credential and the configured public Gateway URL. The provider returns the exact authenticated node id; the Gateway then installs its current bundle and transfers the workspace through authenticated node routes. For Codex remote execution, Crabbox prepares the bundled Codex plugin and pinned managed binary in the node's private state, and the Gateway requires the explicitly allowed `codex.exec-server.stdio.v1` command plus critical allow-once approval for each attempt. No OpenClaw worker child or worker slot is used in that mode. OpenClaw does not persist Crabbox SSH endpoint, key, host-key, or fallback-port output.
 
 <Note>
   AWS admission requires `providerMetadata.instanceProfileAttached` to be false. Install Crabbox 0.41.1 or newer for the fixed-ID replay and closed inspection contracts.
@@ -63464,13 +63710,13 @@ Crabbox setup uses an environment-owned one-use pairing credential and the confi
 
 - `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
 - `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
-- `install`: SSH-backed `remote-exec` worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`. Node-backed `worker-turn` providers install the Gateway bundle through node transport instead.
+- `install`: SSH-backed `remote-exec` worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`. Node-backed `worker-turn` and `remote-exec` providers install the pinned Gateway bundle through node transport instead.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
 - `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
 
 A supported Node runtime (22.22.3+, 24.15+, or 25.9+) with WAL-reset-safe SQLite must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
 
-Node-backed `worker-turn` launches the self-contained worker loop and proxies model inference through the Gateway. SSH-backed `remote-exec` keeps the model loop on the Gateway and routes sandbox operations to the remote host. Both reconcile the session workspace and transcript through the durable placement lifecycle.
+Node-backed `worker-turn` launches the self-contained worker loop and proxies model inference through the Gateway. Node-backed or SSH-backed `remote-exec` keeps the model loop on the Gateway and routes sandbox operations to the remote host. Node-backed Codex accepts process, filesystem, capability, and credential-free HTTP operations; authenticated HTTP is rejected before reaching the node. Both modes reconcile the session workspace and transcript through the durable placement lifecycle. A disconnected node-backed Codex attempt is terminal; reconnect permits only a fresh attempt, never process or stream resumption.
 
 Each durable environment record retains its validated provider settings and resolved install method in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
@@ -63757,7 +64003,7 @@ Validation:
 
 - Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
 - `secrets apply` targets supported `openclaw.json` credential paths.
-- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
+- Per-agent auth-profile refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -63818,8 +64064,8 @@ Notes:
 }
 ```
 
-- Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
-- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
+- Per-agent profiles are stored in `<agentDir>/openclaw-agent.sqlite` (`auth_profile_store`).
+- Stored auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
 - Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` rewrites them to canonical `provider:default` API-key profiles with a `.legacy-flat.*.bak` backup.
 - OAuth-mode profiles (`auth.profiles.<id>.mode = "oauth"`) do not support SecretRef-backed auth-profile credentials.
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
@@ -65957,10 +66203,10 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts the default repair prompts.
     - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
-    - `openclaw doctor --fix --force` overwrites custom supervisor configs.
+    - `openclaw doctor --fix --force` can overwrite the managed supervisor config; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
-    - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
+    - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. If a stopped unit's command or working directory is overridden by an operator-owned systemd drop-in, inspect it with `systemctl --user cat <unit>.service`, then update or remove the drop-in; rewriting the managed base cannot change the effective launcher. `Environment=` drop-ins remain supported. Doctor also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
@@ -65968,7 +66214,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
     - For Linux user-systemd units, doctor token drift checks include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
     - Doctor service repairs refuse to rewrite, stop, or restart a gateway service from an older OpenClaw binary when the config was last written by a newer version. See [Gateway troubleshooting](/gateway/troubleshooting#split-brain-installs-and-newer-config-guard).
-    - You can always force a full rewrite via `openclaw gateway install --force`.
+    - `openclaw gateway install --force` rewrites the managed base unit, but never removes operator-owned systemd drop-ins; it warns if a command or working-directory override remains effective.
 
   </Accordion>
   <Accordion title="16. Gateway runtime + port diagnostics">
@@ -66660,9 +66906,9 @@ Example config:
 
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable recurring cadence.
 - Delivery target: `owner`. OpenClaw uses the first concrete `commands.ownerAllowFrom` entry, then channel `allowFrom`, and never sends this route to a group. Without a resolvable owner DM, ambient polls skip with `reason=no-route`. Set `target: "last"` to follow the most recent conversation, including groups, or `target: "none"` for internal-only runs.
-- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
-- The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
+- The heartbeat prompt is sent **verbatim** as the scheduled user message. Heartbeat runs use the same system prompt as ordinary agent turns; there is no heartbeat-specific system-prompt section.
 - When recurring heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
@@ -66672,7 +66918,7 @@ Example config:
 
 The default prompt is intentionally narrow: follow the heartbeat monitor scratch
 context when provided, keep recurring work in automation jobs, and reply
-`HEARTBEAT_OK` when nothing needs attention. It explicitly tells the agent
+`NO_REPLY` when nothing needs attention. It explicitly tells the agent
 **not** to infer or repeat old tasks from prior chats, so a default install stays
 quiet instead of rehashing stale conversation context.
 
@@ -66693,12 +66939,12 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 
 ## Response contract
 
-- If nothing needs attention, reply with **`HEARTBEAT_OK`**.
+- If nothing needs attention, reply with **`NO_REPLY`**.
 - Heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
 - A meaningful `heartbeat_respond` result with `notify: false` remains silent but is remembered as bounded internal context for the next user turn in that session. `no_change` acknowledgments and visible notifications are not stored this way.
-- During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is at most 300 characters. This suppression budget is fixed, not configurable per heartbeat.
-- If `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated specially.
-- For alerts, **do not** include `HEARTBEAT_OK`; return only the alert text.
+- Existing custom prompts may still return the legacy `HEARTBEAT_OK` acknowledgment. OpenClaw accepts it at the **start or end** of a reply and drops the reply when its remaining content is at most 300 characters; the suppression budget is fixed.
+- A legacy `HEARTBEAT_OK` in the **middle** of a reply is not treated specially.
+- For alerts, return only the alert text; do not include a silent acknowledgment.
 - Delivery selects the last outbound-capable non-reasoning payload. Separate reasoning or thinking payloads remain internal; a reasoning-only result produces no alert.
 - Tool error warnings remain enabled during heartbeat turns.
 
@@ -66717,7 +66963,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         target: "owner", // default | options: last | none | <channel id>
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.",
       },
     },
   },
@@ -66756,7 +67002,7 @@ Example: two agents, only the second agent runs heartbeats.
           target: "whatsapp",
           to: "+15551234567",
           timeoutSeconds: 45,
-          prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+          prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.",
         },
       },
     },
@@ -66923,7 +67169,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 
 ## Visibility controls
 
-By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is delivered. You can adjust this per channel or per account:
+By default, quiet heartbeat acknowledgments are suppressed while alert content is delivered. You can adjust this per channel or per account:
 
 ```yaml
 channels:
@@ -68969,14 +69215,16 @@ curl -N http://127.0.0.1:18789/v1/responses \
 summary: "Use OpenShell as a managed sandbox backend for OpenClaw agents"
 title: OpenShell
 read_when:
-  - You want cloud-managed sandboxes instead of local Docker
+  - You want OpenShell-managed local or remote sandboxes
   - You are setting up the OpenShell plugin
   - You need to choose between mirror and remote workspace modes
 ---
 
-OpenShell is a managed sandbox backend: instead of running Docker containers
-locally, OpenClaw delegates sandbox lifecycle to the `openshell` CLI, which
-provisions remote environments and executes commands over SSH.
+OpenShell is a managed sandbox backend: OpenClaw delegates sandbox lifecycle to
+the `openshell` CLI and executes commands over SSH. The selected OpenShell
+gateway can manage sandboxes locally with Docker, Podman, or virtualization, or
+run them on separate infrastructure. This OpenShell gateway is distinct from the
+OpenClaw Gateway, which continues to run the agent and host-side plugins.
 
 The plugin reuses the same SSH transport and remote filesystem bridge as the
 generic [SSH backend](/gateway/sandboxing#ssh-backend), and adds OpenShell
@@ -68985,13 +69233,39 @@ workspace sync mode.
 
 ## Prerequisites
 
-- OpenShell plugin installed (`openclaw plugins install @openclaw/openshell-sandbox`)
-- `openshell` CLI on `PATH` (or a custom path via
+- `openshell` CLI installed and on the OpenClaw Gateway process's `PATH` (or a
+  custom absolute path via
   `plugins.entries.openshell.config.command`)
 - OpenSSH client available on the Gateway host
 - OpenShell `v0.0.88` or newer when configuring an OpenShell workspace
-- An OpenShell account with sandbox access
+- An active, reachable OpenShell gateway with permission to create sandboxes;
+  local gateways do not require a cloud account
+- A supported compute runtime on the OpenShell gateway host when using local
+  sandboxes
 - OpenClaw Gateway running on the host
+
+Install the CLI and configure an OpenShell gateway using the
+[NVIDIA OpenShell documentation](https://docs.nvidia.com/openshell/latest).
+Before configuring OpenClaw, verify the OpenShell CLI as the same operating
+system user that runs the OpenClaw Gateway:
+
+```bash
+openshell --version
+openshell gateway list
+openshell sandbox list
+```
+
+`gateway list` marks the active gateway with `*`. If no gateway is selected,
+run `openshell gateway select <gateway-name>`. To register an existing local
+gateway endpoint, run `openshell gateway add http://127.0.0.1:8080 --local`;
+replace the endpoint with the address of your running gateway. For an
+authenticated remote gateway, follow its login flow with
+`openshell gateway login <gateway-name>`.
+
+The OpenClaw Gateway service must see the same OpenShell CLI, gateway
+registration, credentials, and workspace selection as these preflight commands.
+A shell-only `PATH` or `OPENSHELL_WORKSPACE` setting does not automatically
+reach a background service.
 
 ## Quick start
 
@@ -69025,13 +69299,25 @@ openclaw plugins install @openclaw/openshell-sandbox
 }
 ```
 
-Restart the Gateway. On the next agent turn OpenClaw creates an OpenShell
-sandbox and routes tool execution through it. Verify with:
+Validate the configuration and restart the OpenClaw Gateway:
 
 ```bash
+openclaw config validate
+openclaw gateway restart
+```
+
+On the next agent turn OpenClaw creates an OpenShell sandbox and routes tool
+execution through it. Verify both the plugin and the effective sandbox:
+
+```bash
+openclaw plugins inspect openshell --runtime --json
 openclaw sandbox list
 openclaw sandbox explain
+openshell sandbox list
 ```
+
+`openclaw sandbox list` is empty until a sandboxed agent turn first needs a
+runtime.
 
 ## Workspace modes
 
@@ -69065,8 +69351,10 @@ Tradeoff: upload + download cost on every exec turn.
 
 `mode: "remote"` makes the **OpenShell workspace canonical**:
 
-- On first sandbox creation, OpenClaw seeds the remote workspace from local
-  once.
+- On first use after sandbox creation, OpenClaw seeds the remote workspace
+  from local once. If the Gateway restarts before that first use, the next use
+  detects the still-empty remote workspace and seeds it; a workspace that
+  already holds content is never re-seeded.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
@@ -69102,7 +69390,7 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 | `gateway`                 | `string`                 | unset         | OpenShell gateway name (top-level `--gateway`)                                         |
 | `gatewayEndpoint`         | `string`                 | unset         | OpenShell gateway endpoint (top-level `--gateway-endpoint`)                            |
 | `workspace`               | `string`                 | unset         | Existing OpenShell control-plane workspace used for every CLI operation                |
-| `policy`                  | `string`                 | unset         | OpenShell policy ID for sandbox creation                                               |
+| `policy`                  | `string`                 | unset         | Path to a sandbox policy YAML file on the OpenClaw Gateway host                        |
 | `providers`               | `string[]`               | `[]`          | Provider names attached at sandbox creation (deduped, one `--provider` flag per entry) |
 | `gpu`                     | `boolean`                | `false`       | Request GPU resources (`--gpu`)                                                        |
 | `autoProviders`           | `boolean`                | `true`        | Pass `--auto-providers` (or `--no-auto-providers` when false) during create            |
@@ -69112,7 +69400,26 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 
 `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` must be absolute paths and
 stay under the managed roots `/sandbox` or `/agent`; other absolute paths are
-rejected.
+rejected. Choose distinct, non-overlapping directories because OpenClaw manages
+their contents independently; previously configured overlapping roots remain
+accepted for upgrade compatibility.
+
+`timeoutSeconds` applies to ordinary OpenShell CLI operations. Sandbox creation
+always receives at least 300 seconds so image builds and first-time provisioning
+are not cut short by the default 120-second command timeout.
+
+`policy` is a file path, not a policy name or ID. Prefer an absolute path such
+as `/etc/openclaw/openshell-policy.yaml`; relative paths are resolved from the
+agent's local workspace during sandbox creation. An explicit policy overrides
+the OpenShell CLI's `OPENSHELL_SANDBOX_POLICY` environment variable. When
+neither is set, OpenShell uses its normal policy selection and defaults.
+
+`providers` names existing OpenShell credential providers in the selected
+workspace. With `autoProviders: true`, OpenShell may create missing providers
+from credentials already available to the Gateway process. With
+`autoProviders: false`, create required providers first and verify them with
+`openshell --workspace <workspace-name> provider list`. Keep API keys in
+OpenShell providers rather than adding them to sandbox environment variables.
 
 `workspace` must match OpenShell's current workspace-name contract: 1-19
 lowercase alphanumeric characters or single hyphens, with no leading,
@@ -69220,7 +69527,7 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
           gateway: "lab",
           gatewayEndpoint: "https://lab.example",
           workspace: "research",
-          policy: "strict",
+          policy: "/etc/openclaw/openshell-policy.yaml",
         },
       },
     },
@@ -69239,6 +69546,10 @@ openclaw sandbox explain
 
 # Recreate (deletes remote workspace, re-seeds on next use)
 openclaw sandbox recreate --all
+
+# Recreate only one agent or the exact session scope shown by sandbox list
+openclaw sandbox recreate --agent researcher
+openclaw sandbox recreate --session "agent:researcher:main"
 ```
 
 For `remote` mode, recreate is especially important: it deletes the canonical
@@ -69264,6 +69575,20 @@ Recreate after changing any of:
 - `plugins.entries.openshell.config.from`
 - `plugins.entries.openshell.config.mode`
 - `plugins.entries.openshell.config.policy`
+- `plugins.entries.openshell.config.providers`, `gpu`, or `autoProviders`
+- `plugins.entries.openshell.config.remoteWorkspaceDir` or
+  `remoteAgentWorkspaceDir`
+
+When changing the OpenShell gateway or control-plane workspace, recreate the
+affected sandboxes while the old gateway and workspace are still selected;
+otherwise cleanup targets the new location instead of the existing sandbox.
+
+If OpenShell cannot delete a sandbox, OpenClaw reports the failure and keeps the
+runtime registry entry so recreation or pruning can be retried safely. Restore
+the original gateway, workspace, authentication, and connectivity, inspect the
+runtime with `openshell --workspace <workspace-name> sandbox get <sandbox-name>`,
+and rerun the scoped `openclaw sandbox recreate` command. Do not switch the
+configured workspace or delete the registry entry to hide the failure.
 
 ## Security hardening
 
@@ -69271,6 +69596,10 @@ The mirror-mode filesystem bridge pins the local workspace root and rechecks
 canonical paths (via realpath) before every read, write, mkdir, remove, and
 rename, rejecting mid-path symlinks. A symlink swap or remounted workspace
 cannot redirect file access outside the mirrored tree.
+
+Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
+directions. Repository credentials, history, and trusted hook code remain on
+the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
 
 ## Custom image contract
 
@@ -69284,6 +69613,28 @@ Custom images used with the OpenClaw filesystem bridge must provide:
 - `python3` or `python` for pinned write, edit, rename, and remove operations
 - GNU-compatible `stat` and `find`
 - standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
+
+When the agent workspace differs from the sandbox workspace, the sandbox user
+and policy also need write access to both configured remote roots. Standard
+unprivileged images often cannot create the default `/agent` directory. Either
+create and grant access to `/agent` in the image and policy, or configure two
+non-overlapping directories beneath the already-writable sandbox root:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          remoteWorkspaceDir: "/sandbox/workspace",
+          remoteAgentWorkspaceDir: "/sandbox/agent",
+        },
+      },
+    },
+  },
+}
+```
 
 Package installation and private certificate roots must be included in the
 source image or installed from inside the sandbox. The selected OpenShell
@@ -69305,6 +69656,61 @@ filesystem must permit the writes. `sandbox.docker.network`,
   MCP tools are available to sandboxed sessions only when sandbox tool policy
   allows them.
 
+## Troubleshooting
+
+First separate OpenClaw Gateway health, plugin activation, and OpenShell
+gateway connectivity:
+
+```bash
+openclaw gateway status --deep --require-rpc
+openclaw plugins inspect openshell --runtime --json
+openclaw sandbox explain
+openclaw sandbox list
+openshell gateway list
+openshell sandbox list
+openclaw logs --follow
+```
+
+- **Plugin missing or backend unavailable:** Install
+  `@openclaw/openshell-sandbox`, set `plugins.entries.openshell.enabled: true`,
+  validate the config, and restart the OpenClaw Gateway. Run
+  `openclaw plugins inspect openshell --runtime --json` to check the running
+  Gateway rather than only the on-disk plugin registration.
+- **`openshell` not found:** Install the CLI for the user running the Gateway,
+  or set `plugins.entries.openshell.config.command` to its absolute executable
+  path. A working interactive shell does not prove the managed service has the
+  same `PATH`.
+- **No active gateway, unauthorized, or connection failed:** Check
+  `openshell gateway list`, select the intended gateway, and reauthenticate with
+  `openshell gateway login <gateway-name>` when its deployment requires login.
+  Set `plugins.entries.openshell.config.gateway` explicitly when the service
+  should not depend on the interactive CLI's active selection.
+- **Workspace missing or the wrong sandbox list:** Verify the selected
+  control-plane workspace with `openshell workspace list`, then run
+  `openshell --workspace <workspace-name> sandbox list`. Create missing
+  workspaces with `openshell workspace create --name <workspace-name>` before
+  enabling them in OpenClaw. Remember that the Gateway service may not inherit
+  `OPENSHELL_WORKSPACE` from your interactive shell.
+- **Policy file cannot be read or outbound traffic is denied:** Configure an
+  existing YAML policy file using an absolute host path, check its permissions,
+  and verify that the policy permits the destination and requesting binary.
+  Inspect a running sandbox with
+  `openshell sandbox get <sandbox-name> --policy-only`. Docker network settings
+  do not change OpenShell policy.
+- **Provider creation fails:** Inspect the selected workspace with
+  `openshell provider list`, then create or refresh the required provider using
+  OpenShell's documented credential flow. If `autoProviders` is disabled,
+  required providers must already exist.
+- **Remote files are missing locally:** This is expected in `remote` mode;
+  remote files are canonical and are not synchronized back to the host. Use
+  `mirror` mode when host-visible changes are required. Recreating a remote
+  sandbox destroys its remote-only files.
+- **Recreate or prune cannot delete a sandbox:** Restore access to the original
+  OpenShell gateway and workspace, confirm the sandbox still exists with
+  `openshell --workspace <workspace-name> sandbox get <sandbox-name>`, and retry
+  the scoped recreation. OpenClaw retains the registry entry until deletion
+  succeeds.
+
 ## How it works
 
 1. OpenClaw runs `sandbox get` for the sandbox name (with the selected
@@ -69318,8 +69724,8 @@ filesystem must permit the writes. `sandbox.docker.network`,
 3. Core writes the SSH config to a temp file and opens an SSH session through
    the same remote filesystem bridge as the generic SSH backend.
 4. In `mirror` mode: sync local to remote before exec, run, sync back after.
-5. In `remote` mode: seed once on create, then operate directly on the remote
-   workspace.
+5. In `remote` mode: seed once on first use, then operate directly on the
+   remote workspace.
 
 ## Related
 
@@ -70971,7 +71377,7 @@ One consequence worth planning for: portal listeners bind the same interfaces as
 
 Each portal uses a separate origin on its own port and binds to the same interfaces as the Gateway. Access requires the token in the portal URL. On the first request, the proxy stores that token in an HttpOnly cookie and removes it from subsequent upstream requests. The proxy validates this cookie itself and never forwards it to the application.
 
-Browser cookies are hostname-scoped rather than port-scoped, so the proxy isolates each application's cookie jar with an `oc_portal_<targetPort>_` name prefix. Requests forward only cookies with that portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies for other portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
+Browser cookies are hostname-scoped rather than port-scoped, so the proxy gives each portal instance a random `oc_portal_<instance>_` cookie-name prefix. Requests forward only cookies with the current portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies from sibling or closed portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
 
 Portals proxy only the selected local development server. They never serve Gateway data, and every portal ends when the Gateway restarts.
 
@@ -70979,7 +71385,7 @@ Portals proxy only the selected local development server. They never serve Gatew
 
 - The development server must run on the Gateway host. Remote worker support is planned.
 - A proxy or tunnel in front of the Gateway does not automatically expose portal listener ports. The Control UI detects this and shows a reachable URL with retry guidance instead of mounting a dead iframe.
-- Browser-side cookie code sees the prefixed names in `document.cookie`. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
+- The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. Browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
 ## Troubleshooting
 
@@ -71809,7 +72215,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Models and usage">
     - `models.list` returns the runtime-allowed model catalog. See "`models.list` views" below.
-    - `usage.status` returns provider usage windows/remaining quota summaries.
+    - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
     - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
@@ -71850,7 +72256,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state. Passing `sessionKey` binds the PTY to that exact agent session and attaches the calling connection as its first viewer; omitting it creates a connection-owned operator terminal.
     - `terminal.input` and `terminal.resize` operate on sessions owned by the calling connection and agent-owned sessions where that connection is an attached viewer. `terminal.close` kills a connection-owned session, but only detaches the calling viewer from an established agent-owned session. For a new session-bound Control UI terminal, the initiating viewer's close or disconnect discards the PTY until the browser or exact-session agent first adopts it through an authorized operation.
     - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
-    - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Task-owned agent terminals close when their authoritative task reaches a terminal state; ordinary conversation-owned agent terminals remain persistent.
+    - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Conversation-owned terminals remain persistent. The agent-facing `terminal` tool can list, read, resize, or close only terminals an operator opened for its exact session; it cannot open terminals. Agent input follows effective session and exec policy: `full` (YOLO) sends immediately, `guarded` and `workspace` (including accept-only or Guardian-reviewed flows) require explicit one-time approval of that exact input, and `read-only` or `deny` blocks it.
     - Connection-owned sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer. Established agent-owned sessions likewise survive viewer disconnect.
     - `terminal.list` returns attachable sessions. `terminal.attach` returns the replay buffer and either rebinds a connection-owned session (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`) or adds the connection as a viewer of an agent-owned session.
     - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
@@ -71908,8 +72314,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
-    - `environments.create` (`{ profileId, idempotencyKey }`) provisions a worker from a configured plugin provider profile; retries with the same key reuse the durable operation. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
+    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline; worker-turn admission consumes a slot, while node-backed remote-exec does not. Configured profile summaries expose their bounded, canonically ordered `executionModes` array plus the existing singular `executionMode` primary/default display projection. Current clients select profiles only by membership in `executionModes`. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
+    - `environments.create` (`{ profileId, idempotencyKey }`) provisions an environment from a configured plugin provider profile; retries with the same key reuse the durable operation. Direct creation without a session does not select an execution mode, so the provider uses its intentional default; Crabbox prepares `worker-turn`. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `worker.desktop.observe` (`{ environmentId, control? }`, `operator.admin`) starts or reuses the environment's desktop forward and returns `{ transport, wsPath, expiresAtMs, control, vncPassword? }`. `wsPath` carries a single-use 60-second token for the Gateway's desktop observer WebSocket; reconnecting requires a fresh observe call. Environments with an observable desktop advertise `worker.desktop: true` in `environments.list`. The method is advertised only when the `cloudWorkers.desktop` lab is enabled. See [Cloud workers](/gateway/cloud-workers#desktop-interactive).
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
@@ -71924,7 +72330,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, or Control UI short ID. Ambiguous short IDs return a bounded candidate list as a successful RPC result.
     - `sessions.create` creates a new session entry. Optional `model`, `contextWindow`, and `thinkingLevel` values persist the initial model, advertised context-window choice, and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
-    - `sessions.dispatch` moves an authorized local OpenClaw session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, autoDevice: true, agentId? }` for automatic paired-device selection, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. These target modes are mutually exclusive and explicit targets take precedence over project-profile lookup. Automatic selection ranks worker-slot runtimes by available slots and then device ID; runtimes without worker slots use device ID order. If a candidate becomes ineligible during dispatch, up to three ranked candidates are attempted; other errors are not retried. Explicit and automatic device dispatch require `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active` worker ownership. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
+    - `sessions.dispatch` moves an authorized local OpenClaw or Codex session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, autoDevice: true, agentId? }` for automatic paired-device selection, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. These target modes are mutually exclusive and explicit targets take precedence over project-profile lookup. Automatic selection ranks worker-slot runtimes by available slots and then device ID; runtimes without worker slots use device ID order. If a candidate becomes ineligible during dispatch, up to three ranked candidates are attempted; other errors are not retried. Explicit and automatic device dispatch require `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active`, with worker-child ownership for `worker-turn` or Gateway-owned harness execution for `remote-exec`. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.reclaim` (`operator.write`) safely stops a session placement by key. It waits for an in-flight dispatch, drains admitted work, reconciles active workspace changes, and retries pending failed-environment teardown through the placement owner. Callers never need raw environment-destroy authority.
     - `sessions.move` moves an authorized active session to the Gateway, a paired device, or a configured profile. Gateway and device targets require `operator.write`; profile targets require `operator.admin`; malformed targets use the write scope before schema validation. The caller supplies the exact observed generation, environment, and owner epoch; session authorization and those source facts are revalidated before the move commits. Ordinary moves always reconcile the source. Only a Gateway target may add `abandonSource: true`, and only when the exact source is a currently offline paired-device placement. That durable decision force-fences and destroys the remote owner, skips remote workspace reconciliation, and continues from the last Gateway-synced state without replay; unsynced files and in-flight work may be lost. Available, unknown, profile, and other-worker sources reject explicit abandonment.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). The read-scoped list result is intentionally path-free. `sessions.groups.defaults` and `sessions.groups.update` require `operator.write` and read or replace one custom group's optional working-directory and worktree defaults. Non-admin callers can save only directories inside a configured agent workspace; other absolute Gateway paths require `operator.admin`. Membership stays on each session's `category` field; rename and delete update member sessions server-side.
@@ -75612,6 +76018,19 @@ even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 feature-statistics body.
 
+## Automated environments
+
+OpenClaw sends nothing when it detects an automated environment, meaning the
+`CI` environment variable is set to a truthy value. Continuous integration jobs
+are not installations: they would outnumber real operators by orders of
+magnitude and make version and platform counts meaningless, and your pipeline
+should not report to us on every job.
+
+This applies to both tiers, so a CI job sends no update check and no feature
+statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
+because a configured endpoint means the run is deliberately exercising this
+path.
+
 ## Disable every automatic update request
 
 To go fully dark, disable the existing startup update check:
@@ -76958,7 +77377,7 @@ Trusted-proxy auth can optionally use the proxy identity as the approval boundar
 The default is `enabled: false`. When enabled, all of these rules apply:
 
 1. The WebSocket must have authenticated through the `trusted-proxy` method with a non-empty user identity that passed `allowUsers` when an allowlist is configured. Token, password, Tailscale, and unauthenticated connections never use this policy.
-2. Only a new Control UI or WebChat browser device can be approved automatically. Any request for an existing device, including a scope upgrade, remains pending for manual approval with `openclaw devices approve <requestId>`.
+2. New Control UI or WebChat browser devices and scope upgrades from an existing device with the same paired public key resolve automatically. If the existing grant already covers the automatically approvable scopes, the session narrows to that grant without a pairing request or audit entry; otherwise, `deviceAutoApprove.scopes` can automatically approve the widened intersection. A public-key mismatch remains pending for manual approval with `openclaw devices approve <requestId>`.
 3. The device is approved with role `operator`. If the connect request includes scopes, the grant is the exact intersection of the requested scopes and `deviceAutoApprove.scopes`. If the request omits scopes, the configured list is granted; when that list is omitted, it defaults to `operator.read`, `operator.write`, and `operator.approvals`. The resulting grant is then additionally capped by the connection's [`x-openclaw-scopes`](#control-ui-pairing-behavior) proxy header when present, so a proxy that narrows a user's scopes also limits the **persistent** device grant, not just the session — a present-but-empty header yields no scopes. This cap applies even when the client omits its own scope list.
 4. `operator.admin` is allowed only through explicit listing in `deviceAutoApprove.scopes`. When listed, every proxy-authenticated user can request and automatically receive full admin on a new browser device; requests without scopes receive full admin automatically. `openclaw security audit` reports the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` finding, and the Gateway logs a warning once at startup. Prefer a targeted [`identityScopes`](#per-identity-scope-grants) admin grant when selected verified users need session admin without a persistent admin device grant.
 
@@ -79740,8 +80159,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 26 recommended). `pnpm` is the repo package manager.
-    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI and Gateway as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -80277,9 +80696,10 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
-    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
-    not provide that API.
+    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4+
+    with WAL-reset-safe `node:sqlite` can run the CLI and Gateway as an explicit
+    opt-in. Bun can also run package scripts; use `pnpm install` for dependency
+    installation.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">
@@ -82739,7 +83159,7 @@ Live model tests are split into two layers so failures are isolated:
 - "Direct model" tells you whether the provider/model can answer at all with the given key.
 - "Gateway smoke" tells you whether the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
-The curated model lists below live in `src/agents/live-model-filter.ts` and
+The curated model lists below live in `src/agents/test-helpers/live-model-dynamic-candidates.ts` and
 change over time; treat the arrays there as the source of truth, not this
 page.
 
@@ -83246,7 +83666,7 @@ Notes:
 
 ## Live: model matrix (what we cover)
 
-Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/live-model-filter.ts`, in this priority order:
+Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/test-helpers/live-model-dynamic-candidates.ts`, in this priority order:
 
 | Provider/model                                | Notes      |
 | --------------------------------------------- | ---------- |
@@ -84669,7 +85089,9 @@ Native dependency policy:
 - Scope:
   - Reuses an active local OpenShell gateway
   - Creates a sandbox from a temporary local Dockerfile
-  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Exercises remote and default mirrored OpenShell backends over real SSH
+  - Creates an isolated non-default OpenShell workspace and custom workspace roots
+  - Verifies nested mirrored file writes and excludes host Git metadata and hooks
   - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
@@ -84680,7 +85102,7 @@ Native dependency policy:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
-  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the sandbox-visible `host.openshell.internal` address used by the network policy fixture; Docker Desktop may resolve this differently from the bridge gateway
 
 ### Live (real providers + real models)
 
@@ -84768,7 +85190,7 @@ without mutating the host auth store:
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
 - Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation expands the release-soak package gate to `last-stable-4 2026.4.23 2026.5.2 2026.4.15` plus `reported-issues`.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
-- Bun global install smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g` in an isolated home, and verifies `openclaw infer image providers --json` returns bundled image providers instead of hanging. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
+- Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.
@@ -84999,6 +85421,7 @@ Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 Run this ladder in order:
 
 ```bash
+openclaw triage
 openclaw status
 openclaw status --all
 openclaw gateway probe
@@ -85010,6 +85433,7 @@ openclaw logs --follow
 
 Good output, one line each:
 
+- `openclaw triage` writes a sanitized, agent-ready diagnosis and, when the Gateway is reachable, a support archive. See [Triage](/cli/triage) for agent handoff options.
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
@@ -86006,12 +86430,13 @@ title: "Backups"
 # Backups
 
 OpenClaw keeps its authoritative state in SQLite: one global control-plane
-database plus one database per agent, all under the state directory (usually
-`~/.openclaw`). See [Database schemas](/reference/database-schemas) for the
-exact layout. This guide covers protecting that state: one-off archives,
-per-database snapshots, scheduling, offsite copies, and continuous
-replication for installs that should not re-upload whole databases on every
-backup.
+database under the state directory (usually `~/.openclaw`), plus one database
+per configured agent at `<agentDir>/openclaw-agent.sqlite`. Agent directories
+default to locations under the state directory but can be configured outside
+it. See [Database schemas](/reference/database-schemas) for the exact layout.
+This guide covers protecting that state: one-off archives, per-database
+snapshots, scheduling, offsite copies, and continuous replication for installs
+that should not re-upload whole databases on every backup.
 
 Never copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a backup.
 The databases are written while the Gateway runs, and raw file copies of a
@@ -86035,6 +86460,8 @@ committed state safely.
 - Regular protection: provision the Gateway-owned backup automation.
 - Continuous, incremental, seconds of data loss: replicate the databases with
   Litestream.
+- Periodic incremental pull to another machine, no object storage:
+  `sqlite3_rsync`.
 
 ## Full archives
 
@@ -86042,12 +86469,21 @@ committed state safely.
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
 
-This writes a timestamped `.tar.gz` covering state, config, credentials,
-sessions, and (by default) workspaces, then validates the archive manifest
-and payload. SQLite databases inside the archive are captured with SQLite's
-online backup API and compacted, so the archive is safe to create while the
-Gateway runs. [Backup CLI](/cli/backup) documents every flag, the volatile
-files that are intentionally skipped, and verification details.
+This writes a timestamped `.tar.gz` covering state, config, credentials, every
+configured agent directory, and (by default) workspaces, then validates the
+archive manifest and payload. Agent directories remain included when
+`--no-include-workspace` is set, even if their configured locations are outside
+the state directory. OpenClaw-owned SQLite databases, including agent databases
+inside workspace or managed-state assets, are captured with SQLite's online
+backup API, owner-verified, sanitized, and compacted. Other SQLite files in
+workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
+documents every flag, owner-declared regenerable resources, volatile files,
+and verification details.
+
+If the configuration is malformed, `--no-include-workspace` can still produce a
+partial recovery archive for state, config, and credentials. Its skipped
+diagnostics identify agent and plugin ownership that could not be resolved;
+repair the configuration before relying on an archive as complete.
 
 Archives are full copies: each run re-uploads everything. They are the right
 tool before an update, reset, uninstall, or machine move, and a reasonable
@@ -86071,6 +86507,12 @@ Each run publishes one verified snapshot directory (`manifest.json` plus
 deleted-page remnants do not inflate them, and every snapshot records a
 SHA-256 that `openclaw backup sqlite verify` rechecks later.
 
+`--agent <id>` resolves the database from that agent's configured `agentDir`,
+including roots outside the state directory. The same owner-derived lookup
+applies to explicit Git agent backups, `--all`, and scheduled Git backups.
+Verifying or restoring a historical artifact by agent id does not require that
+agent to exist in the current configuration.
+
 Snapshot repositories are local directories. Scheduling, upload, retention,
 and restore-on-boot are intentionally left to the operator; the sections
 below cover them.
@@ -86078,7 +86520,8 @@ below cover them.
 ## Schedule backups
 
 The recommended schedule is one Gateway-owned automation. This example backs
-up every registered database daily and pushes the current branch to `origin`.
+up the shared database and every configured agent database daily, including
+custom agent roots, and pushes the current branch to `origin`.
 Pushing requires the repository to have an `origin` remote first, so
 initialize it once before enabling a pushed schedule:
 
@@ -86196,8 +86639,10 @@ storage, with periodic snapshots so restores stay fast. Only changed pages
 leave the machine, which makes it the right tool when backups must not
 re-upload whole databases.
 
-OpenClaw's databases run in WAL mode, which is Litestream's one hard
-requirement. A minimal `litestream.yml` replicating the control-plane
+Litestream's one hard requirement is WAL mode, which OpenClaw uses on local
+filesystems; on network-backed storage such as NFS or SMB, OpenClaw falls
+back to rollback journaling, so verify with `PRAGMA journal_mode;` first.
+A minimal `litestream.yml` replicating the control-plane
 database and one agent database to an S3-compatible bucket:
 
 ```yaml
@@ -86218,10 +86663,57 @@ offline:
 litestream restore -o ./restored-openclaw.sqlite s3://openclaw-backups/state
 ```
 
+For an agent with a custom `agentDir`, replace the example's default agent
+database path with its configured `<agentDir>/openclaw-agent.sqlite`.
+
 Litestream replicates database bytes only. Config, credentials files, and
 workspaces still need one of the file-based paths above, and the replicated
 data is as sensitive as the archives, so apply the same bucket access and
 encryption rules.
+
+## Pull replication with sqlite3_rsync
+
+[`sqlite3_rsync`](https://sqlite.org/rsync.html) is the SQLite project's
+official replication tool, modeled on `rsync`: it compares page hashes
+between an origin and a replica database and ships only changed pages,
+typically over SSH with the same binary installed on both ends. Unlike a raw
+file copy, it takes a read transaction on the origin, so pulling from a live
+database while the Gateway runs produces a consistent replica. WAL mode is
+required on the origin. OpenClaw uses WAL on local filesystems but
+deliberately falls back to rollback journaling on network-backed storage
+such as NFS or SMB, so check the origin before relying on this path:
+
+```bash
+sqlite3 ~/.openclaw/state/openclaw.sqlite "PRAGMA journal_mode;"
+```
+
+If this prints anything other than `wal`, use one of the file-based paths
+above instead.
+
+The tool ships in the `sqlite-tools` binary bundles on the
+[SQLite download page](https://sqlite.org/download.html) and in the full
+source tree; package-manager SQLite builds often omit it. Pull a database to
+another machine you control:
+
+```bash
+sqlite3_rsync 'user@gateway-host:~/.openclaw/state/openclaw.sqlite' ./replica/openclaw.sqlite
+```
+
+Re-running the command is incremental: an unchanged database exchanges only
+a few kilobytes of hashes, and appended data transfers at roughly its own
+size. Treat the replica as read-only and as sensitive as the origin.
+
+Two caveats. First, deltas are page-based, and OpenClaw's databases run
+incremental auto-vacuum on a periodic maintenance timer; a vacuum pass
+relocates pages, so a sync shortly after one (or after large deletions such
+as transcript-archive eviction) can transfer far more than the actual data
+change. Second, this replicates database bytes only, like Litestream:
+config, credentials files, and workspaces still need a file-based path
+above. For continuous replication with predictable upload size, prefer
+Litestream; use `sqlite3_rsync` for scheduled or ad-hoc pulls between
+machines without object storage. To recover, treat the replica like any
+restored database: copy it into place while the Gateway is stopped, then
+follow [Restore a database](#restore-a-database).
 
 ## Restore
 
@@ -86242,12 +86734,14 @@ ARCHIVE=./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 ```
 
-The target must not exist or must be empty. OpenClaw verifies archive structure,
-the manifest, hardlinks, symbolic-link containment, and SQLite databases before it writes the target. A
-non-empty target is refused, and a failed extraction cleans its incomplete
-output. The command never touches the live state directory and has no force or
-in-place mode. Treat the restored directory as sensitive: it can contain
-credentials, auth profiles, sessions, and workspace data.
+The target must not exist or must be empty, and it must not be inside the live
+state directory or any configured live agent directory. OpenClaw verifies
+archive structure, the manifest, hardlinks, symbolic-link containment, and
+SQLite databases before it writes the target. A non-empty target is refused,
+and a failed extraction cleans its incomplete output. The command never writes
+into live state or agent roots and has no force or in-place mode. Treat the
+restored directory as sensitive: it can contain credentials, auth profiles,
+sessions, and workspace data.
 
 <Warning>
   Restoring an archive is time travel. Messaging-channel credentials with
@@ -86260,10 +86754,15 @@ credentials, auth profiles, sessions, and workspace data.
   `plugin-skills/` symlink index from current plugin metadata.
 </Warning>
 
-The manifest records `archiveRoot`, the original paths under `paths`, and an
-`assets[]` list. Each asset includes its `kind`, original `sourcePath`, and
-`archivePath` inside the tarball. Use those fields as the source of truth; do
-not derive the archive root from the archive filename.
+The schema-version-1 manifest records `archiveRoot`, the original paths under
+`paths`, an `assets[]` list, and additive configured-agent ownership metadata.
+Each asset includes its `kind`, original `sourcePath`, and `archivePath` inside
+the tarball. An external custom agent root has kind `agent` when it needs its
+own source; roots already covered by a state or workspace asset appear in
+ownership metadata without duplicating archive entries. Use the asset and
+ownership fields as the source of truth; do not derive the archive root from
+the archive filename or reconstruct agent paths from the default layout. Older
+archives without additive ownership metadata remain verifiable.
 
 The archive layout is:
 
@@ -86276,11 +86775,13 @@ The archive layout is:
 
 To activate, stop the Gateway and any node hosts that use the restored files.
 Make a fresh backup of current state or move it aside. Then move the extracted
-state asset into place, or point `OPENCLAW_STATE_DIR` at that asset, and run
-`openclaw doctor` before restarting the Gateway. On a new machine or under a
-different home directory, use the manifest to map config, credentials, and
-workspace assets to their new paths. See [Updating](/install/updating#rollback)
-for the rollback workflow.
+state asset into place, or point `OPENCLAW_STATE_DIR` at that asset. Restore
+every custom agent root using its recorded agent id and original source path;
+either preserve its configured `agentDir` or update that setting to its new
+location. On a new machine or under a different home directory, also use the
+manifest to map config, credentials, and workspace assets to their new paths.
+Run `openclaw doctor` before restarting the Gateway. See
+[Updating](/install/updating#rollback) for the rollback workflow.
 
 ### Restore a database
 
@@ -87235,7 +87736,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   packages.
 - `extended-stable` resolves eligible official npm plugins with bare/default
   or `latest` intent to the exact installed core version. It does not query
-  plugin `@extended-stable` tags at runtime.
+  plugin `@extended-stable` tags at runtime. Version-bound runtime plugins use
+  the base release cohort for correction versions (for example, `YYYY.M.P-2`
+  uses plugin `YYYY.M.P`).
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status
@@ -88232,7 +88735,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable
@@ -89642,8 +90145,9 @@ If you already manage Node yourself:
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    can install the global package, but the resulting `openclaw` executable
-    requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    remains the primary runtime, so the plain `openclaw` executable keeps its
+    Node shebang. Use `bun run --bun openclaw <args>` to force the Bun runtime.
     </Note>
 
   </Tab>
@@ -92491,6 +92995,9 @@ omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+Version-bound runtime plugins converge to the base release cohort when the
+core is a correction release (for example, `YYYY.M.P-2` uses plugin
+`YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
 OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
@@ -101971,7 +102478,7 @@ The CUA provider also exposes the v2 browser family: `get_browser_state`, `brows
 
 CUA additionally exposes `get_recording_state`, `start_recording`, `stop_recording`, and `replay_trajectory`. Recording and browser file operations use opaque `openclaw:computer-resource` handles. The node creates and validates the underlying files and directories; agent actions never accept native paths, output roots, or helper executable paths. Handles belong to one Computer Use execution and cannot be reused by another execution.
 
-Modifier keys ride the `text` field on click and scroll actions (`shift`, `ctrl`, `alt`, `cmd`). After an input action the tool returns a fresh screenshot so the model can observe the result. If more than one computer-capable node is connected, pass `node` explicitly.
+Modifier keys ride the `text` field on click and scroll actions (`shift`, `ctrl`, `alt`, `cmd`). After an input action the tool returns a fresh screenshot so the model can observe the result. When the screen is pixel-identical to the previous frame still in model context, the tool returns metadata only — "screen unchanged since previous frame" — and the previous `frameId` stays valid, so duplicate screenshots never re-enter model context. If more than one computer-capable node is connected, pass `node` explicitly.
 
 Screenshots are kept **model-only**: they are never auto-delivered to the chat channel. Treat all on-screen content as untrusted input; the tool warns the model not to follow on-screen instructions that conflict with the user's request.
 
@@ -103013,7 +103520,13 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     nodes: {
       // Auto-approve first-time node pairing from trusted networks (CIDR list).
       // Disabled when unset. Only applies to first-time role:node requests
-      // with no requested scopes; does not auto-approve upgrades.
+      // with no requested scopes; does not auto-approve upgrades. This
+      // approves the device only: the node's command/capability surface still
+      // needs `openclaw nodes approve <requestId>` (see `openclaw nodes
+      // pending`), because device pairing alone must not grant commands.
+      // Silent same-host pairing behaves the same way. SSH-verified pairing
+      // and node-profile setup codes approve the initial surface, since both
+      // record explicit machine-ownership or admin consent.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
         // SSH-verified auto-approval (default: enabled). Approves first-time
@@ -104725,7 +105238,7 @@ read_when:
 
 ## Status
 
-Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease with current reconnect-scoped v6 supervisor proof, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
+Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): one Crabbox profile provisions enrolled outbound-node leases for OpenClaw `worker-turn` or Codex `remote-exec`. OpenClaw launches a restricted worker child through the Gateway's authenticated public worker route; Codex uses the explicitly authorized node exec-server while its app-server and authentication remain on the Gateway. Workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path remain removed. SSH is retained only for existing SSH-backed `remote-exec` providers and separately owned desktop carriers.
 
 The sections below preserve the pre-convergence design record and are not the current runtime contract.
 
@@ -104814,7 +105327,7 @@ Worker mode (`openclaw worker`) is an entry point, not a fork: connection handli
 
 ### 3. Historical transport proposal: everything over SSH
 
-This section describes the superseded carrier. Current `worker-turn` environments use authenticated node connectivity; only `remote-exec` workspace operations retain pinned SSH.
+This section describes the superseded carrier. Current node-backed `worker-turn` and `remote-exec` environments use authenticated node connectivity; existing SSH-backed `remote-exec` providers retain pinned SSH.
 
 The original proposal had the gateway own connectivity while the worker required nothing but sshd:
 
@@ -105154,7 +105667,7 @@ Every wave carries live proof; unit fixtures alone never advance the tracker.
 # Section: plan/runners.md
 
 ---
-summary: Everything is a node — one placement model where paired machines and cloud boxes host sessions through the worker admission path; clients attach to sessions, never to runners.
+summary: Everything is a node — one placement model where paired machines and cloud boxes run OpenClaw worker turns or Codex remote execution through mode-specific admission; clients attach to sessions, never to runners.
 title: Runners plan
 read_when:
   - Designing or reviewing where sessions run (gateway, device, cloud)
@@ -105182,7 +105695,7 @@ advances a milestone.
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901, #125708 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                                 |
 | 8   | Stop-and-continue moves and offline device recovery        | landed      | #125036, #126284                                                                                                                                                                   |
-| 9   | Node exec-server carrier and contract-preserving cleanup   | in progress | #125503, #125524, #125587                                                                                                                                                          |
+| 9   | Node exec-server carrier and contract-preserving cleanup   | in progress | #125503, #125524, #125587, #127202                                                                                                                                                 |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | landed      | #125288, #125384, #125465                                                                                                                                                          |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
@@ -105234,12 +105747,12 @@ Node      a paired machine holding an outbound connection to the gateway
           copy says "device". EVERY remote machine is a node — personal
           workstations, servers, cloud leases. Phones are nodes that never
           advertise session hosting.
-Runner    anything that can host a session's turn loop: the gateway itself,
-          or a session-capable node. "Runner" is internal/docs vocabulary;
-          UI copy says "Runs on …".
-Worker    the per-turn child process (`openclaw worker`) that hosts a
-          session's loop under worker admission. On paired devices and cloud
-          leases alike, it is a supervised child of the node host.
+Runner    anything that can own a session's turn loop or delegated execution:
+          the gateway itself or a session-capable node. "Runner" is
+          internal/docs vocabulary; UI copy says "Runs on …".
+Worker    the per-turn child process (`openclaw worker`) used only by
+          `worker-turn` placement. Codex `remote-exec` keeps its turn loop on the
+          gateway and runs its managed exec-server on the enrolled node.
 Isolation a property OF the runner (none | docker | podman), not a place.
 Project   repo identity: normalized remote.origin.url, with the existing
           16-char repo fingerprint as the no-remote fallback. Derived,
@@ -105286,7 +105799,7 @@ channel.
 
 ### Worker ingress on the public endpoint (milestone 5)
 
-Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted worker children dial that endpoint directly. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto node-backed worker turns; SSH remains only for `remote-exec` workspace transport and separately owned desktop tunnels.
+Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted `worker-turn` children dial that endpoint directly; node-backed Codex `remote-exec` instead uses the explicitly authorized duplex node carrier and never starts a worker child. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto enrolled cloud nodes; SSH remains available for explicitly SSH-backed `remote-exec` providers and separately owned desktop tunnels.
 
 Hardening that ships with the exposure, not after it:
 
@@ -105370,6 +105883,9 @@ stated honestly (revision 1 undersold this):
   visibly. Public node/environment inventory projects the same slot snapshot.
   Terminal node launch receipts retain a 24-hour replay window and prune in
   bounded batches; `pending` and `running` capacity reservations never age out.
+  Codex `remote-exec` starts its managed node exec-server directly and does not
+  consume a worker slot; eligibility instead requires its current, effectively
+  invocable command and separate per-attempt approval.
 - **Multi-gateway safety.** The worker install/workspace root on a node is
   namespaced by gateway identity so two gateways pairing one machine cannot
   corrupt each other's state.
@@ -105531,11 +106047,14 @@ speak. Additions:
 - **Where picker regrouped** (`ui/src/pages/new-session/device-placement.ts`):
   sections "This gateway" / "Devices" / "Cloud". Device rows come only from
   node entries in `environments.list`. A device is selectable only when its
-  current status is available, `sessionHost` is true, and its exact bounded
-  worker slots are valid with `available > 0`. Offline known session hosts,
-  connected non-hosts, saturated hosts, hosts without capacity, outdated
-  hosts, and unavailable hosts stay visible but disabled with a next step.
-  Cloud profiles remain their separate list.
+  current status is available, `sessionHost` is true, and the selected runtime
+  has its required authority. OpenClaw `worker-turn` requires exact bounded
+  worker slots with `available > 0`; Codex `remote-exec` requires its
+  effectively invocable exec-server command and can run with zero free worker
+  slots. Offline known session hosts, connected non-hosts, incompatible or
+  saturated hosts, outdated hosts, and unavailable hosts stay visible but
+  disabled with a next step. Cloud profiles remain their separate list and are
+  filtered by membership in their complete advertised execution-mode set.
 - **Remote placement uses one session path.** Device and cloud selections use
   a Gateway project or folder, force a managed worktree, create the session
   without `execNode`, dispatch by exact `{ deviceId }` or `{ profileId }`, and
@@ -105567,18 +106086,26 @@ speak. Additions:
 
 ### Cloud convergence (milestone 10)
 
-The bundled Crabbox provider now boots the box and runs
+The bundled Crabbox provider boots the box and runs
 `openclaw connect <setup code> --ephemeral` in an isolated per-lease state
-directory. The Gateway persists one replay-safe setup identity, atomically
-binds the authenticated device identity to the worker environment, pushes the
-current bundle through the node channel, and removes the node role after
-provider teardown. `destroy` = release lease plus pairing cleanup. Codex now
-supports paired-device `remote-exec` over the approved duplex node carrier;
-disconnect ends the attempt, and reconnect starts a fresh attempt without
-resume. Crabbox cloud profiles remain `worker-turn` only. The replaced
-reverse-tunnel/rsync cloud carrier has been deleted. Distinct stable SSH,
-OpenShell, Claude, and exec-host contracts remain intact; broader replacement
-and reconnect or resume are later work.
+directory. One configured cloud profile advertises both `worker-turn` and
+`remote-exec`; the selected session runtime determines provider setup and
+placement ownership, while both modes return the same enrolled node transport.
+The Gateway persists one replay-safe setup identity, atomically binds the
+authenticated device identity to the environment, pushes the current pinned
+bundle through the node channel, and removes the node role after provider
+teardown. `destroy` releases the lease and cleans up its pairing and children.
+
+OpenClaw launches a restricted node-supervised worker child. Codex instead uses
+the bundled, pinned managed exec-server over the approved duplex node carrier;
+its app-server, model authentication, and transcript remain Gateway-owned.
+The Codex command requires explicit Gateway allowlisting and critical
+per-attempt allow-once approval, and consumes no worker slot. Disconnect ends
+the attempt; reconnection permits only a fresh attempt without process or
+stream resumption. The replaced reverse-tunnel/rsync cloud carrier remains
+deleted. Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain
+intact; broader replacement, reconnect or resume, node-child isolation, and
+device-project checkouts remain later work.
 
 ## What the adversarial reviews killed or reshaped
 
@@ -105700,14 +106227,19 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
 8. **Stop-and-continue moves** (landed): drain + reclaim + re-dispatch to
    another runner, plus durable offline-device waiting and explicit destructive
    Gateway continuation.
-9. **Node exec-server carrier and contract-preserving cleanup**: the missing
-   node exec-server carrier must first reproduce existing remote-exec and
-   approval behavior. Keep the stable SSH sandbox, OpenShell, Claude one-shot,
-   and exec-host contracts until their individual replacements are proved;
-   none is deletable merely because node-backed session hosting exists.
+9. **Node exec-server carrier and contract-preserving cleanup**: the approved
+   duplex node exec-server carrier supports paired-device and cloud-node
+   Codex remote execution while retaining explicit command authorization,
+   per-attempt approval, Gateway-owned authentication, terminal disconnects,
+   and fresh-attempt-only recovery. Keep the stable SSH sandbox, OpenShell,
+   Claude one-shot, and exec-host contracts until their individual replacements
+   are proved; none is deletable merely because node-backed session hosting
+   exists.
 10. **Cloud convergence** (landed): `--ephemeral` enrollment, provisioners run
-    `openclaw connect`, and the former worker reverse-tunnel/rsync carrier is
-    removed. Stable SSH-backed remote-exec and desktop contracts remain.
+    `openclaw connect`, and one bundled Crabbox profile supports both OpenClaw
+    `worker-turn` and Codex `remote-exec` through enrolled outbound nodes. The
+    former worker reverse-tunnel/rsync carrier stays removed. Stable
+    SSH-backed remote-exec and desktop contracts remain.
 
 Net production LOC across the plan is targeted negative: milestones 3–5 are
 small additions, 6–7 are mostly a provider + one transport implementation
@@ -107309,19 +107841,74 @@ because it does not provide `node:sqlite`.
 
 ## Desktop companion
 
-The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
+The OpenClaw Linux companion is a Tauri desktop app for local and remote
+Gateways. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
+- walks new users through choosing a local Gateway, a discovered remote Gateway,
+  a manually entered Gateway URL, or an SSH tunnel
+- installs the OpenClaw CLI and managed Node runtime when local setup needs
+  them; release builds install the stable channel automatically, while
+  development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
+- opens Model Setup for an unconfigured local or remote Gateway, automatically
+  tests available AI credentials, and verifies an existing model before
+  opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+### First-run setup
+
+Choose **Get started** on the welcome screen, then choose where your assistant
+should live:
+
+- **On this computer** installs any missing local prerequisites and starts the
+  Gateway as a systemd user service.
+- **On another computer** connects to an existing Gateway. Select a discovered
+  Gateway, enter its address under **Gateway URL**, or choose **SSH tunnel**
+  and enter an SSH target such as `user@gateway-host`. The Gateway port defaults
+  to `18789`.
+
+If the remote Gateway requires authentication, expand **Gateway authentication**
+and enter its token or password. Use one credential type, matching the remote
+Gateway's configuration. Remote setup does not install or start a local Gateway
+service; the remote host owns its model, provider credentials, and agent state.
+
+Use HTTPS or `wss://` for public direct connections. Plain HTTP or `ws://`
+should be limited to loopback, trusted private networks, and Tailnet hosts.
+When the saved configuration includes `gateway.remote.tlsFingerprint`, select
+**SSH tunnel** instead of a direct connection. The embedded browser cannot
+enforce a certificate pin, so the app rejects direct connections before loading
+the remote dashboard or exposing its credentials. Saved remote token and
+password values can use environment- or file-backed SecretRefs; exec and
+shared-store references must be resolved on their owning Gateway host.
+SSH uses your existing OpenSSH authentication and host-key verification. See
+[Remote access](/gateway/remote) for secure Gateway configuration.
+
+After the connection succeeds, Model Setup checks for existing AI credentials,
+offers provider sign-in or API-key entry when needed, and requires a successful
+model response before opening the agent. An already configured Gateway opens
+its normal dashboard; newly configured access continues into guided onboarding.
+Gateway restarts preserve the active setup flow. Closing and reopening the app
+during model activation resumes the same Gateway, agent, and model instead of
+activating the provider twice.
+
+For OpenAI, choose **ChatGPT Login** to use a ChatGPT or Codex subscription, or
+**OpenAI API Key** for API billing. Browser sign-in completes on the Gateway
+host. If that host is remote or its localhost callback cannot be reached,
+choose **ChatGPT Device Pairing** from the additional sign-in options instead;
+device pairing works without a localhost callback. See
+[OpenAI](/providers/openai) and [OAuth](/concepts/oauth).
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
 
 ### Host sleep
 
@@ -107413,7 +108000,8 @@ plain-text reply below the composer. Press `Esc` to dismiss the bar and its repl
 
 ## CLI and SSH alternative
 
-The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
+The CLI remains the simplest option for a headless server or VPS. Use a manual
+SSH tunnel when connecting without the Linux desktop companion:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
@@ -112746,14 +113334,9 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
   <Step title="Register the backend">
     ```typescript index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-    function buildAcmeCliBackend(): CliBackendPlugin {
+    function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
         liveTest: {
@@ -112794,12 +113377,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           imageArg: "--image",
           imageMode: "repeat",
           imagePathScope: "workspace",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
           serialize: true,
         },
       };
@@ -112826,7 +113403,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
 `CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
 worked example above intentionally exercises the same command, resume, JSONL,
-model-alias, session, image, and watchdog fields as the bundled
+model-alias, session, and image fields as the bundled
 `google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
@@ -112855,6 +113432,10 @@ model-alias, session, image, and watchdog fields as the bundled
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
 | `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
 
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
@@ -114032,27 +114613,30 @@ This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
 rejects that combination.
 
-Paired-device `remote-exec` placement is a separate, placement-owned execution
-path and does not require `appServer.experimental.sandboxExecServer`. The
-Gateway keeps Codex app-server and provider auth local, while the authorized
-paired device runs the managed Codex exec-server over its existing duplex node
-connection. It requires explicit `gateway.nodes.commands.allow` authorization
-for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
-invocation approval. The node receives a fresh private home and sanitized
-environments, never Gateway provider, cloud, or GitHub credentials. A lost
-node connection terminates the attempt and process instead of resuming it.
-Each paired-device attempt uses its own Gateway app-server client because
-Codex can register a remote environment but cannot remove one from a running
-app-server. The device exec-server does not consume an OpenClaw worker slot.
-HTTP requests containing authentication, cookies, API keys, or other
-credential-bearing headers are rejected before reaching the device; use a
-Gateway-owned authenticated request or a credential-free endpoint instead.
+Node-backed `remote-exec` placement on a paired device or enrolled Crabbox
+cloud worker is a separate, placement-owned execution path and does not require
+`appServer.experimental.sandboxExecServer`. The Gateway keeps Codex
+app-server and provider auth local, while the authorized node runs the managed,
+pinned Codex exec-server over its existing duplex connection. It requires
+explicit `gateway.nodes.commands.allow` authorization for
+`codex.exec-server.stdio.v1`, the approved pairing surface, and separate
+allow-once node invocation approval for each attempt. The node receives a
+fresh private home and sanitized environments, never Gateway provider, cloud,
+or GitHub credentials. A lost node connection terminates the attempt and
+process instead of resuming it. Each node-backed attempt uses its own Gateway
+app-server client because Codex can register a remote environment but cannot
+remove one from a running app-server. The node exec-server does not consume an
+OpenClaw worker slot. HTTP requests containing authentication, cookies, API
+keys, or other credential-bearing headers are rejected before reaching the
+node; use a Gateway-owned authenticated request or a credential-free endpoint
+instead.
 Normal Codex turns are supported, but `/btw` side questions are unavailable
 until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.
-See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
+and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-worker).
 
 ## Auth and environment isolation
 
@@ -114648,10 +115232,9 @@ final assistant text private unless the agent calls `message(action="send")`.
 
 Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
-or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
-developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
-heartbeat prompt when present.
+or notify. Heartbeat turns use the same Codex Default collaboration mode as
+ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
+scheduled heartbeat user message when present.
 
 ## Hook boundaries
 
@@ -114721,20 +115304,23 @@ process. Failed environment registration never falls back to host execution.
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 
-Paired-device `remote-exec` is separate from the experimental local sandbox
-flag: Codex app-server and model auth stay on the Gateway, while an explicitly
-authorized managed exec-server on the node owns process, filesystem, capability,
-and credential-free HTTP operations. The Gateway rejects authentication,
-cookie, API-key, and other sensitive HTTP headers before they reach the node;
-authenticated HTTP must run on the Gateway. The existing duplex node channel
-carries the Codex JSON-RPC stream without starting an OpenClaw worker child or
-consuming a worker slot. Each attempt owns an isolated Gateway app-server
-client so its remote environment registration retires with that attempt.
-Disconnect ends the active attempt and its remote processes; reconnect allows
-only a fresh attempt. Normal Codex turns work, but `/btw` side questions fail
-closed because they are not yet placement-bound. The placement workspace does
-not confine execution: process and filesystem access remain bounded only by the
-node's operating system account.
+Node-backed `remote-exec`, whether on a paired device or the same Crabbox cloud
+profile used for OpenClaw worker turns, is separate from the experimental
+local sandbox flag. Codex app-server and model auth stay on the Gateway, while
+an explicitly authorized managed exec-server on the enrolled node owns
+process, filesystem, capability, and credential-free HTTP operations. The
+Gateway rejects authentication, cookie, API-key, and other sensitive HTTP
+headers before they reach the node; authenticated HTTP must run on the
+Gateway. The existing duplex node channel carries the Codex JSON-RPC stream
+without starting an OpenClaw worker child or consuming a worker slot. Explicit
+Gateway command allowlisting and separate per-attempt allow-once approval
+remain required. Each attempt owns an isolated Gateway app-server client so its
+remote environment registration retires with that attempt. Disconnect ends the
+active attempt and its remote processes; reconnect allows only a fresh
+attempt. Normal Codex turns work, but `/btw` side questions fail closed because
+they are not yet placement-bound. The placement workspace does not confine
+execution: process and filesystem access remain bounded only by the node's
+operating system account.
 
 ## V1 support contract
 
@@ -114979,9 +115565,9 @@ with Codex native code mode enabled (code-mode-only stays off by default), so
 native workspace/code capabilities remain available alongside OpenClaw
 dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
-unless you opt into the experimental sandbox exec-server path. Paired-device
-`remote-exec` instead uses its placement-owned environment without that
-experimental flag.
+unless you opt into the experimental sandbox exec-server path. Node-backed
+`remote-exec` on a paired device or cloud worker instead uses its
+placement-owned environment without that experimental flag.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -115170,6 +115756,38 @@ processes. Normal Codex turns are supported, but `/btw` side questions are not
 yet bound to paired-device placement and fail with an actionable explanation.
 See [Cloud workers and paired-device placement](/gateway/cloud-workers) and
 [Node command policy](/nodes#command-policy).
+
+## Run Codex on a cloud worker
+
+The bundled Crabbox provider supports both OpenClaw `worker-turn` and Codex
+`remote-exec`, so one configured cloud-worker profile is selectable for either
+harness. Choose the same **Cloud · profile** destination in New Session or
+Move Session after selecting a Codex model. Profile placement requires
+`operator.admin` and a managed Gateway worktree.
+
+Enable the Codex plugin and explicitly allow
+`codex.exec-server.stdio.v1` on the Gateway, as shown in
+[Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+The cloud image may include the exact-version bundled Codex plugin; otherwise,
+the profile setup or image must install the matching trusted official npm Codex
+plugin and its pinned platform-native Codex binary. Crabbox validates the
+bundled or prepared installation and preserves its provenance in the disposable
+node's isolated state without installing a plugin during enrollment. The Gateway
+checks the cloud node's current pairing and
+effectively invocable command before starting a Codex process; approve the
+critical allow-once request for each exec-server attempt.
+
+Codex runs its managed exec-server over the enrolled node's authenticated
+outbound connection without starting an OpenClaw worker child or consuming a
+worker slot. Its app-server, model connection, provider authentication, and
+transcript remain Gateway-owned. Process and filesystem access still have the
+node operating-system account's permissions, and only credential-free HTTP is
+forwarded. Workspace changes reconcile to the Gateway-owned worktree. A failed
+or disconnected attempt is terminal and requires a fresh attempt; it never
+resumes the remote process or falls back to Gateway-local or SSH execution.
+
+See [Cloud workers](/gateway/cloud-workers) for profile configuration,
+placement lifecycle, and cleanup.
 
 ## Share threads with Codex Desktop and CLI
 
@@ -116107,9 +116725,8 @@ dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Heartbeat collaboration instructions
-tell Codex to search for `heartbeat_respond` before ending a heartbeat turn
-when the tool is not already loaded.
+Scheduled heartbeat user messages identify `heartbeat_respond` when structured
+responses are enabled; the tool remains discoverable through Codex tool search.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -117785,7 +118402,7 @@ OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
-media delivery, the visible transcript mirror, `/btw` side questions (see
+media delivery, the visible chat transcript, `/btw` side questions (see
 [Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
 For the broader model/provider/runtime split, start with
@@ -118000,22 +118617,32 @@ When `harness.compact` runs, the Copilot SDK harness:
 3. Returns the SDK compaction outcome without writing compatibility marker
    files under the workspace.
 
-The OpenClaw-side transcript mirror (below) keeps receiving post-compaction
+The OpenClaw-side transcript journal (below) keeps receiving post-compaction
 messages, so user-facing chat history stays consistent.
 
-## Transcript mirroring
+## Transcript persistence
 
-`runCopilotAttempt` dual-writes each turn's mirrorable messages into the
-OpenClaw audit transcript via
-`extensions/copilot/src/dual-write-transcripts.ts`. The mirror is scoped per
-session (`copilot:${sessionId}`) and keyed per message
-(`${role}:${sha256_16(role,content)}`), so re-emitted prior-turn entries
-collide with existing on-disk keys instead of duplicating.
+`runCopilotAttempt` gives each attempt a transcript journal
+(`createAttemptTranscriptJournal` in
+`extensions/copilot/src/attempt-transcript-journal.ts`) that persists every
+turn's messages into the OpenClaw session transcript. Journal identity is
+turn-scoped, not content-scoped: the initial user turn is keyed
+`${runId}:user` and SDK-sourced events are keyed
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
+idempotency scan at the transcript store, so re-emitted prior-turn entries
+cannot duplicate.
 
-Two layers of failure containment wrap the mirror so a transcript write
-failure never fails the attempt: an internal best-effort wrapper, plus a
-defense-in-depth `.catch(...)` at the attempt level. Failures are logged, not
-surfaced.
+Assistant turns and their tool results are journaled as structurally complete
+groups, so a crash between groups leaves a valid transcript prefix.
+`before_message_write` hooks may redact content but cannot change role or
+tool topology; a structurally destructive rewrite suppresses the whole group
+instead of persisting a false replay.
+
+Persistence failures fail closed. The first write failure marks the journal
+failed, aborts the in-flight SDK session, and flags the attempt's replay as
+unvalidated so the next run creates a fresh SDK session instead of trusting a
+partial transcript. Only the post-append transcript update notification is
+best-effort and logged.
 
 ## Side questions (`/btw`)
 
@@ -121870,6 +122497,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 - static capability-ownership snapshots (`contracts`)
 - dashboard widget data bindings and action verbs
 - static MCP servers that should exist while the plugin is enabled
+- durable and regenerable state- or agent-relative backup resources
 - QA runner metadata the shared `openclaw qa` host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
@@ -121998,6 +122626,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                                                                                                                                                                       |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                                                                                                                                                                    |
 | `activation`                         | No       | `object`                     | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                                                                                                                                                                    |
+| `backupResources`                    | No       | `object[]`                   | Manifest-owned durable or regenerable state- or agent-relative backup resources. Applied only for effectively activated, loadable plugins without executing their runtime. See [backupResources reference](#backupresources-reference).                                                                                                                                                          |
 | `setup`                              | No       | `object`                     | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                                                                                                                                                                                 |
 | `doctorContract`                     | No       | `object`                     | Declares which dynamic doctor-contract surfaces the plugin artifact exports so doctor loads only relevant modules.                                                                                                                                                                                                                                                                               |
 | `sessionRouteStateOwners`            | No       | `object[]`                   | Static session-route ownership for doctor cleanup. Each entry declares an `id`, `label`, and optional `providerIds`, `runtimeIds`, `cliSessionKeys`, and `authProfilePrefixes`.                                                                                                                                                                                                                  |
@@ -122031,6 +122660,53 @@ migration window.
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
+
+## backupResources reference
+
+Use `backupResources` to declare plugin-owned durable data that backups must
+include, or generated data that OpenClaw can safely omit and regenerate after
+restore. The backup planner reads this metadata without loading plugin runtime
+or modifying plugin files. Only effectively activated, loadable plugins
+contribute resources; disabled or unloadable plugins cannot exclude data.
+
+```json
+{
+  "backupResources": [
+    {
+      "disposition": "include",
+      "scope": "state",
+      "relativePath": "example-plugin/durable-state"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "example-plugin/generated-cache"
+    }
+  ]
+}
+```
+
+Each entry is a closed object with exactly these fields:
+
+| Field          | Required | Type                         | What it means                                                                          |
+| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `disposition`  | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
+| `scope`        | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
+| `relativePath` | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+
+Plugin identity and its trusted root come from manifest discovery; resource
+entries cannot declare or override an owner. `relativePath` must not be empty
+or absolute and must not contain backslashes, NULs, empty path segments, `.`,
+`..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
+its selected anchor. Invalid entries are rejected rather than normalized.
+
+The planner deduplicates resources deterministically. A narrower `regenerable`
+declaration wins over a broad configured state or agent root. Among plugin
+resource declarations, only an explicit nested `include` protects a descendant
+and keeps its excluded ancestors traversable. Explicit config, credentials,
+workspace, and nested agent paths also remain protected. Omit only data the
+plugin can recreate.
+`openclaw backup create --only-config` does not inspect plugin backup metadata.
 
 ## MCP server reference
 
@@ -122585,7 +123261,7 @@ Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot`
 
 Embedding providers must declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. The same generic contract serves reusable vector generation and memory search. The retired `contracts.memoryEmbeddingProviders` key is no longer accepted.
 
-Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Core persists durable intent before calling `provision`; providers validate their settings and any optional per-dispatch `machineClass` before external allocation, and repeated calls with the same operation id must adopt the same lease. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Providers used for session placement must declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases and `remote-exec` providers return SSH leases. Omission advertises no session-placement modes while leaving direct lifecycle operations available. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` orphans an active local record; after a persisted destroy request it confirms teardown.
+Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Core persists durable intent before calling `provision`; providers validate their settings and optional per-dispatch `machineClass` and `executionMode` before external allocation, and repeated calls with the same operation id must adopt the same lease without changing the selected mode. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare a closed, unique, canonically ordered `supportedExecutionModes` tuple: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicates, unknown values, and noncanonical ordering are rejected. `worker-turn` requires a node lease; `remote-exec` accepts a node lease or an SSH lease. Omission advertises no session-placement modes while leaving direct lifecycle operations available. A direct environment create supplies no session execution mode; providers use their documented default, which is `worker-turn` for Crabbox. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` orphans an active local record; after a persisted destroy request it confirms teardown.
 
 `contracts.gatewayMethodDispatch` currently accepts `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP routes that intentionally dispatch Gateway control-plane methods in-process, not a sandbox against malicious native plugins. Use it only for tightly reviewed bundled/operator surfaces that already require Gateway HTTP auth. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
@@ -124251,7 +124927,7 @@ Key toggles:
 | ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
 | `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
 | `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
-| `vault.path`                               | global default `~/.openclaw/wiki/main`         | exact vault globally; agent-scope parent defaults to `~/.openclaw/wiki`       |
+| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`       |
 | `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
 | `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
@@ -124262,6 +124938,11 @@ Key toggles:
 | `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
 | `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
 | `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+
+The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
+set, default wiki vaults use that directory instead. Explicit `vault.path`
+values keep their configured location, and `~/` still expands against the home
+directory.
 
 ### Per-agent vaults
 
@@ -124300,8 +124981,9 @@ normalized agent id:
 
 This resolves to `~/.openclaw/wiki/support` and
 `~/.openclaw/wiki/marketing`. If `vault.path` is omitted in agent scope, the
-parent defaults to `~/.openclaw/wiki`. The default `main` agent therefore keeps
-the existing `~/.openclaw/wiki/main` path.
+parent defaults to `<state-dir>/wiki`, where the state directory is
+`~/.openclaw` or the value of `OPENCLAW_STATE_DIR`. The default `main` agent
+therefore uses `<state-dir>/wiki/main`.
 
 Agent tools, compiled prompt digests, and the wiki supplement exposed through
 `memory_search` / `memory_get` resolve the vault from the active agent context.
@@ -130711,7 +131393,7 @@ persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases, while `remote-exec` providers return SSH leases. Omission advertises no placement modes while preserving direct environment lifecycle calls. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
+Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` and `options.executionMode` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease for the same operation id and selected execution mode; a retry cannot silently change modes. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare one or both current `supportedExecutionModes` values in deterministic canonical order: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicate values, unknown modes, and noncanonical order are rejected. `worker-turn` requires a node lease; `remote-exec` accepts either a node lease or an existing SSH lease. Omission advertises no placement modes while preserving direct environment lifecycle calls. Direct environment creation without a session supplies no execution mode, so providers retain their intentional default setup; the bundled Crabbox provider defaults to `worker-turn`. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 `WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
@@ -131798,6 +132480,12 @@ catalog, API-key auth, and dynamic model resolution.
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
 
+    When `ctx.providerIds` is present, it contains the normalized provider
+    identities selected for that catalog owner. Return `null` before resolving
+    credentials or making network requests when the hook serves none of them;
+    OpenClaw also filters returned identities to that scope. An absent scope
+    means the caller requested the full catalog.
+
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
 
@@ -132668,6 +133356,12 @@ Internal OpenClaw runtime code follows the same direction: load config once at t
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
 ## Reusable runtime utilities
+
+Channel plugins must admit authenticated agent turns through their injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
+accepts owner authority only from the exact active, trusted plugin registered for
+`options.messageChannel`; guest turns retain their non-owner identity. The public
+`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
@@ -137324,9 +138018,14 @@ with any other status returns `400 invalid_request`.
   "flowId": "flow_123",
   "runtime": "acp",
   "childSessionKey": "agent:main:acp:worker",
+  "runId": "run_123",
   "task": "Inspect the next message batch"
 }
 ```
+
+`childSessionKey` identifies the backing run but does not grant authority over it. For automatic
+lifecycle tracking and cancellation, include the exact `runId`; the backing task must be owned by
+the route's configured session. Foreign, stale, or replaced runs are rejected at use time.
 
 ## Response shape
 
@@ -138843,6 +139542,17 @@ contracts: `workerProviders`
 ## Configure
 
 See [Cloud worker environments](/gateway/configuration-reference#crabbox-profile) for the profile schema and lifecycle notes.
+
+Forward Gateway environment variables to an operator-provided setup script by listing their names in the Crabbox profile settings:
+
+```json5 validate=false
+{
+  setup: 'install-worker "$OPENCLAW_WORKER_ARTIFACT_TOKEN"',
+  setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
+}
+```
+
+`setupEnv` explicitly forwards up to 16 unique environment variable names to the setup command only. Values are read from the Gateway process environment and are never stored in the profile configuration. Missing variables fail before a machine is allocated.
 
 <!-- openclaw-plugin-reference:manual-end -->
 
@@ -142504,15 +143214,16 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 OpenClaw detects the available Anthropic credential and selects the matching usage surface:
 
-- Claude subscription/setup credentials show quota windows and optional extra-usage budget.
+- OpenClaw-managed subscription/setup credentials show quota windows and optional extra-usage budget.
+- Native Claude CLI logins stay under Claude's exclusive refresh control, so OpenClaw does not poll their quota endpoint.
 - `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` shows 30 days of provider-reported organization cost and Messages API usage in Control UI **Usage**, including daily spend, token/cache totals, top models, and cost categories.
 - An `sk-ant-admin...` credential stored in the Anthropic provider profile is detected as an Admin API key automatically.
 
 Admin API cost history comes from Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api). It is actual provider billing, separate from OpenClaw's session-derived estimated cost.
 
 <Warning>
-Claude Code owns its existing login and subscription; OpenClaw does not extract
-that login or synthesize Anthropic API requests. Agent SDK and `claude -p`
+Claude Code owns its existing login and subscription; OpenClaw does not persist
+or refresh that login. Agent SDK and `claude -p`
 usage currently draw from the signed-in subscription's limits. API-key auth
 uses separate pay-as-you-go billing and is preferable for shared automation or
 predictable production spend.
@@ -142578,6 +143289,13 @@ OpenClaw release:
 
         ```bash
         claude --version
+        claude auth status --text
+        ```
+
+        If Claude is not logged in, authenticate once as the Gateway user:
+
+        ```bash
+        claude auth login
         ```
 
         If the installed build is incompatible, update Claude Code and restart
@@ -142593,13 +143311,15 @@ OpenClaw release:
         # choose: Claude CLI
         ```
 
-        OpenClaw detects the existing Claude CLI login. Normal agent turns use
-        the official Agent SDK with the installed, authenticated Claude Code
-        executable, including native-tool turns whose approvals remain under
-        OpenClaw control. Imported native OAuth profiles reuse the verified
-        Claude Code login; explicitly selected API-key or token credentials
-        still use protected file-descriptor forwarding. Isolated side-question
-        completions and paired-node execution retain the supervised CLI path.
+        Normal agent turns use the official Agent SDK with the installed,
+        authenticated Claude Code executable. OpenClaw uses a non-secret route
+        marker and never reads, persists, refreshes, selects, or forwards the
+        native login tokens. Claude owns the login and token refresh lifecycle.
+        Explicitly selected API-key or token credentials still use protected
+        file-descriptor forwarding. Native-tool approvals remain under OpenClaw
+        control. Schema-valid native calls pass through OpenClaw's canonical
+        tool policy before native approval. Isolated side-question completions
+        and paired-node execution retain the supervised CLI path.
 
         Consecutive agent turns reuse the same warm Agent SDK query and Claude
         Code subprocess when their authenticated session and execution policy
@@ -155012,6 +155732,13 @@ interactive onboarding or pass the shared OpenCode API key directly.
 ## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
+OpenClaw combines the models available to your Go account with authoritative
+metadata from `https://models.opencode.ai/api.json`, so new upstream models
+appear without an OpenClaw update. The upstream catalog is downloaded and
+cached only when OpenCode Zen or Go is configured or explicitly selected with
+OpenCode credentials; it is never fetched at startup or while using unrelated
+providers.
+
 Current active rows:
 
 | Model ref                       | Context   | Max output | Inputs      | Transport |
@@ -155030,19 +155757,23 @@ Current active rows:
 | `opencode-go/mimo-v2.5-pro`     | 1,048,576 | 128,000    | Text        | Chat      |
 | `opencode-go/minimax-m2.7`      | 204,800   | 131,072    | Text        | Messages  |
 | `opencode-go/minimax-m3`        | 1M        | 131,072    | Text, image | Messages  |
+| `opencode-go/ox-alpha-free`     | 1M        | 131,072    | Text, image | Chat      |
 | `opencode-go/qwen3.6-plus`      | 1M        | 65,536     | Text, image | Messages  |
 | `opencode-go/qwen3.7-max`       | 1M        | 65,536     | Text        | Messages  |
 | `opencode-go/qwen3.7-plus`      | 1M        | 65,536     | Text, image | Messages  |
 | `opencode-go/qwen3.8-max`       | 1M        | 131,072    | Text, image | Messages  |
 
-Deprecated and preview refs remain resolvable only for existing explicit
-configurations. They are not part of static or live recommendations.
+Current upstream preview models appear while available. Deprecated refs remain
+resolvable only for existing explicit configurations and are not recommended.
+
+Ox Alpha Free is free for a limited time, but accessing the Go catalog still
+requires a paid OpenCode Go subscription.
 
 ## Privacy
 
-OpenCode's current policy says model training is not used for any active Go
-route. Grok 4.5 and GPT-5.6 Luna retain data for up to 30 days; the other active
-Go routes list zero-day retention. Review the current
+OpenCode lists zero data retention and no model training for Ox Alpha Free.
+Privacy policies vary by model: some routes retain data for up to 30 days, and
+the Muse Spark 1.2 Contributor route permits model training. Review the current
 [OpenCode Go privacy table](https://opencode.ai/docs/go/#privacy) before using a
 model, because provider policy can change independently of OpenClaw.
 
@@ -155187,30 +155918,38 @@ provider ids split so upstream per-model routing stays correct.
 
 ### Zen
 
-| Property         | Value                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                                                            |
-| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
+| Property         | Value                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                                                                         |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle`, `opencode/x-preview-f-free` |
 
 Run `openclaw models list --provider opencode` for the current active list,
 which also includes the promoted free-tier rows `opencode/big-pickle`,
 `opencode/deepseek-v4-flash-free`, `opencode/laguna-s-2.1-free`,
 `opencode/ling-3.0-tiny-free`, `opencode/longcat-2.0-free`,
 `opencode/mimo-v2.5-free`,
-`opencode/nemotron-3-ultra-free`, and `opencode/north-mini-code-free`.
+`opencode/nemotron-3-ultra-free`, `opencode/north-mini-code-free`, and
+`opencode/x-preview-f-free` (Ox Alpha Free).
 
-Live discovery safely intersects OpenCode's returned IDs with trusted OpenClaw
-metadata. A key-scoped response can omit models that are unavailable to that
-workspace; that absence does not retire the offline definition. Deprecated
-explicit refs remain resolvable for existing configurations but are not shown
-as current recommendations.
+Live discovery combines the models available to your OpenCode account with
+authoritative model metadata from `https://models.opencode.ai/api.json`.
+OpenClaw fetches and caches that catalog only when OpenCode Zen or Go is
+configured or explicitly selected with OpenCode credentials; startup and
+unrelated providers never download it. New upstream models become available
+without an OpenClaw update. A key-scoped response can omit models unavailable
+to that workspace. Deprecated explicit refs remain resolvable for existing
+configurations but are not shown as current recommendations.
+
+Ox Alpha Free is available for a limited time. OpenCode says this model has
+zero data retention and is not used for model training; see the current
+[OpenCode Zen pricing and policy](https://opencode.ai/docs/zen/).
 
 ### Go
 
-| Property         | Value                                                                        |
-| ---------------- | ---------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/gpt-5.6-luna`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                                             |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/gpt-5.6-luna`, `opencode-go/qwen3.8-max`, `opencode-go/ox-alpha-free` |
 
 See [OpenCode Go](/providers/opencode-go) for the full Go model table.
 
@@ -160495,9 +161234,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   does not read or write the retired workspace JSON and `.attested` sidecars;
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
-  and the CLI are removed. Existing rows and legacy JSON stay untouched and
-  inert until an approved retention and schema-version migration can remove
-  them.
+  and the CLI are removed. The schema 7 migration discards canonical commitment
+  rows. Legacy `commitments.json` stays untouched and inert pending an accepted
+  retention decision.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -160547,7 +161286,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `7`, and
+- No new file-era runtime stores. The current global schema is version `9`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -160571,9 +161310,9 @@ proceed with these assumptions:
   SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
   `credentials/oauth.json` files are doctor migration inputs, then removed
   after import.
-- Generated model catalog state is database-backed. Runtime code must not write
-  `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
-  doctor inputs and are removed after import into `agent_model_catalogs`.
+- Generated model catalogs have no runtime-owned SQLite store or `models.json`
+  doctor import. The unused `agent_model_catalogs` table was retired in state
+  schema v10.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
   legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
@@ -160644,7 +161383,7 @@ The branch already has a real shared SQLite base:
   24.15+, or 25.9+. `package.json`, the CLI runtime guard, installer defaults,
   macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
-  `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
+  `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, and applies
   the build-inlined schema bytes derived from
   `src/state/openclaw-state-schema.sql`.
 - Kysely table types are generated from disposable SQLite databases created
@@ -160654,7 +161393,7 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 7`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 9`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
@@ -160663,10 +161402,10 @@ The branch already has a real shared SQLite base:
   transcript events.
 - Current shared tables include `agent_databases`,
   `auth_profile_stores`, `auth_profile_state`,
-  `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
+  `plugin_state_entries`, `plugin_blob_entries`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`,
-  `delivery_queue_entries`, `model_capability_cache`,
+  `delivery_queue_entries`,
   `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
   `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
@@ -160693,7 +161432,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 7`; per-agent DBs use version `17`.
+  currently uses `user_version = 9`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -160793,11 +161532,11 @@ The branch already has a real shared SQLite base:
 - Legacy auth profile path helpers now live in doctor legacy code. Core auth
   profile path helpers expose SQLite auth-store identity and display locations,
   not `auth-profiles.json` or `auth-state.json` runtime paths.
-- Subagent run recovery and OpenRouter model capability cache runtime modules
-  now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
-  import helpers. OpenRouter capabilities use the typed generic
-  `model_capability_cache` rows under `provider_id = "openrouter"` instead of
-  one opaque cache blob or a provider-specific host table. Subagent run
+- Subagent run recovery keeps SQLite snapshot readers/writers separate from
+  doctor-only legacy JSON import helpers. OpenRouter capabilities use the
+  provider-local in-memory TTL cache in `extensions/openrouter/provider-catalog.ts`;
+  the unused `model_capability_cache` table was retired in state schema v10.
+  Subagent run
   `taskName` is stored in the typed `subagent_runs.task_name` column; the
   `payload_json` copy is replay/debug data, not the source for hot display or
   lookup fields.
@@ -160841,9 +161580,9 @@ The branch already has a real shared SQLite base:
 - Android device identity and cached device auth remain app-local stores. They
   require a separate Android-owned migration; the host SQLite claims do not
   describe current Android behavior.
-- Android notification recent-package history uses typed
-  `android_notification_recent_packages` rows. Runtime no longer migrates or
-  reads the old SharedPreferences CSV keys.
+- Android notification recent-package history remains app-local Kotlin state;
+  the unused `android_notification_recent_packages` table was retired in state
+  schema v10.
 - Device identity creation fails closed when a legacy `identity/device.json`
   cannot be safely imported, when the SQLite identity row is invalid, or when
   the SQLite identity store cannot be opened. Gateway startup and Doctor both
@@ -161320,8 +162059,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   opt-in JSONL artifacts. `OPENCLAW_CACHE_TRACE_FILE`,
   `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, `OPENCLAW_RAW_STREAM_PATH`, and
   `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` remain supported path controls. Gateway
-  stability bundles use typed SQLite `diagnostic_stability_bundles` rows and can
-  be materialized into an explicit support export.
+  stability bundles are JSON file exports owned by
+  `src/logging/diagnostic-stability-bundle.ts`; the unused
+  `diagnostic_stability_bundles` table was retired in state schema v10.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -161548,12 +162288,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   durable ACPX runtime records are the SQLite lease and gateway-instance rows;
   the old ACPX `stateDir` config surface is removed because no runtime state is
   written there anymore.
-- Gateway media attachments now use the shared `media_blobs` SQLite table as
-  the canonical byte store. Local paths returned to channel and sandbox
-  compatibility surfaces are temp materializations of the database row, not the
-  durable media store. Runtime media allowlists no longer include legacy
-  `$OPENCLAW_STATE_DIR/media` or config-dir `media` roots; those directories are
-  doctor import sources only.
+- Gateway media attachment bytes remain file-based in `src/media/store.ts`.
+  The unused `media_blobs` table was retired in state schema v10; Doctor does
+  not import media files into SQLite.
 - Shell completion no longer writes `$OPENCLAW_STATE_DIR/completions/*` cache
   files. Install, doctor, update, and release smoke paths use generated
   completion output or profile sourcing instead of durable completion cache
@@ -161797,11 +162534,8 @@ create` validates the written archive by default; `--no-verify` is the
 - The global schema does not keep an unused `agents` registry table. Agent
   database discovery is the canonical `agent_databases` registry until runtime
   has a real agent-record owner.
-- Generated model catalog config is stored in typed global SQLite
-  `agent_model_catalogs` rows keyed by agent directory. Runtime callers use
-  `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
-  runtime code. The implementation writes SQLite and the embedded PI registry is
-  hydrated from that stored payload without creating a `models.json` file.
+- Generated model catalogs have no runtime-owned SQLite store. The rebuildable
+  `agent_model_catalogs` cache table was retired in state schema v10.
 - QMD has no runtime export, collection, SDK, or lease surface. Doctor migrates
   configured QMD paths into builtin `memory.search.extraPaths` and can remove
   retired per-agent QMD indexes, model downloads, collection metadata, and
@@ -161851,7 +162585,6 @@ plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_nam
 tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
-media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
@@ -161867,8 +162600,6 @@ workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, upd
 workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
 workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
-model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
-agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
 managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
 gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
 channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
@@ -162128,14 +162859,12 @@ Keep shared coordination state in `state/openclaw.sqlite`:
 - Plugin state
 - Sandbox container/browser registry
 - Cron/scheduler run history
-- Pairing, device, push, update-check, TUI, OpenRouter/model caches, and other
+- Pairing, device, push, update-check, TUI, and other
   small gateway-scoped runtime state
 - Backup and migration metadata
-- Gateway media attachment bytes. Done for runtime writes; direct file paths
-  are temp materializations for compatibility with channel senders and sandbox
-  staging. Runtime allowlists accept SQLite materialization paths, not legacy
-  state/config media roots. Doctor imports legacy media files into
-  `media_blobs` and removes the source files after successful row writes.
+- Gateway media attachment bytes remain file-based in `src/media/store.ts`;
+  the unused `media_blobs` table was retired in state schema v10 and has no
+  Doctor import.
 - Debug proxy capture sessions, events, and payload blobs. Done: captures live
   in the shared state DB and open through the shared state DB bootstrap, schema,
   WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
@@ -162239,7 +162968,7 @@ Backups remain one archive file:
   creation integrity check.
 - Restore copies snapshots back to their target paths without rewriting their
   recorded schema versions. The normal database open then applies bounded
-  forward migrations to the current global version `7` or per-agent version
+  forward migrations to the current global version `9` or per-agent version
   `17` when required.
 
 ### Phase 6: Worker Runtime
@@ -162293,7 +163022,7 @@ status.
 Restore should rebuild the global database and agent database files from the
 archive snapshots without rewriting their recorded schema versions. Normal
 database open applies bounded forward migrations to the current global version
-`7` or per-agent version `17`. Doctor remains the only owner of file-to-database
+`9` or per-agent version `17`. Doctor remains the only owner of file-to-database
 import. The restore command validates the archive first, then replaces each
 manifest asset from the verified extracted payload.
 
@@ -162301,7 +163030,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 7`; per-agent DBs use version
+   - The global schema now uses `user_version = 9`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
@@ -164426,6 +165155,7 @@ Version 3 was an unshipped development step folded into version 4.
 | 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
 | 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
 | 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
 
 ### State schema 9
 
@@ -164481,6 +165211,107 @@ The general procedure is:
 2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 10 to 9
+
+Schema 10 removed six dead shared-state tables. A schema 9 build still requires those canonical tables and indexes, so a manual downgrade must recreate their exact empty schemas before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS agent_model_catalogs (
+  catalog_key TEXT NOT NULL PRIMARY KEY,
+  agent_dir TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
+  ON agent_model_catalogs(agent_dir, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
+  package_name TEXT NOT NULL PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
+  ON android_notification_recent_packages(sort_order, package_name);
+
+CREATE TABLE IF NOT EXISTS command_log_entries (
+  id TEXT NOT NULL PRIMARY KEY,
+  timestamp_ms INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  entry_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
+  ON command_log_entries(timestamp_ms DESC, id);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
+  ON command_log_entries(session_key, timestamp_ms DESC, id);
+
+CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
+  bundle_key TEXT NOT NULL PRIMARY KEY,
+  reason TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  bundle_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
+  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
+
+CREATE TABLE IF NOT EXISTS media_blobs (
+  subdir TEXT NOT NULL,
+  id TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes INTEGER NOT NULL,
+  blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (subdir, id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_media_blobs_created
+  ON media_blobs(created_at);
+
+CREATE TABLE IF NOT EXISTS model_capability_cache (
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  input_text INTEGER NOT NULL,
+  input_image INTEGER NOT NULL,
+  reasoning INTEGER NOT NULL,
+  supports_tools INTEGER,
+  context_window INTEGER NOT NULL,
+  max_tokens INTEGER NOT NULL,
+  cost_input REAL NOT NULL,
+  cost_output REAL NOT NULL,
+  cost_cache_read REAL NOT NULL,
+  cost_cache_write REAL NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
+  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
+
+PRAGMA user_version = 9;
+UPDATE schema_meta
+SET schema_version = 9,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+The recreated tables start empty because schema 10 discarded only dead or rebuildable cache rows. A botched downgrade means restore from the verified backup.
 
 ### Example: state schema 9 to 8
 
@@ -164725,13 +165556,15 @@ the artifacts and may differ when only one collector needed a retry.
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
-verification. If Release Decision reports a blocker while Diagnostic Drain is
-still collecting failures, the helper exits nonzero immediately and keeps both
-temporary refs for reruns and diagnosis. The Validation SHA equals the Code
-SHA for product validation or the Release SHA for changelog-only validation; it
-is not a third release identity. The workflow rejects malformed or mismatched
-expected SHAs before child dispatch. Every child must report the same Tooling
-SHA. Pass
+verification. The helper reads Release Decision artifacts while the parent is
+active so blockers can surface while Diagnostic Drain collects failures. A
+not-yet-created artifact remains an unavailable polling result; terminal
+handling and temporary-ref cleanup wait for the parent to complete with a
+conclusion. Failed validations retain both refs for reruns and diagnosis. The
+Validation SHA equals the Code SHA for product validation or the Release SHA
+for changelog-only validation; it is not a third release identity. The workflow
+rejects malformed or mismatched expected SHAs before child dispatch. Every
+child must report the same Tooling SHA. Pass
 `-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
 require `--workflow-sha` with the recorded full SHA, which must remain reachable
 from current `origin/main`. The helper rejects a pinned Tooling SHA that does
@@ -164911,7 +165744,7 @@ artifact when package or Docker-facing stages need it.
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, concrete release-check groups, and focused live suite filter.<br />**Rerun:** select the concrete group for the failed surface.                                                                                                                                                                                                                                                                                                            |
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                |
-| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install image-provider smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                           |
+| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                     |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                                                                                                 |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                     |
@@ -167419,14 +168252,14 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 
 ### Sandbox compatibility lanes
 
-| Command                                      | Verifies                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, custom image build, managed sandbox lifecycle, SSH execution, remote filesystem bridge, seeded workspace, and deny/allow network policies. |
-| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                |
-| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.               |
-| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                        |
-| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                 |
-| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.               |
+| Command                                      | Verifies                                                                                                                                                                                                         |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, isolated control-plane workspace, custom image, remote and mirrored filesystems, nested mirror writes, protected host metadata, sandbox lifecycle, SSH, and deny/allow network policies. |
+| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                                                              |
+| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.                                                             |
+| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                                                                      |
+| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                                                               |
+| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.                                                             |
 
 ## Local PR gate
 
@@ -168214,9 +169047,9 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 - Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
-## Heartbeats (optional)
+## Automations (optional)
 
-- The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
+- A scheduled automation's scratch can hold a tiny task checklist; keep it small.
 
 ## Tools
 
@@ -168392,35 +169225,23 @@ Example placeholders (replace or remove them):
 - On Discord, wrap multiple links in `<>` to suppress embeds (`<https://example.com>`).
 - On WhatsApp, use **bold** or CAPS instead of headers.
 
-## Heartbeats - Be Proactive
+## Automations - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
-
-See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
+Use scheduled automations for recurring checks, reminders, and background work. Keep any task-specific checklist in the automation's scratch, and keep it small to limit token burn. Use `openclaw automations list --all` to find scheduled jobs and `openclaw automations scratch <jobId> --set "..."` to update their scratch.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
-Track your checks in a workspace file of your choosing, for example `memory/heartbeat-state.json`:
-
-```json
-{
-  "lastChecks": {
-    "email": 1703275200,
-    "calendar": 1703260800,
-    "weather": null
-  }
-}
-```
+Track check timing in the relevant automation's scratch; do not create a separate state file.
 
 **Reach out when:** an important email arrived; a calendar event is coming up (&lt;2h); you found something interesting; it's been &gt;8h since you last said anything.
 
-**Stay quiet (`HEARTBEAT_OK`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
+**Stay quiet (`NO_REPLY`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
 
 **Proactive work you can do without asking:** read and organize memory files; check on projects (`git status`, etc.); update documentation; commit and push your own changes; review and update `USER.md` and `MEMORY.md`.
 
 ### Memory Maintenance
 
-Every few days, use a heartbeat to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
+Every few days, use a scheduled automation to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
 
 Be helpful without being annoying: check in a few times a day, do useful background work, respect quiet time.
 
@@ -168695,35 +169516,23 @@ Example placeholders (replace or remove them):
 - On Discord, wrap multiple links in `<>` to suppress embeds (`<https://example.com>`).
 - On WhatsApp, use **bold** or CAPS instead of headers.
 
-## Heartbeats - Be Proactive
+## Automations - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
-
-See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
+Use scheduled automations for recurring checks, reminders, and background work. Keep any task-specific checklist in the automation's scratch, and keep it small to limit token burn. Use `openclaw automations list --all` to find scheduled jobs and `openclaw automations scratch <jobId> --set "..."` to update their scratch.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
-Track your checks in a workspace file of your choosing, for example `memory/heartbeat-state.json`:
-
-```json
-{
-  "lastChecks": {
-    "email": 1703275200,
-    "calendar": 1703260800,
-    "weather": null
-  }
-}
-```
+Track check timing in the relevant automation's scratch; do not create a separate state file.
 
 **Reach out when:** an important email arrived; a calendar event is coming up (&lt;2h); you found something interesting; it's been &gt;8h since you last said anything.
 
-**Stay quiet (`HEARTBEAT_OK`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
+**Stay quiet (`NO_REPLY`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
 
 **Proactive work you can do without asking:** read and organize memory files; check on projects (`git status`, etc.); update documentation; commit and push your own changes; review and update `USER.md` and `MEMORY.md`.
 
 ### Memory Maintenance
 
-Every few days, use a heartbeat to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
+Every few days, use a scheduled automation to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
 
 Be helpful without being annoying: check in a few times a day, do useful background work, respect quiet time.
 
@@ -174010,6 +174819,20 @@ openclaw dashboard
 
 </Accordion>
 
+## If setup does not work
+
+One command turns the current state of your install into a diagnosis you can act on:
+
+```bash
+openclaw triage
+```
+
+It runs read-only health checks, writes a sanitized prompt describing what it found, and then offers to hand that prompt to a coding agent it detects on your machine — Claude Code, Codex CLI, or the built-in OpenClaw agent — so the agent starts with the diagnosis already loaded. Pick "just print the commands" if you would rather run the handoff yourself.
+
+Nothing leaves your machine until you choose an agent, and secrets, tokens, raw chat payloads, and raw logs are excluded from the prompt.
+
+To read the findings yourself instead, run [`openclaw doctor`](/cli/doctor). For symptom-first routes, see [Troubleshooting](/help/troubleshooting).
+
 ## What to do next
 
 <Columns>
@@ -174042,6 +174865,8 @@ Full reference: [Environment variables](/help/environment).
 - [Install overview](/install)
 - [Channels overview](/channels)
 - [Setup](/start/setup)
+- [Triage](/cli/triage)
+- [Troubleshooting](/help/troubleshooting)
 
 
 
@@ -174486,22 +175311,24 @@ title: "Onboarding overview"
 sidebarTitle: "Onboarding Overview"
 ---
 
-OpenClaw has terminal and macOS app onboarding. Both establish inference first:
-they detect existing AI access, require a live completion, and only then start
-OpenClaw to configure the remaining setup. A reachable, configured Gateway
-whose default agent already has a configured model skips onboarding and opens
-the normal agent UI. The terminal flow also offers the full classic wizard for
-detailed setup.
+OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
+desktop companion. Every path establishes inference first: it detects existing
+AI access, requires a live completion, and only then starts OpenClaw to
+configure the remaining setup. A reachable, configured Gateway whose default
+agent already has a configured model skips onboarding and opens the normal
+agent UI. The terminal flow also offers the full classic wizard for detailed
+setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding                                          |
-| -------------- | -------------------------------------- | ------------------------------------------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                                                    |
-| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw                                |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                                     |
-| **Automation** | `--non-interactive` for scripts        | Manual only                                                   |
-| **Command**    | `openclaw onboard`                     | [Download the app](/platforms/macos#download), then launch it |
+|                | CLI onboarding                         | macOS app onboarding                                | Linux app onboarding                      |
+| -------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS                                               | Linux                                     |
+| **Interface**  | Terminal or guided setup               | Native desktop setup                                | Native desktop setup                      |
+| **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
+| **Automation** | `--non-interactive` for scripts        | Manual only                                         | Manual only                               |
+| **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -174578,6 +175405,24 @@ Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
 CLI runtime specifically requires an AI Studio API-key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
+
+## Linux app onboarding
+
+[Install the Linux desktop companion](/platforms/linux), then open it. The
+welcome screen lets you choose a Gateway on **this computer** or **another
+computer**. Local setup installs any missing CLI and managed Node runtime, then
+starts the systemd user service. Remote setup connects to a discovered Gateway,
+a manually entered Gateway URL, or a Gateway reached through an SSH tunnel;
+token and password authentication are supported.
+
+Model Setup checks existing provider access and offers sign-in or API-key entry
+when needed. The selected Gateway verifies a real model response before guided
+onboarding begins. An already configured Gateway opens the normal agent UI
+instead. Active onboarding survives Gateway restarts, and model activation
+resumes safely after closing and reopening the app.
+
+Platform and remote-access details: [Linux app](/platforms/linux) and
+[Remote access](/gateway/remote).
 
 ## Custom or unlisted providers
 
@@ -175283,12 +176128,12 @@ Example:
 ## Heartbeats (proactive mode)
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable recurring cadence. Targeted event-driven wakes, such as background exec completion follow-ups, remain available and do not create a recurring schedule. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If no scratch exists, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK`, optionally with at most 300 characters of remaining text, OpenClaw suppresses outbound delivery for that heartbeat. The 300-character budget is fixed.
+- If the agent replies with `NO_REPLY`, OpenClaw suppresses outbound delivery for that heartbeat. Legacy `HEARTBEAT_OK` replies remain supported with a fixed 300-character acknowledgment budget.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns - shorter intervals burn more tokens.
 
@@ -184657,9 +185502,15 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
-Generated `allow-always` entries are argv-bound. New generated entries include
-`argPattern`; older generated path-only entries are ignored and need a fresh
-approval. For a manual path-only rule, omit both `source` and `argPattern`.
+Generated `allow-always` entries are bound to both the exact argv and the working
+directory where you approved them. Choosing **Always allow here** authorizes the
+same command only in that directory; running it elsewhere is an allowlist miss.
+
+Older generated entries that were not directory-bound are inactive after an
+upgrade. `openclaw update` removes them during its automatic Doctor pass, or you
+can run `openclaw doctor --fix` yourself. Rerun an affected workflow and choose
+**Always allow here** to create the replacement. Manual allowlist rules are not
+changed. For a manual path-only rule, omit both `source` and `argPattern`.
 
 Each allowlist entry supports:
 
@@ -184673,6 +185524,32 @@ Each allowlist entry supports:
 | `lastUsedAt`       | Last-used timestamp                                                      |
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
+
+## Cron standing grants
+
+Approvals raised by gateway-host cron runs are delivered only to connected
+approval surfaces (Control UI, TUI, macOS app) — never to chat channels, which
+would repeat a card on every occurrence. While a reviewer surface is
+connected, the scheduled run waits for the decision like an interactive run;
+cron jobs are single-flight, so at most one card per job is pending at a
+time. With no approval surface connected, the request is denied immediately
+and the run's error explains the policy fix, exactly as before. Node-host
+cron execs keep the fully headless policy (no cards) until node execution
+gains its own standing-grant path.
+
+When an approval originates from a cron job's isolated run, resolving it with
+**allow always** does not write a JSON allowlist entry. Instead the Gateway
+mints a scoped standing grant bound to that exact agent, cron job, job
+configuration, and operation (command text, working directory, and requested
+environment). Later occurrences of the same job execute that exact operation
+without prompting while the grant is valid.
+
+A grant expires 30 days after the approval and fails closed back to a normal
+prompt whenever anything changed: the job was edited or deleted, the command,
+working directory, or environment differs, the grant expired or was revoked,
+or the original approval record is gone. Mutable file operands and commands
+that require explicit review (heredocs, strict inline eval, audit
+suppression) keep prompting per occurrence. Non-cron approvals are unchanged.
 
 ## Auto-allow skill CLIs
 
@@ -186442,7 +187319,7 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 
 | Category                | Use when the agent needs to...                                                               | Representative tools                                                                                                | Read next                                                                                                              |
 | ----------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis                       | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
+| Runtime                 | Run commands, manage processes, use shared operator terminals, or use provider-backed Python | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
 | Files                   | Read and change workspace files                                                              | `read`, `write`, `edit`, `apply_patch`                                                                              | [Apply patch](/tools/apply-patch)                                                                                      |
 | Human input             | Pause for a structured decision owned by the user                                            | `ask_user`                                                                                                          | [Ask user](/tools/ask-user)                                                                                            |
 | Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
@@ -187864,7 +188741,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
+Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlite` auth store (by default, `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`). Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---
@@ -190026,9 +190903,11 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 The current chat shows exactly one live card:
 
 - When the session rail is visible, the card appears in the rail.
-- At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
+- Otherwise, when the chat is wide enough that the centered composer leaves a free gutter, the card docks in that space beside the composer with its full checklist expanded.
+- At narrower widths the card appears in the collapsible surface inside the composer.
 
-The two placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard
 
@@ -190404,7 +191283,7 @@ is no template or pattern-matching path: content that reaches a proposal was
 written by the reviewer against the Workshop authoring standards, never copied
 from conversation text.
 
-After substantial work, OpenClaw can run one isolated background review to find
+After substantial work, OpenClaw can run one detached background review to find
 a reusable recovery technique or a stable procedure that would remove at least
 two future model or tool round trips. Deep turns the user interrupted qualify
 too: the wrong path and its correction are exactly the evidence worth keeping.
@@ -190417,9 +191296,7 @@ Experience review starts only when all of these conditions hold:
 
 - the foreground turn completed or was interrupted, but did not end in a
   provider or prompt error;
-- the current turn used at least 10 model iterations, or same-sender shallow
-  turns in the session accumulated that much unreviewed work (the accumulated
-  review covers the bounded message window of those turns);
+- the current turn used at least 10 model iterations;
 - the run was an eligible foreground conversation, not cron, heartbeat, memory,
   overflow, hook, subagent, or review work;
 - the runtime reported the resolved provider, model, and actual availability of
@@ -190430,22 +191307,26 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and biased toward small, well-evidenced captures. It
+The reviewer continues the finished turn from the same transcript prefix. This
+lets the provider reuse the foreground prompt cache. Its appended review message
+and tool results never enter the foreground transcript or session record.
+
+The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
 read or command-invoked, plus a bounded workspace skill list. It prefers a used
 writable skill when that skill governs the learning, then another existing
 skill, and creates a new skill only when nothing covers the class.
 
-Before changing an existing skill, the reviewer must read its complete current
-body. Both targeted patches and full-body rewrites bind the proposal to that
-read's content hash. Skills beyond the bounded read budget cannot be updated
-autonomously. A patch quotes the exact live text to change, while a rewrite must
-preserve everything still useful. In `auto` mode, either form goes through the
-same scanner-gated apply path without operator review. The one-mutation budget
-is shared across retries. The reviewer cannot apply, reject, quarantine,
-message, or use general agent tools itself; the orchestrating pipeline applies
-the finished capture only after the isolated review ends. The reviewed
-trajectory is evidence, not instructions.
+Before changing an existing skill, the reviewer reads its current body. Both
+update forms bind the proposal to that content hash. An oversized skill can be
+rewritten only when the result is shorter. Autonomous `SKILL.md` results stay at
+or below 10,000 characters. Longer reference and examples move into bundled
+files. The reviewer sees the foreground tool schemas, but only `skill_workshop`
+can execute. The reviewed transcript is evidence, not instructions.
+
+Workshop-authored skills can apply automatically. Updates to user-authored skills
+stay pending with a reason for operator review. Each review gets one attempt.
+A failure is logged and dropped instead of retrying the turn.
 
 Good candidates include:
 
@@ -190468,11 +191349,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                                                                                         |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `off`     | Does not create experience-review captures.                                                                                                                              |
-| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                     |
-| `auto`    | Creates or revises proposals, then applies every autonomous capture through the normal scanner-gated Workshop path. No operator review is required. This is the default. |
+| Mode      | Capture behavior                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                                                                   |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                          |
+| `auto`    | Applies autonomous creates and Workshop-authored updates. User-authored updates stay pending for review. This is the default. |
 
 Set the mode with the CLI:
 
@@ -190510,18 +191391,17 @@ Every learned skill receives these controls:
 
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
-- **Workshop-owned writes:** creates target the selected workspace. Updates can
-  target only skill directories owned by an applied Workshop `create` proposal.
-  Handwritten workspace skills, plus bundled, plugin, managed, personal-agent,
-  system, and extra-root skills, remain read-only.
+- **Workshop-owned writes:** creates target the selected workspace. Only updates
+  to skills created by Workshop apply automatically. User-authored updates stay
+  pending. Bundled, plugin, managed, system, and extra-root skills remain read-only.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
-- **Read before update:** the reviewer must read the complete current skill
-  before either a targeted patch or a full-body rewrite.
+- **Lean cap:** autonomous results stay at or below 10,000 characters. A skill
+  already above the cap can only become shorter.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
-- **Collection review:** once a day in `auto` mode, an isolated model session
-  reads the workspace skills. Externally owned skills must be kept; only
+- **Collection review:** once a week in `auto` mode, an isolated model session
+  reads the skills it intends to change. Externally owned skills stay untouched; only
   Workshop-owned paths can be rewritten or dropped. Collection-created skills
   receive automatically applied `create` proposal records.
 - **Collection backup:** review validates and scans every rewrite before changing
@@ -190540,7 +191420,7 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 ```
 
 Applied captures remain visible in `openclaw skills workshop list` and retain
-their rollback metadata. The daily collection review can later improve, merge,
+their rollback metadata. The weekly collection review can later improve, merge,
 or remove them. This makes
 approval-free learning reversible and observable rather than silent.
 
@@ -190563,28 +191443,24 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-A deep-turn review receives only the current turn beginning with its most
-recent user message. A review triggered by accumulated shallow turns instead
-receives the bounded message window of those same-sender turns (at most 40
-messages); accumulation restarts whenever the sender, provider, model, or auth
-profile changes, so no turn is disclosed to a provider identity other than its
-own. Either way the rendered trajectory is limited to 60,000 characters; when
-the bundle is too large, OpenClaw keeps the first message and newest evidence
-and marks the omitted middle.
+The review forks the foreground transcript in memory and appends one small user
+message. It uses the same provider, model, auth profile, session identity,
+bootstrap context, skills prompt, and tool schemas. The provider can reuse the
+finished turn's cached request prefix. Review writes remain detached.
 
 The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
-Daily collection review also uses the configured agent model. It receives the
+Weekly collection review also uses the configured agent model. It receives the
 names, descriptions, and ownership state of eligible workspace skills, then reads each
-complete skill before making one atomic collection change. Disabled and
+skill it intends to change before one atomic call listing only changes. Disabled and
 agent-filtered skills stay untouched. Shared workspaces use the union of each
 agent's allowed skills only when provider, model, and resolved auth identity
 match. Reconciliation must leave every sharing agent at least one visible skill.
 It has no message tool or general agent tools. Skill bodies are treated as
-untrusted evidence, not as instructions. A persisted per-workspace success time
-prevents Gateway restarts from repeating the review within 24 hours. The
+untrusted evidence, not as instructions. A persisted per-workspace attempt time
+prevents Gateway restarts from repeating a failed or successful review within 7 days. The
 foreground agent can restore the one retained collection backup when asked to
 undo the cleanup, unless an affected skill changed afterward.
 
@@ -190637,7 +191513,7 @@ result pending regardless of autonomous mode.
 
 | Setting                                    | Default  | Effect                                                                                                                   |
 | ------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `skills.workshop.autonomous.mode`          | `"auto"` | Chooses capture behavior; `auto` also enables daily collection review.                                                   |
+| `skills.workshop.autonomous.mode`          | `"auto"` | Chooses capture behavior; `auto` also enables weekly collection review.                                                  |
 | `skills.workshop.approvalPolicy`           | `"auto"` | Controls prompts for normal agent-initiated lifecycle calls. It never expands the isolated reviewer tool surface.        |
 | `skills.workshop.maxPending`               | `50`     | Caps pending and quarantined proposals per workspace.                                                                    |
 | `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                        |
@@ -190664,6 +191540,8 @@ Check the following:
 
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
+Use `openclaw skills curator status` to inspect the last collection and
+experience review outcomes.
 
 ### Doctor reports that Workshop is hidden
 
@@ -190679,7 +191557,7 @@ Automatic apply runs once. Inspect the proposal and its scanner state:
 openclaw skills workshop inspect <proposal-id>
 ```
 
-A normal write or target failure leaves it pending for manual review. A critical
+A user-authored target or normal write failure leaves it pending for manual review. A critical
 scanner result moves it to quarantine. Fix the cause and apply manually; do not
 build a retry loop around automatic capture.
 
@@ -190778,11 +191656,12 @@ Bare headings, paragraphs, links, buttons, inputs, selects, textareas, tables, a
 
 The Control UI posts an `openclaw:widget-theme` message with the active theme values when a widget loads and whenever the theme changes. Widgets therefore track every theme family, including Claw, Knot, Dash, and custom themes, without reloading. Outside the Control UI, including native apps and direct opens, widgets use the baked light or dark palette selected by `prefers-color-scheme`.
 
-Author widgets with three rules:
+Author widgets with four rules:
 
 1. Use the design variables for every color and background. Do not hardcode color values.
 2. Keep the page background transparent so the widget belongs to its host surface.
 3. Reserve `--accent-fill` for at most one primary action.
+4. Fit the iframe width at every viewport. Avoid fixed page or card widths; use fluid sizing and wrap or stack multi-column layouts when narrow. Use horizontal scrolling only when exact geometry must remain.
 
 **Export:** In web chat, open the widget card menu to copy the rendered widget to the clipboard or download it as a PNG. Older widget documents without the snapshot bridge fall back to an HTML file download.
 
@@ -190937,16 +191816,16 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 ## Collection review
 
 In `auto` mode, the Gateway starts one isolated collection-review session per
-agent workspace each day. The session can only read skills and submit
-one complete collection reconciliation. It keeps distinct useful skills,
+agent workspace each week. The session can only read skills and submit
+one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
 run collection review.
 
-Every eligible workspace skill must be read and receive exactly one decision.
-Skills without applied Workshop create provenance are read-only and must receive
-`keep`; Workshop-owned skills may receive `keep`, `write`, or `drop`. A new
+The reviewer reads each skill it intends to change. Unlisted skills stay untouched.
+Skills without applied Workshop create provenance are read-only; Workshop-owned
+skills may receive `write` or `drop`. A new
 skill created during collection review is recorded as an automatically applied
 `create` proposal, which makes that directory Workshop-owned. Disabled and
 agent-filtered skills stay untouched.
@@ -190968,14 +191847,18 @@ To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
 workspace lock. Restore refuses if any affected skill changed after cleanup.
 
-The daily boundary is persisted per workspace, so Gateway restarts do not
-repeat a successful review. Review is admitted only for collections of at most
+The weekly attempt is persisted per workspace before the model starts. Gateway
+restarts do not repeat a failed or successful attempt within 7 days. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 
 Every completed review records its kept, written, and dropped skill names in
 the shared state database, including the reason for each drop. OpenClaw retains
 the latest 90 outcomes per workspace.
+
+Collection rewrites and merges produce `SKILL.md` files at or below 10,000
+characters. A skill already above the cap can only become shorter. User-authored
+skills stay untouched.
 
 ## Chat
 
@@ -191221,14 +192104,13 @@ so provider pricing and data-handling terms apply. The cursor and coverage count
 are stored in the shared OpenClaw state database; transcript content is not copied
 into scan state.
 
-In `propose` and `auto` modes, OpenClaw can also perform a conservative review after successful,
-substantial work and after the whole agent system becomes idle. The review receives an
-authoritative receipt of skills the foreground run actually used. It can draft at most one pending
-proposal: a new skill, a patch or full-body rewrite of an existing workspace skill, or a revision
-of a pending proposal. Existing skills must be read before either update form, and the proposal is
-bound to that exact content hash. The reviewer never writes a live skill directly and cannot
-apply, reject, or quarantine a proposal. In `auto` mode, the orchestrating pipeline applies every
-autonomous result afterward through the normal scanner-gated service, without operator review.
+In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
+after the agent system becomes idle. The review continues the foreground request
+prefix, so the provider can reuse its prompt cache. Review transcript and session
+metadata changes stay detached. It can draft one pending create, patch, or update.
+In `auto` mode, creates and Workshop-authored updates use the scanner-gated apply
+path. User-authored updates stay pending for operator review. A failed review is
+logged and dropped after one attempt.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -191251,13 +192133,13 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default  | Effect                                                                                                                                                                          |
-| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs daily cleanup that can rewrite or drop Workshop-owned skills. |
-| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                             |
-| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.             |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                   |
-| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                                 |
+| Setting                    | Default  | Effect                                                                                                                                                                           |
+| -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                              |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                    |
+| `maxSkillBytes`            | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
 completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
@@ -191296,8 +192178,9 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.unpin`             | `operator.admin` |
 | `skills.curator.restore`           | `operator.admin` |
 
-The `skills.curator.*` methods remain for lifecycle state written by older
-releases. Daily collection review does not use age, pin, or overlap state.
+`skills.curator.status` also reports the latest collection and experience review
+outcome per workspace. The other curator methods manage lifecycle state written
+by older releases. Weekly review does not use age, pin, or overlap state.
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session
@@ -191354,6 +192237,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Description                     | 160 bytes                                                                    |
 | Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
@@ -192386,9 +193270,13 @@ metadata:
       (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
       your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
       env vars are read but never overwritten.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -194776,7 +195664,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 - Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
 
 ## Web chat UI
@@ -198307,7 +199195,7 @@ Authenticated people have a durable Gateway profile with a display name, avatar,
 
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate, default-off toggle for future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
-The assistant avatar override follows the same browser-local pattern: uploaded overrides overlay the gateway-resolved identity locally and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients that write the field directly.
+Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients.
 
 ## Runtime config endpoint
 
@@ -198425,11 +199313,11 @@ and [Linux](/platforms/linux) desktop apps, the
 
 ## Sidebar navigation
 
-The sidebar organizes everything around the agent. The identity row at the top is the active agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Automations** and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including **Usage** and plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Other** for the agent's ungrouped chat sessions (the main session stays behind Home; sessions it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and the Codex/Claude CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Other, and assigning a session to a custom group always wins over the automatic zone classification. The global **Sessions** toolbar holds the filter and sort control (Created, Last updated, or People when the Gateway reports multiple server identities), Group by, a persisted **Status** filter for Active, Archived, or All, and the **+** that opens the New session page. People orders owner groups by name and keeps Created order within each group. On multi-user gateways the same menu adds an **Owners** filter: **All owners**, one specific person or agent, or **Involving me** — sessions you own plus sessions you have prompted, evaluated by the Gateway against the full participant history (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parent sessions with recent child runs show a disclosure and child count; expand it to inspect nested child sessions, live or terminal status, and runtime without leaving the sidebar. Selecting a child opens its chat and automatically reveals its ancestor path. Child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Admitted work waiting for `agents.defaults.maxConcurrent` shows **Queued**, an hourglass, and **Waiting for a concurrency slot** until execution starts. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Assign to me and Assign to… on multi-user gateways ([session ownership](/concepts/multi-user#assigning-an-owner)), Set icon, Fork, Copy session ID, Move to group (including New group and Remove from group), Archive or Unarchive, and Delete; touch layouts keep the direct pin and menu controls visible. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
+The sidebar organizes everything around the agent. The identity row at the top is the active agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Automations** and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including **Usage** and plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Other** for the agent's ungrouped chat sessions (the main session stays behind Home; sessions it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and the Codex/Claude CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Other, and assigning a session to a custom group always wins over the automatic zone classification. The global **Sessions** toolbar holds the filter and sort control (Created, Last updated, or People when the Gateway reports multiple server identities), Group by, a persisted **Status** filter for Active, Archived, or All, and the **+** that opens the New session page. People orders owner groups by name and keeps Created order within each group. On multi-user gateways the same menu adds an **Owners** filter: **All owners**, one specific person or agent, or **Involving me** — sessions you own plus sessions you have prompted, evaluated by the Gateway against the full participant history (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parent sessions with recent child runs show a disclosure and child count; expand it to inspect nested child sessions, live or terminal status, and runtime without leaving the sidebar. Selecting a child opens its chat and automatically reveals its ancestor path. Child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Admitted work that has not started shows **Queued** with an hourglass until execution starts. This state does not by itself mean every concurrency slot is occupied. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Assign to me and Assign to… on multi-user gateways ([session ownership](/concepts/multi-user#assigning-an-owner)), Set icon, Fork, Copy session ID, Move to group (including New group and Remove from group), Archive or Unarchive, and Delete; touch layouts keep the direct pin and menu controls visible. The chat header composes the same single-session management actions with its pane-specific **Panels**, **Layout**, **View**, and **Continue in terminal** actions. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
 
 ### Session placement
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
 ### Session icons
 
@@ -198437,7 +199325,7 @@ Choose **Set icon** from a single session's context menu to give its sidebar row
 
 ## New session page
 
-The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Any available node**, or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. The device list stays authoritative to that environment catalog: worker turns require an available current session host with at least one free slot. Offline known hosts, connected non-hosts, saturated hosts, hosts without current capacity, outdated hosts, and unavailable hosts remain visible with a reason and next step.
+The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Any available node**, or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. A cloud profile is selectable when its advertised execution modes include the selected runtime, so one Crabbox **Cloud · profile** row supports both OpenClaw and Codex. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. Device eligibility remains authoritative to the environment catalog and the selected runtime: OpenClaw `worker-turn` requires an available current session host with valid worker capacity and at least one free slot; Codex `remote-exec` requires its currently invocable, explicitly authorized exec-server command and consumes no worker slot. Offline known hosts, connected non-hosts, incompatible or saturated hosts, hosts missing required capabilities, outdated hosts, and unavailable hosts remain visible with a reason and next step.
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source. **Start in terminal** is available only for local placement.
 
@@ -198638,7 +199526,7 @@ Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane
 
 The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions restores each session's own working layout. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
 
-Owner-authorized, unsandboxed agents can use the `terminal` tool for long or interactive work. Each tool call can open, read, write, resize, close, or list the agent's own gateway PTYs. These PTYs stay in the background by default; opening one does not open the Terminal panel or attach a browser tab. To watch one, open **Terminal**, select the server icon for **Terminal sessions**, and choose its agent-marked session. The agent and attached operator then share output, and either can type or resize. A shell opened from a Chat session's Terminal panel is also owned by that conversation, so its agent can discover and read it with the same tool. Agent access remains exact-session scoped: an agent cannot read or control standalone operator terminals or terminals owned by another agent session.
+Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 
 Drag one or more files onto the active terminal, or use the paperclip button to choose files. OpenClaw stages each file on the machine that owns the PTY and pastes shell-quoted absolute paths at the cursor; it never presses Enter or executes the input. A compact batch indicator shows the current file and completed count. Cancel stops the remaining batch without pasting paths; a failed transfer stays visible so you can retry from that file without re-uploading completed files. Images, PDFs, archives, and other file types are accepted up to 16 MiB per file. Staged files use a private system-temporary directory on POSIX hosts (directory mode `0700`, file mode `0600`) or a directory under the user-profile ACL boundary on Windows, plus a 24-hour cleanup timer, so move or copy anything you need to keep.
 
@@ -198650,7 +199538,7 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the terminal focus presentation, are connection-owned. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
-Conversation-owned sessions, whether opened by the agent tool or from that Chat session's Terminal panel, are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing a viewer tab detaches only that browser. Conversation-owned PTYs remain until the agent closes them, their process exits, policy disables them, or the Gateway shuts down. PTYs opened by a detached task close automatically when that task succeeds, fails, times out, is cancelled, or is lost. `terminal.list` marks each entry as connection- or agent-owned.
+Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
 
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
@@ -199195,8 +200083,9 @@ Shared infrastructure underneath (this is where the simplification lands):
   the natural case.
 - **One authorization model.** A widget's reach is a granted allowlist,
   whatever its kind: for `html` widgets, host tools; for `mcp-app` widgets,
-  the server's app-visible tools (via the existing `allowedAppToolNames`
-  mechanism, made durable per widget instead of per-minting-run).
+  the server's app-visible tools and same-server resources (via the existing
+  live App-interaction authority, made durable per widget instead of
+  per-minting-run).
 - **Host tools for `html` widgets** (exposed over the widget bridge, checked
   against the grant):
   - `openclaw.prompt.send` — tier 2; routed through the visible composer,
@@ -199287,10 +200176,11 @@ on staleness). Chat inline MCP app views get the same **Pin to dashboard**
 affordance as agent widgets. Re-opened views are read-only today by design;
 pinned apps that should stay interactive get a durable grant over the server's
 app-visible tools (explicit allowlist shown to the operator on pin), decoupled
-from the minting run. Ungranted pins stay read-only — still useful for display
-dashboards. v1 pins to the originating session's board; cross-session pinning
-needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
-composer routing, theme/size propagation).
+from the minting run. Ungranted pins can render their fetched App HTML but
+cannot call tools or access the same-server resource bridge. v1 pins to the
+originating session's board; cross-session pinning needs a lease broker and
+waits. Coordinate with open PR #109807 (`ui/message` composer routing,
+theme/size propagation).
 
 ### WorkBoard integration
 
@@ -199669,9 +200559,9 @@ being interrupted.
 
 If your gateway has MCP servers configured, interactive MCP apps that appear
 in chat can be pinned like any widget. Pinned apps come back to life on the
-board with fresh sessions; by default they are display-only, and granting the
-widget its declared server tools makes it fully interactive — with the same
-one-tap, revision-bound approval as everything else.
+board with fresh sessions. By default they render without server tools or
+same-server resource access. Granting the widget its declared server tools
+enables both bridges while that revision-bound grant remains active.
 
 ## A2UI widgets
 
